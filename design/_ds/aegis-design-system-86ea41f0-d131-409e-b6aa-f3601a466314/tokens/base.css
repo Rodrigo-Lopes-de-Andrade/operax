@@ -1,0 +1,76 @@
+/* ============================================================
+   Aegis — Base resets & helpers
+   Light defaults; honors [data-theme="dark"] via color tokens.
+   ============================================================ */
+
+*, *::before, *::after { box-sizing: border-box; }
+
+html { -webkit-text-size-adjust: 100%; }
+
+body {
+  margin: 0;
+  font-family: var(--font-sans);
+  font-size: var(--text-base);
+  line-height: var(--leading-normal);
+  color: var(--text-body);
+  background: var(--surface-app);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-feature-settings: 'cv11', 'ss01';
+}
+
+h1, h2, h3, h4, h5, h6 {
+  margin: 0;
+  color: var(--text-strong);
+  font-weight: var(--weight-bold);
+  line-height: var(--leading-tight);
+  letter-spacing: var(--tracking-tight);
+}
+
+p { margin: 0; }
+
+a { color: var(--brand); text-decoration: none; }
+
+button { font-family: inherit; }
+
+/* Tabular figures for data / KPIs */
+.aegis-tnum { font-variant-numeric: tabular-nums; }
+.aegis-mono { font-family: var(--font-mono); }
+
+/* Lucide icon wrapper */
+.aegis-icon { display: inline-flex; line-height: 0; flex: none; }
+.aegis-icon svg { width: 100%; height: 100%; stroke-width: var(--aegis-sw, 2); }
+
+@keyframes aegis-spin { to { transform: rotate(360deg); } }
+.aegis-spin { animation: aegis-spin 0.7s linear infinite; }
+
+@keyframes aegis-shimmer { 0% { opacity: 0.55; } 50% { opacity: 1; } 100% { opacity: 0.55; } }
+.aegis-skel { animation: aegis-shimmer 1.3s var(--ease-in-out) infinite; }
+
+/* Uppercase eyebrow label */
+.aegis-eyebrow {
+  font-size: var(--text-2xs);
+  font-weight: var(--weight-bold);
+  letter-spacing: var(--tracking-caps);
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+/* Custom scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: var(--radius-pill);
+  border: 3px solid transparent;
+  background-clip: content-box;
+}
+*::-webkit-scrollbar-thumb:hover { background: var(--foreground-quaternary); background-clip: content-box; }
+
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+}

@@ -1,0 +1,32 @@
+# Segredos — nunca commitar
+.env
+.env.*
+!.env.example
+!.env.local.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node / Next
+node_modules/
+.next/
+out/
+dist/
+.turbo/
+
+# Testes
+playwright-report/
+test-results/
+coverage/
+
+# Local
+.DS_Store
+*.log
+.claude/settings.local.json
+.claude/settings.json.bak
+scripts/_baseline.sql

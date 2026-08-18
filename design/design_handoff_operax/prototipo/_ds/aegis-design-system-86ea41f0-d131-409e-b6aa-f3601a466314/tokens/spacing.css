@@ -1,0 +1,31 @@
+/* ============================================================
+   Aegis — Spacing & Sizing Tokens
+   4px base grid. Generous breathing room for a premium feel.
+   ============================================================ */
+
+:root {
+  --space-0:  0;
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-3:  12px;
+  --space-4:  16px;
+  --space-5:  20px;
+  --space-6:  24px;
+  --space-7:  32px;
+  --space-8:  40px;
+  --space-9:  48px;
+  --space-10: 64px;
+
+  /* Layout */
+  --sidebar-width:           264px;
+  --sidebar-width-collapsed: 76px;
+  --header-height:           84px;
+  --content-max:             1440px;
+  --gutter:                  24px;
+
+  /* Control heights */
+  --control-h-sm: 32px;
+  --control-h-md: 40px;
+  --control-h-lg: 48px;
+  --icon-btn:     40px;
+}

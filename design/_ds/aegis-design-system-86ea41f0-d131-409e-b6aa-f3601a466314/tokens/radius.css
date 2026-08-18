@@ -1,0 +1,15 @@
+/* ============================================================
+   Aegis — Radius Tokens
+   High radii on cards; pill controls; soft fields.
+   ============================================================ */
+
+:root {
+  --radius-xs:   6px;   /* badges, chips meta        */
+  --radius-sm:   8px;   /* inputs (compact)          */
+  --radius-md:   10px;  /* inputs, selects           */
+  --radius-lg:   14px;  /* small cards, tiles        */
+  --radius-xl:   18px;  /* cards                     */
+  --radius-2xl:  24px;  /* main containers           */
+  --radius-pill: 999px; /* buttons, filter pills     */
+  --radius-full: 50%;   /* avatars, icon buttons     */
+}

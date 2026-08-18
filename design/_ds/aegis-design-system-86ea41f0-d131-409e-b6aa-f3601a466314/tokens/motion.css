@@ -1,0 +1,27 @@
+/* ============================================================
+   Aegis — Motion Tokens
+   Calm, professional. Quick fades + gentle ease. No bounce.
+   ============================================================ */
+
+:root {
+  --ease-standard:  cubic-bezier(0.2, 0, 0, 1);    /* @kind other */
+  --ease-out:       cubic-bezier(0.16, 1, 0.3, 1); /* @kind other */
+  --ease-in-out:    cubic-bezier(0.65, 0, 0.35, 1);/* @kind other */
+
+  --duration-fast:  120ms; /* @kind other */
+  --duration-base:  180ms; /* @kind other */
+  --duration-slow:  280ms; /* @kind other */
+
+  --transition-control: background-color var(--duration-fast) var(--ease-standard),
+                        border-color var(--duration-fast) var(--ease-standard),
+                        color var(--duration-fast) var(--ease-standard),
+                        box-shadow var(--duration-fast) var(--ease-standard);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --duration-fast: 0ms; /* @kind other */
+    --duration-base: 0ms; /* @kind other */
+    --duration-slow: 0ms; /* @kind other */
+  }
+}

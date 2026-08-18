@@ -1,0 +1,9 @@
+/* ============================================================
+   Aegis — Webfonts
+   NOTE: No brand fonts were supplied. Manrope (UI/display) and
+   JetBrains Mono (codes / tabular figures) are chosen as a
+   premium, corporate-friendly pairing. Swap the @import below
+   if official fonts are provided.
+   ============================================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');

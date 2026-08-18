@@ -1,0 +1,150 @@
+/* ============================================================
+   Aegis — Color Tokens
+   Light = :root (default).  Dark = [data-theme="dark"].
+   Base palette is verbatim from the product spec; semantic
+   aliases below map raw values to roles used across the UI.
+   ============================================================ */
+
+:root {
+  /* ---- Categorical (data viz) ---- */
+  --categorical-1: #9FBFFE;
+  --categorical-2: #6D9DFD;
+  --categorical-3: #407FFC;
+  --categorical-4: #015DFC;
+  --categorical-5: #013DF2;
+  --categorical-6: #835FF2;
+  --categorical-7: #FDAD0D;
+  --categorical-8: #F55902;
+
+  /* ---- Foreground (text) ---- */
+  --foreground-primary:    #3D3D3D;
+  --foreground-secondary:  #575757;
+  --foreground-tertiary:   #6E6E6E;
+  --foreground-quaternary: #767676;
+
+  /* ---- Background / surfaces ---- */
+  --background-primary:   #F4F4F4;
+  --background-secondary: #FFFFFF;
+  --background-header:     #111D2D;
+  --background-card:       #FFFFFF;
+  --background-muted:      #F1F1F2;
+
+  /* ---- Semantic states ---- */
+  --bad-foreground:   #C10202;
+  --bad-background:   #FFCCCC;
+  --good-foreground:  #028402;
+  --good-background:  #DCFFDC;
+  --alert-foreground: #996601;
+  --alert-background: #FFF6E6;
+
+  /* ---- Heatmap scale ---- */
+  --heat-minimum: #DCFFDC; /* Baixa  */
+  --heat-center:  #FFF6E6; /* Média  */
+  --heat-maximum: #FFCCCC; /* Alta   */
+
+  /* ============================================================
+     Semantic aliases — prefer these in components
+     ============================================================ */
+
+  /* Surfaces */
+  --surface-app:    var(--background-primary);
+  --surface-raised: var(--background-secondary);
+  --surface-card:   var(--background-card);
+  --surface-muted:  var(--background-muted);
+  --surface-header: var(--background-header);
+  --surface-sidebar: var(--background-header);
+
+  /* Text */
+  --text-strong:  var(--foreground-primary);
+  --text-body:    var(--foreground-secondary);
+  --text-muted:   var(--foreground-tertiary);
+  --text-faint:   var(--foreground-quaternary);
+  --text-on-accent: #FFFFFF;
+  --text-on-dark:   #F5F5F5;
+
+  /* Brand / action */
+  --brand:        var(--categorical-4);   /* #015DFC primary action */
+  --brand-strong: var(--categorical-5);   /* #013DF2 active/pressed  */
+  --brand-soft:   var(--categorical-1);   /* tints, fills            */
+  --accent-violet: var(--categorical-6);
+  --accent-amber:  var(--categorical-7);
+  --accent-orange: #CE4B02;
+
+  /* Borders & lines */
+  --border-subtle:  rgba(17, 29, 45, 0.08);
+  --border-default: rgba(17, 29, 45, 0.12);
+  --border-strong:  rgba(17, 29, 45, 0.18);
+  --border-focus:   var(--categorical-4);
+  --grid-line:      rgba(17, 29, 45, 0.06);
+
+  /* Control fills */
+  --control-bg:        #FFFFFF;
+  --control-bg-hover:  var(--background-muted);
+  --control-border:    rgba(17, 29, 45, 0.14);
+  --control-disabled-bg: var(--background-muted);
+  --control-disabled-fg: var(--foreground-quaternary);
+
+  /* Overlay / scrim */
+  --scrim: rgba(17, 29, 45, 0.45);
+}
+
+[data-theme="dark"] {
+  /* ---- Categorical (data viz) ---- */
+  --categorical-1: #CDDDFE;
+  --categorical-2: #9FBFFE;
+  --categorical-3: #6D9DFD;
+  --categorical-4: #407FFC;
+  --categorical-5: #015DFC;
+  --categorical-6: #835FF2;
+  --categorical-7: #FDBE3F;
+  --categorical-8: #FE8F53;
+
+  /* ---- Foreground (text) ---- */
+  --foreground-primary:    #F5F5F5;
+  --foreground-secondary:  #D1D1D1;
+  --foreground-tertiary:   #9E9E9E;
+  --foreground-quaternary: #6E6E6E;
+
+  /* ---- Background / surfaces ---- */
+  --background-primary:   #111D2D;
+  --background-secondary: #172335;
+  --background-header:     #0B1420;
+  --background-card:       #162233;
+  --background-muted:      #121E2E;
+
+  /* ---- Semantic states ---- */
+  --bad-foreground:   #FE9F9F;
+  --bad-background:   #990101;
+  --good-foreground:  #03FC03;
+  --good-background:  #004100;
+  --alert-foreground: #332200;
+  --alert-background: #FDAD0D;
+
+  /* ---- Heatmap scale (Baixa / Média / Alta) ---- */
+  --heat-minimum: #DCFFDC;
+  --heat-center:  #FFF6E6;
+  --heat-maximum: #FFCCCC;
+
+  /* Semantic overrides for dark */
+  --surface-header: var(--background-header);
+  --surface-sidebar: var(--background-header);
+
+  --brand:        var(--categorical-4);   /* #407FFC */
+  --brand-strong: var(--categorical-5);   /* #015DFC */
+  --brand-soft:   rgba(64, 127, 252, 0.16);
+
+  --text-on-accent: #FFFFFF;
+
+  --border-subtle:  rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.10);
+  --border-strong:  rgba(255, 255, 255, 0.16);
+  --grid-line:      rgba(255, 255, 255, 0.07);
+
+  --control-bg:        #172335;
+  --control-bg-hover:  #1C2A3F;
+  --control-border:    rgba(255, 255, 255, 0.14);
+  --control-disabled-bg: var(--background-muted);
+  --control-disabled-fg: var(--foreground-quaternary);
+
+  --scrim: rgba(0, 0, 0, 0.6);
+}
