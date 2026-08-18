@@ -61,6 +61,9 @@ describe("proxy", () => {
   });
 
   it.each([
+    "/.//evil.test",
+    "/..//evil.test",
+    "/%2e//evil.test",
     "/%09/evil.test",
     "/%0A/evil.test",
     "/%0D/evil.test",

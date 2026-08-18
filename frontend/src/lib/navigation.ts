@@ -27,6 +27,17 @@ const SENTINEL_ORIGIN = "https://operax.invalid";
  *
  * A leading `/` is still required before parsing: the parser also trims
  * leading whitespace, and " //evil.test" must not become an authority.
+ *
+ * The same judgement is then applied to what comes out, because the path
+ * normaliser eats dot segments (`.`, `..`, `%2e`) and can promote the slash
+ * behind them to the first character of the path — turning `/.//evil.test`
+ * into the authority `//evil.test` that the input never spelled. Judging the
+ * result instead of listing its spellings is what keeps the next exotic form
+ * from reopening this.
+ *
+ * The fragment does not survive: `/dashboard#drawer` comes back as
+ * `/dashboard`. Filter state lives in the query string (CLAUDE.md), so
+ * nothing is lost today — but a drawer moved to the hash would be.
  */
 export function safeNextPath(value: string | string[] | undefined | null) {
   const candidate = Array.isArray(value) ? value[0] : value;
@@ -47,5 +58,17 @@ export function safeNextPath(value: string | string[] | undefined | null) {
     return DEFAULT_AUTHENTICATED_PATH;
   }
 
-  return `${resolved.pathname}${resolved.search}`;
+  const normalised = `${resolved.pathname}${resolved.search}`;
+
+  try {
+    if (new URL(normalised, SENTINEL_ORIGIN).origin !== SENTINEL_ORIGIN) {
+      return DEFAULT_AUTHENTICATED_PATH;
+    }
+  } catch {
+    // "//" on its own parses as an empty authority and throws in the sink,
+    // which in the proxy is a 500 on the login of everyone already signed in.
+    return DEFAULT_AUTHENTICATED_PATH;
+  }
+
+  return normalised;
 }

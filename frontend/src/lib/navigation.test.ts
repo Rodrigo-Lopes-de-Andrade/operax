@@ -44,6 +44,19 @@ const ESCAPE_VECTORS = [
   // Not a path at all.
   "dashboard",
   "%20//evil.test",
+  // Dot segments. The path normaliser eats ".", "..", "%2e" and "%2E", and
+  // the slash behind them becomes the first character of the path — an
+  // authority the input never spelled out.
+  "/.//evil.test",
+  "/..//evil.test",
+  "/%2e//evil.test",
+  "/%2E//evil.test",
+  "/%2e%2e//evil.test",
+  "/.///evil.test",
+  "/a/..//evil.test",
+  "/dashboard/../..//evil.test",
+  "/%252e//evil.test",
+  "/.%2F%2Fevil.test",
   // Encodings and look-alikes that stay on this origin and must not be
   // mistaken for an escape.
   "/%252F%252Fevil.test",
@@ -69,10 +82,25 @@ describe("safeNextPath", () => {
     expect(safeNextPath("/\r/evil.test")).toBe(DEFAULT_AUTHENTICATED_PATH);
   });
 
+  it.each(["/.//", "/..//", "/%2e//", "/./", "/.."])(
+    "hands the sink something it can parse: %s",
+    (raw) => {
+      // A path that normalises to "//" with no host makes `new URL()` throw,
+      // which in the proxy is a 500 on the login of everyone already signed in.
+      const target = safeNextPath(asItArrives(raw));
+
+      expect(() => new URL(target, APP_ORIGIN)).not.toThrow();
+    },
+  );
+
   it("keeps a relative path with its query string", () => {
     expect(safeNextPath("/dashboard?unit=42&de=2026-08-18")).toBe(
       "/dashboard?unit=42&de=2026-08-18",
     );
+    // The shape the consolidated report will send over WhatsApp.
+    expect(
+      safeNextPath("/dashboard?unit=42&de=2026-08-18&ate=2026-08-18"),
+    ).toBe("/dashboard?unit=42&de=2026-08-18&ate=2026-08-18");
   });
 
   it("returns a value already normalised for the caller", () => {
