@@ -117,6 +117,20 @@ async def test_scope_executes_with_the_tenant_injected(context: TenantContext) -
     assert cursor.calls == [(SELECT, {"unit_id": 7, "tenant_id": TENANT_ID})]
 
 
+async def test_scope_never_hands_back_the_cursor(context: TenantContext) -> None:
+    # `psycopg` returns the cursor from execute. Handing it back would let
+    # `cur = await cur.execute(...)` — the idiomatic form — walk around the wrapper
+    # and reach every tenant with the next statement.
+    cursor = RecordingCursor()
+    scope = TenantScope(cursor, context)  # type: ignore[arg-type]
+
+    returned = await scope.execute(SELECT, {"unit_id": 7})
+
+    assert returned is None
+    assert returned is not cursor
+    assert not hasattr(returned, "execute")
+
+
 async def test_opening_a_scope_requires_a_resolved_context() -> None:
     with pytest.raises(MissingTenantContextError):
         async with tenant_scope(None):  # type: ignore[arg-type]

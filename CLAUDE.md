@@ -308,7 +308,7 @@ make sender                 # consome a fila de alertas
 **Variáveis de ambiente** (nunca commitar nenhuma):
 
 - **Backend — obrigatórias:** `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_JWKS_URL`, e **pelo menos uma** chave de provider (`OPENAI_API_KEY` | `ANTHROPIC_API_KEY` | `GOOGLE_API_KEY`).
-- **Backend — opcionais:** demais chaves de provider, `SENTRY_DSN`, `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY` (+ `LANGSMITH_PROJECT`).
+- **Backend — opcionais:** demais chaves de provider, `SENTRY_DSN`, `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY` (+ `LANGSMITH_PROJECT`), `CORS_ORIGINS` (origens exatas do painel, separadas por vírgula; default `http://localhost:3000`; `*` é rejeitado no startup porque a API responde com credenciais).
 - **Não são env:** credencial do Secullum e token do provedor de WhatsApp — seja ele `meta_cloud` (token da WABA), `z_api` ou `uazapi` (token da instância). São **por tenant** e vivem no Supabase Vault, referenciadas em `app.integration_secret`. Um tenant tem no máximo um provedor de WhatsApp ativo, garantido por índice único.
 - **Frontend:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_URL` e, se usado, `NEXT_PUBLIC_SENTRY_DSN`.
 

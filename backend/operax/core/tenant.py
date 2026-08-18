@@ -1,11 +1,19 @@
-"""Tenant context — the single chokepoint for every `service_role` access.
+"""Tenant context — the chokepoint every `service_role` access goes through.
 
 `service_role` ignores RLS, so the database will not catch a query that forgot
-its tenant filter: this module has to. The tenant id is therefore never a value
-the caller carries around. It lives inside a `TenantContext` resolved from the
-authenticated token, and only `TenantScope` can bind it to a statement — refusing
-any statement that does not carry it. Forgetting the filter is a runtime error,
-not an oversight that reaches production data.
+its tenant filter. The tenant id is therefore never a value the caller carries
+around: it lives inside a `TenantContext` resolved from the authenticated token,
+and only `TenantScope` binds it to a statement.
+
+What this module does *not* prove. The check in `bind_tenant` is syntactic: it
+proves the statement binds the context tenant and names a `tenant_id` column
+somewhere, never that the predicate actually restricts rows. Three shapes pass
+the check and still read every tenant — placeholder and column living inside an
+SQL comment, a tautological predicate (`where %(tenant_id)s is not null`), and
+the unfiltered side of a join or union. Read it as cheap lint on the way out, not
+as the security boundary. The boundary is a non-superuser role with RLS enabled
+and the tenant set per transaction; that is a policy and grant decision, pending
+outside this module.
 """
 
 from __future__ import annotations
@@ -70,6 +78,11 @@ class TenantContext:
     Validated at construction on purpose: type hints are not enforced at runtime,
     and a `None` sneaking in from an absent token claim is exactly the bug this
     whole module exists to prevent.
+
+    `role` is not authorization on its own. Authorization has three independent
+    axes (migration 02): tenant, scope of companies and units (`app.user_scope`)
+    and sensitive domain (`app.domain_permission`). `if role == "hr"` is not a
+    gate for PII — the scope and domain checks land in S2.
     """
 
     tenant_id: UUID
@@ -97,10 +110,15 @@ def bind_tenant(
 ) -> dict[str, Any]:
     """Bind the context tenant to `statement`, or refuse to run it.
 
-    Two conditions, both cheap and both about the same mistake:
-    the statement must bind `%(tenant_id)s`, and it must mention a `tenant_id`
-    column outside that placeholder — so `select %(tenant_id)s, * from app.employee`
-    does not pass as filtered. The value itself never comes from the caller.
+    Two syntactic conditions, both cheap and both about the same mistake: the
+    statement must bind `%(tenant_id)s`, and it must name a `tenant_id` column
+    outside that placeholder — so `select %(tenant_id)s, * from app.employee` does
+    not pass. The value itself never comes from the caller.
+
+    This catches the forgotten filter, not a wrong one. It cannot see that the
+    binding sits inside an SQL comment, that the predicate is a tautology, or that
+    one side of a join or union is unfiltered: all three pass here and read every
+    tenant. Reviewing the predicate is still the author's job.
     """
     if not isinstance(context, TenantContext):
         raise MissingTenantContextError("a TenantContext is required to run any statement")
@@ -130,7 +148,13 @@ def _excerpt(statement: str) -> str:
 
 
 class TenantScope:
-    """A cursor that only runs statements bound to one tenant."""
+    """A cursor wrapper that only runs statements binding one tenant.
+
+    The wrapped cursor never leaves this object: `psycopg` returns the cursor from
+    `execute`, and handing it back would let the idiomatic
+    `cur = await cur.execute(...)` walk straight around the wrapper. Read results
+    through `fetchone` and `fetchall`.
+    """
 
     def __init__(self, cursor: AsyncCursor[DictRow], context: TenantContext) -> None:
         self._cursor = cursor
@@ -144,8 +168,8 @@ class TenantScope:
         self,
         statement: str,
         params: Mapping[str, Any] | None = None,
-    ) -> AsyncCursor[DictRow]:
-        return await self._cursor.execute(statement, bind_tenant(statement, params, self._context))
+    ) -> None:
+        await self._cursor.execute(statement, bind_tenant(statement, params, self._context))
 
     async def fetchone(self) -> DictRow | None:
         return await self._cursor.fetchone()

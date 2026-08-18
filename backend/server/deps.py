@@ -16,6 +16,7 @@ import jwt
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jwt import PyJWK, PyJWKClient, PyJWTError
+from jwt.exceptions import PyJWKClientConnectionError
 
 from operax.core.config import get_settings
 from operax.core.tenant import (
@@ -29,6 +30,9 @@ from server.models import AuthenticatedUser
 _ALGORITHMS = ["RS256", "ES256"]
 _AUDIENCE = "authenticated"
 _REQUIRED_CLAIMS = ["exp", "sub", "aud", "iss"]
+# The JWKS fetch is blocking I/O on the request path: an unreachable JWKS must
+# fail fast, not hold a worker thread for half a minute.
+_JWKS_TIMEOUT_SECONDS = 3
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -48,7 +52,10 @@ class JwksTokenVerifier:
 
     @classmethod
     def from_jwks_url(cls, jwks_url: str, issuer: str) -> JwksTokenVerifier:
-        return cls(PyJWKClient(jwks_url, cache_keys=True), issuer)
+        # No `cache_keys`: that tier-2 cache is an lru_cache with no expiry, and it
+        # would keep a rotated key valid forever in a long lived process. The
+        # JWK set cache (5 min) is what saves the fetch per request.
+        return cls(PyJWKClient(jwks_url, timeout=_JWKS_TIMEOUT_SECONDS), issuer)
 
     def verify(self, token: str) -> dict[str, Any]:
         signing_key = self._signing_keys.get_signing_key_from_jwt(token)
@@ -83,14 +90,28 @@ def _unauthorized(detail: str) -> HTTPException:
     )
 
 
-async def get_current_user(
+def get_current_user(
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)],
     verifier: Annotated[JwksTokenVerifier, Depends(get_token_verifier)],
 ) -> AuthenticatedUser:
+    """Identity behind the bearer token.
+
+    Deliberately synchronous: verifying fetches the JWKS over the network, and the
+    `kid` that decides whether a fetch happens comes from an unverified token. In a
+    coroutine that call would block the single event loop of the Railway instance
+    for every other request. FastAPI runs a sync dependency in the threadpool.
+    """
     if credentials is None:
         raise _unauthorized("Credencial de acesso ausente.")
     try:
         claims = verifier.verify(credentials.credentials)
+    except PyJWKClientConnectionError as error:
+        # The JWKS being down is our outage, not a bad token: answering 401 would
+        # send every client into a pointless refresh loop.
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Não foi possível validar a sessão agora. Tente novamente em instantes.",
+        ) from error
     except PyJWTError as error:
         # The token itself never goes into the message.
         raise _unauthorized("Token inválido ou expirado.") from error

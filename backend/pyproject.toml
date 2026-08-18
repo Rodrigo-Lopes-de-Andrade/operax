@@ -2,6 +2,8 @@
 name = "operax"
 version = "0.1.0"
 description = "OperaX backend — management, automation and intelligence over time-clock systems."
+# Ceiling on purpose: psycopg-binary publishes no cp314 wheel yet, and without it
+# the install falls back to building libpq from source.
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi>=0.115",
