@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   signInWithPassword: vi.fn(),
   replace: vi.fn(),
   refresh: vi.fn(),
+  clientThrows: false,
 }));
 
 vi.mock("next/navigation", () => ({
@@ -15,13 +16,18 @@ vi.mock("next/navigation", () => ({
 }));
 
 vi.mock("@/lib/supabase", () => ({
-  createBrowserSupabaseClient: () => ({
-    auth: { signInWithPassword: mocks.signInWithPassword },
-  }),
+  createBrowserSupabaseClient: () => {
+    if (mocks.clientThrows) {
+      throw new Error("Missing or invalid frontend environment");
+    }
+
+    return { auth: { signInWithPassword: mocks.signInWithPassword } };
+  },
 }));
 
 afterEach(() => {
   vi.clearAllMocks();
+  mocks.clientThrows = false;
 });
 
 describe("SignInForm", () => {
@@ -69,5 +75,23 @@ describe("SignInForm", () => {
     expect(mocks.replace).toHaveBeenCalledWith("/dashboard?ev=4821");
     // The server re-decides what this session may see.
     expect(mocks.refresh).toHaveBeenCalled();
+  });
+
+  it("says something when the client cannot even be built", async () => {
+    // Missing configuration throws before any request. Without the catch the
+    // spinner would stop and the screen would stay silent.
+    mocks.clientThrows = true;
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const user = userEvent.setup();
+    render(<SignInForm next="/dashboard" />);
+
+    await user.type(screen.getByLabelText("E-mail"), "gestor@kastro.test");
+    await user.type(screen.getByLabelText("Senha"), "correta");
+    await user.click(screen.getByRole("button", { name: "Entrar" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "Não foi possível entrar agora. Tente de novo.",
+    );
+    expect(mocks.replace).not.toHaveBeenCalled();
   });
 });

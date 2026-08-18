@@ -3,7 +3,12 @@
 /* ---------------------------------------------------------------------------
    Design tokens — copied from the handoff in
    design/design_handoff_operax/prototipo/_ds/.../tokens/*.css.
-   Names are kept verbatim so the handoff stays readable against this code.
+   Names are kept verbatim so the handoff stays readable against this code,
+   with two deliberate renames, because the direction of a deviation must not
+   be spelled as a hue that a repaint can invalidate:
+     handoff --accent-violet  ->  --accent-surplus    (excedente)
+     handoff --accent-orange  ->  --accent-shortfall  (faltante)
+   The prototype and the 19 call sites in _ds still use the old names.
    Only the light theme ships: the dark theme exists in the token files but was
    never designed screen by screen (handoff, "Pendencias conhecidas" 6).
    --------------------------------------------------------------------------- */
@@ -119,8 +124,6 @@
 @theme {
   --font-sans:
     var(--font-manrope), system-ui, -apple-system, "Segoe UI", sans-serif;
-  --font-mono:
-    var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
 
   /* Type scale — 11px micro labels up to the 48px hero figure. */
   --text-2xs: 0.6875rem;

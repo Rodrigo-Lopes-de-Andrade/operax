@@ -48,14 +48,23 @@ export function SignInForm({ next }: { next: string }) {
   const onSubmit = handleSubmit(async ({ email, password }) => {
     setFailure(null);
 
-    const supabase = createBrowserSupabaseClient();
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
+    try {
+      // Missing configuration throws here. Unhandled, it would stop the
+      // spinner and say nothing at all — the one outcome a login screen
+      // cannot have.
+      const supabase = createBrowserSupabaseClient();
+      const { error } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
 
-    if (error) {
-      setFailure(signInFailureMessage(error.code));
+      if (error) {
+        setFailure(signInFailureMessage(error.code));
+        return;
+      }
+    } catch (cause) {
+      console.error(cause);
+      setFailure(signInFailureMessage(undefined));
       return;
     }
 

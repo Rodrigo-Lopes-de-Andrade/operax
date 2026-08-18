@@ -1,8 +1,30 @@
+import { createServerClient, type CookieMethodsServer } from "@supabase/ssr";
+import type { SupabaseClient, User } from "@supabase/supabase-js";
 import { cookies } from "next/headers";
 import { cache } from "react";
-import type { SupabaseClient, User } from "@supabase/supabase-js";
 
-import { createServerSupabaseClient } from "@/lib/supabase";
+import { publicEnv } from "@/lib/env";
+
+/**
+ * Same anon key as the browser — never the service_role key, which lives in
+ * the FastAPI backend alone.
+ *
+ * The cookie adapter is a parameter because the two server-side callers own
+ * different things: proxy.ts owns the response and can write refreshed
+ * cookies, a Server Component cannot. Keeping every server client in this
+ * module is also what keeps `createServerClient` out of the browser bundle.
+ */
+export function createServerSupabaseClient(
+  cookies: CookieMethodsServer,
+): SupabaseClient {
+  const env = publicEnv();
+
+  return createServerClient(
+    env.NEXT_PUBLIC_SUPABASE_URL,
+    env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    { cookies },
+  );
+}
 
 /** Supabase client bound to the cookies of the current request. */
 export async function getServerSupabase(): Promise<SupabaseClient> {

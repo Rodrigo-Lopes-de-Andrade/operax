@@ -1,13 +1,9 @@
-import {
-  createBrowserClient,
-  createServerClient,
-  type CookieMethodsServer,
-} from "@supabase/ssr";
+import { createBrowserClient } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 import { publicEnv } from "@/lib/env";
 
-// TODO (pendencia) Type both clients with the output of
+// TODO (pendencia) Type the client with the output of
 // `supabase gen types typescript` (as src/lib/database.types.ts) once a
 // Supabase project exists. Table types are never hand-written (CLAUDE.md).
 
@@ -28,25 +24,5 @@ export function createBrowserSupabaseClient(): SupabaseClient {
   return createBrowserClient(
     env.NEXT_PUBLIC_SUPABASE_URL,
     env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-  );
-}
-
-/**
- * Same anon key, server side — never the service_role key, which lives in the
- * FastAPI backend alone.
- *
- * The cookie adapter is injected so this module stays free of `next/headers`
- * and can be shared by proxy.ts (which owns the response) and by Server
- * Components (see src/lib/supabase-server.ts).
- */
-export function createServerSupabaseClient(
-  cookies: CookieMethodsServer,
-): SupabaseClient {
-  const env = publicEnv();
-
-  return createServerClient(
-    env.NEXT_PUBLIC_SUPABASE_URL,
-    env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
-    { cookies },
   );
 }

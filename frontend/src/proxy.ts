@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
-import { LOGIN_PATH, safeNextPath } from "@/lib/navigation";
-import { createServerSupabaseClient } from "@/lib/supabase";
+import { LOGIN_PATH, PATHNAME_HEADER, safeNextPath } from "@/lib/navigation";
+import { createServerSupabaseClient } from "@/lib/supabase-server";
 
 const PUBLIC_PATHS = new Set<string>([LOGIN_PATH]);
 
@@ -18,7 +18,19 @@ const PUBLIC_PATHS = new Set<string>([LOGIN_PATH]);
  * sensitive one.
  */
 export async function proxy(request: NextRequest) {
-  let response = NextResponse.next({ request });
+  // Server Components cannot read the requested path. Carrying it forward is
+  // what lets the protected layout redirect to the login without dropping the
+  // deep link the alert message pointed at.
+  const forward = () => {
+    const headers = new Headers(request.headers);
+    headers.set(
+      PATHNAME_HEADER,
+      `${request.nextUrl.pathname}${request.nextUrl.search}`,
+    );
+    return NextResponse.next({ request: { headers } });
+  };
+
+  let response = forward();
 
   const supabase = createServerSupabaseClient({
     getAll: () => request.cookies.getAll(),
@@ -27,7 +39,9 @@ export async function proxy(request: NextRequest) {
         request.cookies.set(name, value);
       }
 
-      response = NextResponse.next({ request });
+      // Rebuilt after the cookie jar changed, so the refreshed session travels
+      // to the render as well.
+      response = forward();
 
       for (const { name, value, options } of cookiesToSet) {
         response.cookies.set(name, value, options);
