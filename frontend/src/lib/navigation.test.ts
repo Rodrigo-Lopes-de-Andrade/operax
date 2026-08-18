@@ -2,32 +2,38 @@ import { describe, expect, it } from "vitest";
 
 import { DEFAULT_AUTHENTICATED_PATH, safeNextPath } from "@/lib/navigation";
 
+/**
+ * The origin of the application, which is what both sinks resolve against —
+ * `new URL(target, request.url)` in proxy.ts and `router.replace()` in the
+ * browser. It must never be the sentinel origin `safeNextPath` parses with: a
+ * test that judges the result against the same private base as the function
+ * inherits whatever that base cannot see.
+ */
 const APP_ORIGIN = "https://app.operax.test";
 
 /**
  * The value reaches production already decoded, because both sinks read it
  * from a query string — proxy.ts through `nextUrl.searchParams` and the login
  * page through `searchParams`. Decoding here the same way is what makes
- * `/%09/evil.test` arrive as `/<TAB>/evil.test`, which is the whole point.
+ * `/%09/evil.test` arrive as `/<TAB>/evil.test`.
  */
 function asItArrives(rawQueryValue: string) {
   return new URLSearchParams(`next=${rawQueryValue}`).get("next");
 }
 
 /**
- * Every vector an alert link could carry. The assertion is never string
- * equality: what matters is that the value cannot resolve to another origin
- * once `new URL()` or `router.replace()` gets hold of it.
+ * Hostile input, in the spelling an alert link would carry. Every one of these
+ * has to collapse to the default screen — not merely stay on this origin,
+ * because "stayed on the origin" is also true of a guard that returns "/" for
+ * everything, and of one that returns the attacker's path verbatim.
  */
-const ESCAPE_VECTORS = [
-  // Whitespace the URL parser removes before parsing — the reason a regex on
-  // the raw string is not enough.
+const REJECTED = [
+  // Whitespace the URL parser strips before parsing (cycle 1).
   "/%09/evil.test",
   "/%0A/evil.test",
   "/%0D/evil.test",
   "/%09//evil.test",
   "/%09%5Cevil.test",
-  "/%09%5C%5Cevil.test",
   // Authorities, in every spelling.
   "//evil.test",
   "///evil.test",
@@ -35,6 +41,7 @@ const ESCAPE_VECTORS = [
   "%5C/%5C/evil.test",
   "//evil.test%00",
   "/%2f%2fevil.test",
+  "//evil.test:8443",
   // Absolute URLs and other schemes.
   "https://evil.test/dashboard",
   "https:/evil.test",
@@ -44,9 +51,8 @@ const ESCAPE_VECTORS = [
   // Not a path at all.
   "dashboard",
   "%20//evil.test",
-  // Dot segments. The path normaliser eats ".", "..", "%2e" and "%2E", and
-  // the slash behind them becomes the first character of the path — an
-  // authority the input never spelled out.
+  // Dot segments: the normaliser eats them and promotes the slash behind
+  // them to the first character of the path (cycle 2).
   "/.//evil.test",
   "/..//evil.test",
   "/%2e//evil.test",
@@ -57,66 +63,127 @@ const ESCAPE_VECTORS = [
   "/dashboard/../..//evil.test",
   "/%252e//evil.test",
   "/.%2F%2Fevil.test",
-  // Encodings and look-alikes that stay on this origin and must not be
-  // mistaken for an escape.
-  "/%252F%252Fevil.test",
-  "/%E2%81%84%E2%81%84evil.test",
-  "/%EF%BC%8F%EF%BC%8Fevil.test",
-  "/%0B/evil.test",
-  "/%0C/evil.test",
-  "/%00/evil.test",
+  "/.//",
+  "/..//",
+  "/%2e//",
+  // The sentinel's own host (cycle 3). These resolve to the private base the
+  // guard parses with, so any check phrased against that base calls them
+  // same-origin while the sink resolves them somewhere else entirely.
+  "/.//operax.invalid",
+  "/..//operax.invalid",
+  "/%2e//operax.invalid",
+  "/%2E//operax.invalid",
+  "/%2e%2e//operax.invalid",
+  "/.///operax.invalid",
+  "/a/..//operax.invalid",
+  "/dashboard/../..//operax.invalid",
+  "/.//operax.invalid/painel?ev=4821",
+  "/.//operax.invalid?a=1",
+  "/.//OPERAX.INVALID",
+  "/.//operax%2Einvalid",
+  "/.//operax.invalid:443",
+  "/.//evil.test@operax.invalid",
+  "/.%5C%5Coperax.invalid",
+  "/%09.//operax.invalid",
+  "/.//operax%E3%80%82invalid",
+  "//operax.invalid:8443",
+  // Values that make the parser itself throw. Unhandled, each of these is a
+  // 500 on the login of everyone already signed in.
+  "//",
+  "///",
+  "////",
+  "//%5B",
+  "//%5D",
+  "//:",
+  "//%20",
+  "/%5C",
+  "/%5C%5C",
+  "/%5C/",
+  "/%09//",
+  "/%0A//",
+  "/%0D//",
+  "//@",
+  "//%23",
+  "//%3F",
+  "//a%20b",
+  // The login itself: same-origin at every hop, and a chain of them is a
+  // redirect loop aimed at the manager who is already signed in.
+  "/login",
+  "/login?next=%2Flogin",
+  "/login?next=%2Fdashboard",
+];
+
+/**
+ * Values that are a path on this origin and must survive exactly as they are.
+ * Percent-escapes here are literal — they arrive this way when the link is
+ * double-encoded — and decoding them before parsing would turn inert text into
+ * an authority.
+ */
+const PRESERVED: Array<[string, string]> = [
+  ["/dashboard", "/dashboard"],
+  ["/dashboard?ev=4821", "/dashboard?ev=4821"],
+  [
+    "/dashboard?unit=42&de=2026-08-18&ate=2026-08-18",
+    "/dashboard?unit=42&de=2026-08-18&ate=2026-08-18",
+  ],
+  [
+    "/dashboard?empresa=kastro&unidade=shopping-norte&periodo=hoje&direcao=faltante",
+    "/dashboard?empresa=kastro&unidade=shopping-norte&periodo=hoje&direcao=faltante",
+  ],
+  ["/relat%C3%B3rio?ev=4821", "/relat%C3%B3rio?ev=4821"],
+  ["/%2F%2Fevil.test", "/%2F%2Fevil.test"],
+  ["/%5C%5Cevil.test", "/%5C%5Cevil.test"],
+  ["/%09//evil.test", "/%09//evil.test"],
+  ["/%00//evil.test", "/%00//evil.test"],
+  ["/%252F%252Fevil.test", "/%252F%252Fevil.test"],
+  ["/%E2%81%84%E2%81%84evil.test", "/%E2%81%84%E2%81%84evil.test"],
+  // Normalised, not rejected: the dot segments resolve inside the path.
+  ["/dashboard/../dashboard?ev=4821", "/dashboard?ev=4821"],
+  ["/./", "/"],
+  ["/..", "/"],
 ];
 
 describe("safeNextPath", () => {
-  it.each(ESCAPE_VECTORS)("cannot leave the application origin: %s", (raw) => {
-    const target = safeNextPath(asItArrives(raw));
+  describe.each(REJECTED)("hostile input %s", (raw) => {
+    const target = () => safeNextPath(asItArrives(raw));
 
-    expect(new URL(target, APP_ORIGIN).origin).toBe(APP_ORIGIN);
+    it("cannot leave the origin of the application", () => {
+      expect(new URL(target(), APP_ORIGIN).origin).toBe(APP_ORIGIN);
+    });
+
+    it("collapses to the default screen", () => {
+      expect(target()).toBe(DEFAULT_AUTHENTICATED_PATH);
+    });
+
+    it("hands the sink something it can parse", () => {
+      expect(() => new URL(target(), APP_ORIGIN)).not.toThrow();
+    });
   });
 
-  it("closes the TAB, LF and CR redirect", () => {
-    // Regression: these three passed a regex guard and resolved to
-    // //evil.test, in the proxy and after a successful sign-in alike.
-    expect(safeNextPath("/\t/evil.test")).toBe(DEFAULT_AUTHENTICATED_PATH);
-    expect(safeNextPath("/\n/evil.test")).toBe(DEFAULT_AUTHENTICATED_PATH);
-    expect(safeNextPath("/\r/evil.test")).toBe(DEFAULT_AUTHENTICATED_PATH);
+  it.each(PRESERVED)("keeps %s as %s", (input, expected) => {
+    expect(safeNextPath(input)).toBe(expected);
+    expect(new URL(safeNextPath(input), APP_ORIGIN).origin).toBe(APP_ORIGIN);
   });
 
-  it.each(["/.//", "/..//", "/%2e//", "/./", "/.."])(
-    "hands the sink something it can parse: %s",
-    (raw) => {
-      // A path that normalises to "//" with no host makes `new URL()` throw,
-      // which in the proxy is a 500 on the login of everyone already signed in.
-      const target = safeNextPath(asItArrives(raw));
+  it("does not follow a chain of logins", () => {
+    let chain = "/dashboard?ev=4821";
+    for (let hop = 0; hop < 25; hop += 1) {
+      chain = `/login?next=${encodeURIComponent(chain)}`;
+    }
 
-      expect(() => new URL(target, APP_ORIGIN)).not.toThrow();
-    },
-  );
-
-  it("keeps a relative path with its query string", () => {
-    expect(safeNextPath("/dashboard?unit=42&de=2026-08-18")).toBe(
-      "/dashboard?unit=42&de=2026-08-18",
-    );
-    // The shape the consolidated report will send over WhatsApp.
-    expect(
-      safeNextPath("/dashboard?unit=42&de=2026-08-18&ate=2026-08-18"),
-    ).toBe("/dashboard?unit=42&de=2026-08-18&ate=2026-08-18");
-  });
-
-  it("returns a value already normalised for the caller", () => {
-    // Whatever survives is what proxy.ts and router.replace() receive, so it
-    // must not need a second parse to be safe.
-    expect(safeNextPath("/dashboard/../dashboard?ev=4821")).toBe(
-      "/dashboard?ev=4821",
-    );
-    expect(safeNextPath(asItArrives("/%09/evil.test"))).toBe(
-      DEFAULT_AUTHENTICATED_PATH,
-    );
+    expect(safeNextPath(chain)).toBe(DEFAULT_AUTHENTICATED_PATH);
   });
 
   it("falls back when the parameter is absent or repeated", () => {
     expect(safeNextPath(undefined)).toBe(DEFAULT_AUTHENTICATED_PATH);
     expect(safeNextPath(null)).toBe(DEFAULT_AUTHENTICATED_PATH);
     expect(safeNextPath(["/dashboard", "/other"])).toBe("/dashboard");
+  });
+
+  it("resolves an authority that points back at this application to its root", () => {
+    // Documented, not accidental: the host is the guard's own parsing base, so
+    // the path is empty and "/" is the honest answer. It is same-origin, and
+    // "/" itself redirects to the default screen.
+    expect(safeNextPath(asItArrives("//operax.invalid"))).toBe("/");
   });
 });

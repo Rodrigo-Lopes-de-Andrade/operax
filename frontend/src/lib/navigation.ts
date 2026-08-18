@@ -28,12 +28,20 @@ const SENTINEL_ORIGIN = "https://operax.invalid";
  * A leading `/` is still required before parsing: the parser also trims
  * leading whitespace, and " //evil.test" must not become an authority.
  *
- * The same judgement is then applied to what comes out, because the path
- * normaliser eats dot segments (`.`, `..`, `%2e`) and can promote the slash
- * behind them to the first character of the path — turning `/.//evil.test`
- * into the authority `//evil.test` that the input never spelled. Judging the
- * result instead of listing its spellings is what keeps the next exotic form
- * from reopening this.
+ * What comes out is then judged by its **form**, not by resolving it again:
+ * the path normaliser eats dot segments (`.`, `..`, `%2e`) and can promote the
+ * slash behind them to the first character of the path, turning
+ * `/.//evil.test` into the authority `//evil.test`. Re-resolving against the
+ * sentinel cannot decide that, because the sentinel is not where the sinks
+ * resolve — `//operax.invalid` is same-origin to that base and another host to
+ * `new URL(target, request.url)`. A value that starts with `//` or `/\\` is an
+ * authority to every parser, whatever base it is given, and that is a property
+ * of the string alone.
+ *
+ * The login is refused as a destination: every hop of
+ * `/login?next=/login?next=…` is same-origin, so the chain would be accepted
+ * one link at a time until the browser gives up with ERR_TOO_MANY_REDIRECTS —
+ * on the manager who is already signed in and just tapped the alert.
  *
  * The fragment does not survive: `/dashboard#drawer` comes back as
  * `/dashboard`. Filter state lives in the query string (CLAUDE.md), so
@@ -58,15 +66,21 @@ export function safeNextPath(value: string | string[] | undefined | null) {
     return DEFAULT_AUTHENTICATED_PATH;
   }
 
+  if (resolved.pathname === LOGIN_PATH) {
+    return DEFAULT_AUTHENTICATED_PATH;
+  }
+
   const normalised = `${resolved.pathname}${resolved.search}`;
 
-  try {
-    if (new URL(normalised, SENTINEL_ORIGIN).origin !== SENTINEL_ORIGIN) {
-      return DEFAULT_AUTHENTICATED_PATH;
-    }
-  } catch {
-    // "//" on its own parses as an empty authority and throws in the sink,
-    // which in the proxy is a 500 on the login of everyone already signed in.
+  // An authority is what starts with "//" or "/\\", to any parser and against
+  // any base. The parser normalises the backslash spelling away before it can
+  // reach here, but the check states the invariant instead of depending on
+  // that.
+  if (
+    normalised[0] !== "/" ||
+    normalised[1] === "/" ||
+    normalised[1] === "\\"
+  ) {
     return DEFAULT_AUTHENTICATED_PATH;
   }
 

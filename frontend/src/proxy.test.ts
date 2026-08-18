@@ -61,6 +61,8 @@ describe("proxy", () => {
   });
 
   it.each([
+    "/.//operax.invalid",
+    "/..//operax.invalid",
     "/.//evil.test",
     "/..//evil.test",
     "/%2e//evil.test",
@@ -77,6 +79,37 @@ describe("proxy", () => {
 
     expect(location).not.toBeNull();
     expect(new URL(location as string).origin).toBe(APP_ORIGIN);
+  });
+
+  it.each(["//", "/%5C", "/.//", "/%09//"])(
+    "answers with a redirect, never an exception, for next=%s",
+    async (raw) => {
+      // These make `new URL()` throw. Unhandled in the proxy that is a 500 on
+      // the login of everyone already signed in.
+      signedIn({ id: "user-1" });
+
+      const response = await proxy(request(`/login?next=${raw}`));
+      const location = response.headers.get("location");
+
+      expect(response.status).toBe(307);
+      expect(new URL(location as string).origin).toBe(APP_ORIGIN);
+    },
+  );
+
+  it("answers a chain of logins with a single redirect", async () => {
+    signedIn({ id: "user-1" });
+
+    let chain = "/dashboard?ev=4821";
+    for (let hop = 0; hop < 25; hop += 1) {
+      chain = `/login?next=${encodeURIComponent(chain)}`;
+    }
+
+    const response = await proxy(
+      request(`/login?next=${encodeURIComponent(chain)}`),
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe(`${APP_ORIGIN}/dashboard`);
   });
 
   it("leaves the signed-in user alone on a protected route", async () => {
