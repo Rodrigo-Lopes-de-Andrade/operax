@@ -13,11 +13,13 @@ esac
 
 [ -f "$FILE" ] || exit 0
 
-# Projeto usa uv; usa o ruff do ambiente do backend quando existir.
-if [ -f "backend/pyproject.toml" ] && command -v uv >/dev/null 2>&1; then
-  RUFF=(uv run --project backend --quiet ruff)
-elif command -v ruff >/dev/null 2>&1; then
+# Ruff do PATH quando existir (le a config do pyproject.toml mais proximo
+# de qualquer forma); uv so como fallback. Nesta ordem o hook nao trava
+# enquanto backend/pyproject.toml ainda nao declara o ruff como dependencia.
+if command -v ruff >/dev/null 2>&1; then
   RUFF=(ruff)
+elif [ -f "backend/pyproject.toml" ] && command -v uv >/dev/null 2>&1; then
+  RUFF=(uv run --project backend --quiet ruff)
 else
   exit 0
 fi
