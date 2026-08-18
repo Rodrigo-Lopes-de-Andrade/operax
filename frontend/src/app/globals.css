@@ -1,0 +1,194 @@
+@import "tailwindcss";
+
+/* ---------------------------------------------------------------------------
+   Design tokens — copied from the handoff in
+   design/design_handoff_operax/prototipo/_ds/.../tokens/*.css.
+   Names are kept verbatim so the handoff stays readable against this code.
+   Only the light theme ships: the dark theme exists in the token files but was
+   never designed screen by screen (handoff, "Pendencias conhecidas" 6).
+   --------------------------------------------------------------------------- */
+:root {
+  /* Categorical — data viz */
+  --categorical-1: #9fbffe;
+  --categorical-2: #6d9dfd;
+  --categorical-3: #407ffc;
+  --categorical-4: #015dfc;
+  --categorical-5: #013df2;
+  --categorical-6: #835ff2;
+  --categorical-7: #fdad0d;
+  --categorical-8: #f55902;
+
+  /* Foreground */
+  --foreground-primary: #3d3d3d;
+  --foreground-secondary: #575757;
+  --foreground-tertiary: #6e6e6e;
+  --foreground-quaternary: #767676;
+
+  /* Background / surfaces */
+  --background-primary: #f4f4f4;
+  --background-secondary: #ffffff;
+  --background-header: #111d2d;
+  --background-card: #ffffff;
+  --background-muted: #f1f1f2;
+
+  /* Semantic states */
+  --bad-foreground: #c10202;
+  --bad-background: #ffcccc;
+  --good-foreground: #028402;
+  --good-background: #dcffdc;
+  --alert-foreground: #996601;
+  --alert-background: #fff6e6;
+
+  /* Semantic aliases — prefer these */
+  --surface-app: var(--background-primary);
+  --surface-raised: var(--background-secondary);
+  --surface-card: var(--background-card);
+  --surface-muted: var(--background-muted);
+  --surface-chrome: var(--background-header);
+
+  --text-strong: var(--foreground-primary);
+  --text-body: var(--foreground-secondary);
+  --text-muted: var(--foreground-tertiary);
+  --text-faint: var(--foreground-quaternary);
+  --text-on-accent: #ffffff;
+  --text-on-dark: #f5f5f5;
+
+  --brand: var(--categorical-4);
+  --brand-strong: var(--categorical-5);
+  --brand-soft: var(--categorical-1);
+  /* Direction of the deviation: surplus is violet, shortfall is orange.
+     Red is reserved for failure, never for a deviation. */
+  --accent-surplus: var(--categorical-6);
+  --accent-shortfall: #ce4b02;
+
+  --border-subtle: rgba(17, 29, 45, 0.08);
+  --border-default: rgba(17, 29, 45, 0.12);
+  --border-strong: rgba(17, 29, 45, 0.18);
+  --border-focus: var(--categorical-4);
+
+  --control-bg: #ffffff;
+  --control-border: rgba(17, 29, 45, 0.14);
+
+  --scrim: rgba(17, 29, 45, 0.45);
+
+  /* Layout */
+  --sidebar-width: 264px;
+  --header-height: 84px;
+  --content-max: 1440px;
+}
+
+/* ---------------------------------------------------------------------------
+   Tailwind v4 theme. `inline` so every utility compiles to the token above and
+   keeps following it if the token is redefined (future dark theme).
+   --------------------------------------------------------------------------- */
+@theme inline {
+  --color-canvas: var(--surface-app);
+  --color-card: var(--surface-card);
+  --color-raised: var(--surface-raised);
+  --color-muted: var(--surface-muted);
+  --color-chrome: var(--surface-chrome);
+
+  --color-ink: var(--text-strong);
+  --color-ink-body: var(--text-body);
+  --color-ink-muted: var(--text-muted);
+  --color-ink-faint: var(--text-faint);
+  --color-on-brand: var(--text-on-accent);
+  --color-on-chrome: var(--text-on-dark);
+
+  --color-brand: var(--brand);
+  --color-brand-strong: var(--brand-strong);
+  --color-brand-soft: var(--brand-soft);
+  --color-surplus: var(--accent-surplus);
+  --color-shortfall: var(--accent-shortfall);
+
+  --color-good: var(--good-foreground);
+  --color-good-bg: var(--good-background);
+  --color-alert: var(--alert-foreground);
+  --color-alert-bg: var(--alert-background);
+  --color-bad: var(--bad-foreground);
+  --color-bad-bg: var(--bad-background);
+
+  --color-line: var(--border-default);
+  --color-line-subtle: var(--border-subtle);
+  --color-line-strong: var(--border-strong);
+  --color-focus: var(--border-focus);
+  --color-control: var(--control-bg);
+  --color-control-line: var(--control-border);
+}
+
+@theme {
+  --font-sans:
+    var(--font-manrope), system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:
+    var(--font-jetbrains-mono), ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* Type scale — 11px micro labels up to the 48px hero figure. */
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: 1.3;
+  --text-xs: 0.75rem;
+  --text-xs--line-height: 1.3;
+  --text-sm: 0.8125rem;
+  --text-sm--line-height: 1.5;
+  --text-base: 0.875rem;
+  --text-base--line-height: 1.5;
+  --text-md: 1rem;
+  --text-md--line-height: 1.5;
+  --text-lg: 1.125rem;
+  --text-lg--line-height: 1.3;
+  --text-xl: 1.375rem;
+  --text-xl--line-height: 1.15;
+  --text-2xl: 1.75rem;
+  --text-2xl--line-height: 1.15;
+  --text-3xl: 2.25rem;
+  --text-3xl--line-height: 1.15;
+  --text-4xl: 3rem;
+  --text-4xl--line-height: 1.15;
+
+  --tracking-tight: -0.02em;
+  --tracking-caps: 0.08em;
+
+  /* 4px grid, which is already Tailwind's default step. */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-2xl: 24px;
+
+  --shadow-xs: 0 1px 2px rgba(17, 29, 45, 0.06);
+  --shadow-sm:
+    0 1px 3px rgba(17, 29, 45, 0.07), 0 1px 2px rgba(17, 29, 45, 0.04);
+  --shadow-md:
+    0 4px 12px rgba(17, 29, 45, 0.08), 0 2px 4px rgba(17, 29, 45, 0.04);
+  --shadow-lg:
+    0 12px 28px rgba(17, 29, 45, 0.12), 0 4px 8px rgba(17, 29, 45, 0.05);
+  --shadow-xl:
+    0 24px 56px rgba(17, 29, 45, 0.16), 0 8px 16px rgba(17, 29, 45, 0.06);
+
+  --ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+
+  --default-transition-duration: 180ms;
+  --default-transition-timing-function: var(--ease-standard);
+}
+
+@layer base {
+  body {
+    font-feature-settings: "cv11", "ss01";
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--border-focus);
+    outline-offset: 2px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+}
