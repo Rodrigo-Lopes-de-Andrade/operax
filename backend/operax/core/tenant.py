@@ -18,6 +18,7 @@ outside this module.
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import AsyncIterator, Mapping
 from contextlib import asynccontextmanager
@@ -189,6 +190,88 @@ async def tenant_scope(
     async with get_pools().pool(schema).connection() as connection:
         async with connection.cursor(row_factory=dict_row) as cursor:
             yield TenantScope(cursor, context)
+
+
+# `SET` takes no placeholder, `set_config` does — and the third argument makes
+# it local, so the transaction end puts the connection back the way the pool
+# handed it over. Both spellings of the claim are written because `auth.uid()`
+# has read both over the life of the Supabase project, and a helper that
+# silently returns null would not fail: it would answer "no rows".
+_ACT_AS_USER_SQL = """
+    select set_config('role', 'authenticated', true),
+           set_config('request.jwt.claims', %(claims)s, true),
+           set_config('request.jwt.claim.sub', %(sub)s, true)
+"""
+
+
+class UserScope:
+    """A cursor that runs as the authenticated user, with RLS in force.
+
+    The counterpart of `TenantScope`, and the answer to a question it cannot
+    answer. `service_role` ignores RLS, so a statement that must respect the
+    user's scope of companies and units, or the sensitive-domain matrix, would
+    have to re-implement `util.can_see_unit` and `util.can_see_domain` here — the
+    same security rule written twice, in two languages, drifting apart at the
+    first policy change.
+
+    So the transaction stops being `service_role` instead: it takes the
+    `authenticated` role and the `sub` of the validated token, and the policies
+    that already guard the browser guard this connection too. `util.can_see_*`
+    become callable, because `auth.uid()` now answers.
+
+    No tenant placeholder is required here, and that is deliberate rather than an
+    omission: with RLS in force a cross-tenant read is not a forgotten filter, it
+    is impossible. Demanding the filter anyway would be a ritual, and rituals get
+    satisfied by tautologies.
+
+    What this does not do: it does not downgrade the connection permanently. The
+    role is set `local`, so it lives exactly as long as the transaction. Anything
+    that genuinely needs to bypass RLS — the membership bootstrap, an
+    administrative write — stays on `tenant_scope`.
+    """
+
+    def __init__(self, cursor: AsyncCursor[DictRow], context: TenantContext) -> None:
+        self._cursor = cursor
+        self._context = context
+
+    @property
+    def context(self) -> TenantContext:
+        return self._context
+
+    async def execute(
+        self,
+        statement: str,
+        params: Mapping[str, Any] | None = None,
+    ) -> None:
+        if params is not None and not isinstance(params, Mapping):
+            raise MissingTenantFilterError("named parameters are required")
+        await self._cursor.execute(statement, params or {})
+
+    async def fetchone(self) -> DictRow | None:
+        return await self._cursor.fetchone()
+
+    async def fetchall(self) -> list[DictRow]:
+        return await self._cursor.fetchall()
+
+
+@asynccontextmanager
+async def user_scope(
+    context: TenantContext,
+    schema: Schema = "app",
+) -> AsyncIterator[UserScope]:
+    """Open a cursor that the database sees as the user who asked."""
+    if not isinstance(context, TenantContext):
+        raise MissingTenantContextError("a TenantContext is required to open a scope")
+    claims = json.dumps({"sub": str(context.user_id), "role": "authenticated"})
+    async with get_pools().pool(schema).connection() as connection:
+        # `set_config(..., local)` needs a transaction to be local to.
+        async with connection.transaction():
+            async with connection.cursor(row_factory=dict_row) as cursor:
+                await cursor.execute(
+                    _ACT_AS_USER_SQL,
+                    {"claims": claims, "sub": str(context.user_id)},
+                )
+                yield UserScope(cursor, context)
 
 
 _MEMBERSHIP_SQL = """

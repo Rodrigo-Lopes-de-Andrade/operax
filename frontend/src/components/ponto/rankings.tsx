@@ -1,8 +1,10 @@
 import { CheckCheck, TriangleAlert } from "lucide-react";
+import Link from "next/link";
 
 import { EmptyState } from "@/components/ui/empty-state";
 import { Card, CardHeader } from "@/components/ui/kpi-card";
 import { Rankbar, type RankbarItem } from "@/components/ui/rankbar";
+import { colaboradorHref } from "@/lib/colaborador/url";
 import { formatNumber } from "@/lib/ponto/format";
 import type { PontoScreen } from "@/lib/ponto/queries";
 
@@ -27,6 +29,7 @@ export function Rankings({ screen }: { screen: PontoScreen }) {
       label: row.employee_name,
       value: row.eventos,
       display: `${formatNumber(row.eventos)} · ${formatNumber(row.minutes_abs)} min`,
+      href: colaboradorHref(row.employee_id),
     })) ?? [];
 
   return (
@@ -120,11 +123,12 @@ function RecurrenceCard({ screen }: { screen: PontoScreen }) {
                 className="flex items-baseline justify-between gap-3"
               >
                 <span className="min-w-0">
-                  {/* Sem link: a consulta individual é outra tela e ainda não
-                      existe. Link que não leva a lugar nenhum é defeito. */}
-                  <span className="text-ink-body block truncate text-sm font-semibold">
+                  <Link
+                    href={colaboradorHref(row.employee_id)}
+                    className="text-ink-body hover:text-brand-strong block truncate text-sm font-semibold underline-offset-4 hover:underline"
+                  >
                     {row.employee_name}
-                  </span>
+                  </Link>
                   <span className="text-ink-faint text-xs">
                     {row.unit_name ?? "Sem unidade"}
                   </span>

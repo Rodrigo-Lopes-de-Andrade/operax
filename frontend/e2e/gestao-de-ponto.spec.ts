@@ -20,15 +20,19 @@ async function signIn(page: Page, email: string, next = "/dashboard") {
   await page.getByLabel("E-mail").fill(email);
   await page.getByLabel("Senha").fill("operax-dev");
   await page.getByRole("button", { name: "Entrar" }).click();
+  // Generous, and only here: the first hit compiles the route in the dev server
+  // and the owner's cut is the whole tenant, so the slowest sign-in of the suite
+  // is the first one. The 3-second acceptance target is measured against a
+  // production build, not against this.
   await expect(
     page.getByRole("heading", { name: "Gestão de ponto" }),
-  ).toBeVisible();
+  ).toBeVisible({ timeout: 30_000 });
 }
 
 test("o owner vê o recorte inteiro e abre o indício pelo link", async ({
   page,
 }) => {
-  await signIn(page, "owner@operax.dev");
+  await signIn(page, "owner@fastpark.dev");
 
   await expect(page.getByText("Ocorrências no recorte")).toBeVisible();
   await expect(
@@ -58,7 +62,7 @@ test("o owner vê o recorte inteiro e abre o indício pelo link", async ({
 test("o período troca pelo link e o recorte aparece na URL", async ({
   page,
 }) => {
-  await signIn(page, "owner@operax.dev");
+  await signIn(page, "owner@fastpark.dev");
 
   await page
     .getByRole("group", { name: "Período" })
@@ -70,7 +74,7 @@ test("o período troca pelo link e o recorte aparece na URL", async ({
 test("o supervisor de unidade não vê outra unidade na tela", async ({
   page,
 }) => {
-  await signIn(page, "supervisor@operax.dev");
+  await signIn(page, "supervisor@fastpark.dev");
 
   // O escopo do seed dá a ele Shopping Norte e mais nenhuma.
   const unitSelect = page.getByLabel("Unidade");
@@ -88,9 +92,53 @@ test("o supervisor de unidade não vê outra unidade na tela", async ({
 test("o link da ocorrência de outro escopo não vaza o colaborador", async ({
   page,
 }) => {
-  await signIn(page, "supervisor@operax.dev");
+  await signIn(page, "supervisor@fastpark.dev");
 
   // Um uuid válido que o supervisor não pode ler: a gaveta explica, não mostra.
   await page.goto("/dashboard?ev=00000000-0000-4000-8000-000000000000");
   await expect(page.getByText("Este indício não existe mais")).toBeVisible();
+});
+
+test("o DP alcança os blocos sensíveis do colaborador", async ({ page }) => {
+  await signIn(page, "dp@fastpark.dev");
+
+  await page.getByRole("row").nth(1).click();
+  await page.getByRole("link", { name: "Ver o colaborador" }).click();
+
+  await expect(
+    page.getByRole("heading", { name: "Histórico de remuneração" }),
+  ).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Documentos" })).toBeVisible();
+  // Departamento pessoal não alcança o domínio de saúde: exame não existe aqui.
+  await expect(page.getByText("Exame ocupacional guarda apenas")).toHaveCount(
+    0,
+  );
+});
+
+test("o supervisor não vê o bloco sensível — nem cadeado, nem cinza", async ({
+  page,
+}) => {
+  await signIn(page, "supervisor@fastpark.dev");
+
+  await page.getByRole("row").nth(1).click();
+  await page.getByRole("link", { name: "Ver o colaborador" }).click();
+
+  // O ponto do colaborador está lá; o domínio sensível simplesmente não existe.
+  await expect(page.getByText("Dia a dia do período")).toBeVisible();
+  await expect(page.getByText("Histórico de remuneração")).toHaveCount(0);
+  await expect(page.getByText("Domínio sensível")).toHaveCount(0);
+  await expect(page.getByText(/cadeado|sem permissão|bloqueado/i)).toHaveCount(
+    0,
+  );
+});
+
+test("colaborador fora do escopo responde a mesma coisa que colaborador inexistente", async ({
+  page,
+}) => {
+  await signIn(page, "supervisor@fastpark.dev");
+
+  await page.goto(
+    "/dashboard/colaborador/00000000-0000-4000-8000-000000000000",
+  );
+  await expect(page.getByText("Colaborador não encontrado")).toBeVisible();
 });

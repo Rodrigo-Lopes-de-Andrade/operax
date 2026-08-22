@@ -1,4 +1,7 @@
-import { Clock } from "lucide-react";
+import { ArrowRight, Clock } from "lucide-react";
+import Link from "next/link";
+
+import { colaboradorHref } from "@/lib/colaborador/url";
 
 import { Badge } from "@/components/ui/badge";
 import { Drawer } from "@/components/ui/drawer";
@@ -55,10 +58,19 @@ export function OccurrenceDrawer({
       subtitle={`${occurrence.unitName ?? "Sem unidade"} · ${formatDayLong(occurrence.referenceDate)}`}
       closeHref={closeHref}
       footer={
-        <p className="text-ink-faint text-xs text-pretty">
-          Registro oficial de jornada permanece no Secullum. O OperaX aponta
-          indícios.
-        </p>
+        <div className="flex flex-col gap-3">
+          <Link
+            href={colaboradorHref(occurrence.employeeId)}
+            className="text-brand-strong flex w-fit items-center gap-1.5 text-sm font-bold underline-offset-4 hover:underline"
+          >
+            Ver o colaborador
+            <ArrowRight size={15} aria-hidden />
+          </Link>
+          <p className="text-ink-faint text-xs text-pretty">
+            Registro oficial de jornada permanece no Secullum. O FastPark aponta
+            indícios.
+          </p>
+        </div>
       }
     >
       <div className="flex flex-col gap-5">

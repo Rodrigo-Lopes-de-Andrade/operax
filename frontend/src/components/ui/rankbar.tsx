@@ -1,3 +1,5 @@
+import Link from "next/link";
+
 /**
  * Horizontal ranking: label on the left, tabular value on the right, bar
  * underneath. `display` exists so a row can read "4 · 326 min" instead of a

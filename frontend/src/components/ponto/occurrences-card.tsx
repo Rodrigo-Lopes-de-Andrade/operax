@@ -156,7 +156,7 @@ export function OccurrencesCard({
       {/* Frase fixa, não decorativa: o OperaX aponta indício, quem apura é o
           sistema de ponto. É o que separa gestão de exposição trabalhista. */}
       <p className="text-ink-faint border-line-subtle border-t px-5 py-3 text-xs">
-        Registro oficial de jornada permanece no Secullum. O OperaX aponta
+        Registro oficial de jornada permanece no Secullum. O FastPark aponta
         indícios.
       </p>
     </Card>
