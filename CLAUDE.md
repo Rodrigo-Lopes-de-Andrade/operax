@@ -61,9 +61,11 @@ Convenções não-óbvias (o resto está em `package.json` / `pyproject.toml`):
 
 ### Backend (`backend/`)
 
-- FastAPI servindo três coisas: API do painel para dado individual e sensível, o assistente de IA, e os endpoints administrativos. Processos agendados (sync, motor, sender) rodam no mesmo container.
+- FastAPI servindo três coisas: API do painel para dado individual e sensível, o assistente de IA, e os endpoints administrativos. Motor e sender rodam agendados no mesmo container. **A sincronização não** — ver abaixo.
 - Agente LangChain 1.x com `create_agent` — multi-provider (OpenAI / Anthropic / Google GenAI). **Sem text-to-SQL:** o agente escolhe do catálogo `app.metric` e devolve `{metrica, parametros}`; quem executa é o backend, como o usuário que perguntou.
-- Cliente Secullum isolado em `operax/sync/secullum/` — trocar de sistema de ponto é implementar essa interface, nada mais.
+- **A sincronização com o Secullum é Edge Function, não worker Python.** Vive no projeto Supabase, em Deno: `sync-cadastro`, `sync-batidas` e `secullum-test-auth`. Decisão de 22/08/2026, tomada depois que elas já estavam entregando dado — dado chegando vale mais que arquitetura simétrica. `backend/operax/sync/` **não existe e não deve ser criado**.
+  A regra que continua valendo é a que importa: trocar de sistema de ponto mexe num lugar só. Esse lugar agora é a Edge Function.
+  A origem autentica com usuário, senha e `client_id` (secrets `SECULLUM_USERNAME`, `SECULLUM_PASSWORD`, `SECULLUM_CLIENT_ID` da função).
 - Motor de detecção conforme `docs/SPEC-TECNICA.md` §3. Roda em `modo='sombra'` até o falso positivo cair abaixo de 5%.
 - Sender de alertas consome `app.alert_queue` com `for update skip locked`. **O motor nunca envia** — enfileira.
 - Streaming SSE real para as respostas do assistente.
@@ -115,7 +117,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 
 ## Mapa de Arquitetura
 
-- **`backend/operax/sync/`** — espelhamento da origem. `secullum/client.py` = cliente HTTP; `mirror.py` = upsert em `secullum`; `cursor.py` = incremental. Trocar de sistema de ponto acontece só aqui.
+- **Espelhamento da origem** — fora deste repositório, em Edge Functions do Supabase (`sync-cadastro`, `sync-batidas`, `secullum-test-auth`). Trocar de sistema de ponto acontece só ali. ⚠️ O código dessas funções **não está versionado aqui** — `supabase functions download` resolveria, e até lá o que sustenta o produto inteiro existe só no projeto na nuvem.
 - **`backend/operax/motor/`** — `jornada.py` materializa `app.expected_workday` com grau de confiança (é onde o 12x36 é tratado); `deteccao.py` gera `app.deviation_event`; `revogacao.py` trata correção retroativa.
 - **`backend/operax/alertas/`** — `ciclo.py` monta `app.report_cycle` com reserva transacional; `outbox.py` enfileira; `sender.py` consome. `provedores/` = WhatsApp e e-mail atrás de uma interface **template-first**: `enviar(template, variaveis, destino)`, nunca string pronta — ver `docs/DECISAO-WHATSAPP.md`.
 - **`backend/operax/agente/`** — `agente.py` = `create_agent`; `catalogo.py` = carrega `app.metric` e valida a escolha do modelo; `executor.py` = roda a métrica **como o usuário**.
@@ -131,11 +133,6 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 .
 ├── backend/
 │   ├── operax/
-│   │   ├── sync/
-│   │   │   ├── secullum/
-│   │   │   │   └── client.py
-│   │   │   ├── mirror.py
-│   │   │   └── cursor.py
 │   │   ├── motor/
 │   │   │   ├── jornada.py
 │   │   │   ├── deteccao.py
@@ -180,6 +177,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 │   └── vitest.config.ts
 ├── supabase/
 │   ├── migrations/
+│   ├── functions/          # sincronizacao com o Secullum (Deno) — ainda nao baixadas
 │   └── config.toml
 ├── scripts/
 │   ├── 00_diagnostico.sql
@@ -309,7 +307,8 @@ make sender                 # consome a fila de alertas
 
 - **Backend — obrigatórias:** `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_JWKS_URL`, e **pelo menos uma** chave de provider (`OPENAI_API_KEY` | `ANTHROPIC_API_KEY` | `GOOGLE_API_KEY`).
 - **Backend — opcionais:** demais chaves de provider, `SENTRY_DSN`, `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY` (+ `LANGSMITH_PROJECT`), `CORS_ORIGINS` (origens exatas do painel, separadas por vírgula; default `http://localhost:3000`; `*` é rejeitado no startup porque a API responde com credenciais).
-- **Não são env:** credencial do Secullum e token do provedor de WhatsApp — seja ele `meta_cloud` (token da WABA), `z_api` ou `uazapi` (token da instância). São **por tenant** e vivem no Supabase Vault, referenciadas em `app.integration_secret`. Um tenant tem no máximo um provedor de WhatsApp ativo, garantido por índice único.
+- **Credencial do Secullum:** hoje são secrets da Edge Function, no escopo do **projeto** — não por tenant. Funciona com um cliente e quebra no segundo, que é o desenho que `app.integration_secret` + Vault previa. Decisão pendente antes do segundo tenant.
+- **Não são env:** token do provedor de WhatsApp — seja ele `meta_cloud` (token da WABA), `z_api` ou `uazapi` (token da instância). São **por tenant** e vivem no Supabase Vault, referenciadas em `app.integration_secret`. Um tenant tem no máximo um provedor de WhatsApp ativo, garantido por índice único.
 - **Frontend:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_URL` e, se usado, `NEXT_PUBLIC_SENTRY_DSN`.
 
 ---

@@ -105,12 +105,20 @@ a credencial no cofre e sincroniza um tenant por vez. Nenhuma consulta cruza
 tenant. Falha em um tenant não interrompe os outros — registra em
 `app.sync_run` com status `falhou` e segue.
 
+> **Onde isto roda, desde 22/08/2026:** em Edge Functions do Supabase
+> (`sync-cadastro`, `sync-batidas`, `secullum-test-auth`), não no worker Python
+> descrito acima. A decisão está registrada no `CLAUDE.md`. O que segue vale
+> como contrato do que a sincronização precisa garantir, seja onde for que ela
+> execute.
+
 ### ⏳ Pendências
 
 - **Rate limit** — a cadência é 30 min, ou seja 48 execuções/dia por tenant só
   para Batida. É a única pendência que ainda pode derrubar a cadência escolhida.
 - Tamanho de página.
-- Autenticação: escopo do token, validade, renovação.
+- ~~Autenticação: escopo do token, validade, renovação.~~ **Respondido em
+  22/08/2026 pela implementação:** a origem autentica com usuário, senha e
+  `client_id`. É o que os secrets da Edge Function de sincronização carregam.
 - A API devolve valor apurado (atraso, extra, saldo)? Se sim, ingerir como
   verdade reduz drasticamente o risco do motor.
 - Justificativa e afastamento são leitura ou também escrita?

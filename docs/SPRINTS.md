@@ -60,10 +60,10 @@ migrations `00` e `03` antes de aplicar.
 | Trilha | Entrega |
 |---|---|
 | Banco | Migrations `03` e `04` |
-| Backend | `operax/sync/` aponta para o schema `secullum`; `core/tenant.py` injeta `tenant_id` em todo acesso |
+| Sincronização | Edge Functions (`sync-cadastro`, `sync-batidas`) apontam para o schema `secullum` — decisão de 22/08/2026, fora do backend Python; `core/tenant.py` injeta `tenant_id` em todo acesso do FastAPI |
 | Dados | Cadastrar unidades reais; preencher o mapeamento Departamento → unidade |
 
-**A migration `03` quebra o worker.** Banco e código no mesmo PR.
+**A migration `03` quebra a sincronização.** Ela move o espelho de `public` para `secullum`, e as Edge Functions precisam ser atualizadas junto — só que elas vivem noutro repositório, então "no mesmo PR" deixou de ser possível. É coordenação manual até o código delas ser versionado aqui.
 
 O mapeamento de unidades é trabalho de curadoria com o cliente, não de código. É
 onde os ~26% de divergência entre empresa e departamento são resolvidos de uma vez.
