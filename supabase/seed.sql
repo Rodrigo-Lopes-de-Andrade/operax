@@ -317,7 +317,15 @@ select md5('operax-dev-event-' || c.id::text || '|' || w.reference_date::text)::
        md5('operax-dev-run-production')::uuid,
        case when w.reference_date <= current_date - 8
             then md5('operax-dev-cycle-' || c.unit_id::text)::uuid end,
-       (w.reference_date + time '09:00' + make_interval(mins => h.b3 % 400))::timestamptz
+       -- A detecção vem DEPOIS do fato, nunca antes. A leitura roda a cada 30
+       -- minutos, então o indício nasce entre 5 e 39 minutos do horário
+       -- observado — que é a mesma promessa que a tela faz ao gestor.
+       -- `at time zone` porque o painel lê no fuso do cliente: uma âncora naive
+       -- gravada em UTC apareceria três horas antes do que aconteceu, e o
+       -- monitor mostraria "detectado 06:02" para um intervalo das 13:00.
+       ((w.reference_date + coalesce(s.actual_time, s.expected_time, time '09:00'))
+          at time zone 'America/Sao_Paulo')
+         + make_interval(mins => 5 + h.b3 % 35)
 from app.employee c
 -- O sorteio sai da jornada esperada, não de um calendário paralelo: atraso de
 -- entrada em dia de folga é contradição na tela, e tela que se contradiz não
