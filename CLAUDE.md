@@ -111,7 +111,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 - **Topologia:** instância única no Railway — rate limiting in-memory é aceitável; revisar antes de escalar horizontalmente.
 - **Env de produção:** painéis do Railway e da Vercel; chave nova entra no `.env.example` **e** no painel correspondente. Credencial de integração por tenant **não** é env — vai para o Supabase Vault.
 - **Operação:** logs via `railway logs` e painel da Vercel; rollback = redeploy de versão anterior. Health check em `GET /health`.
-- **Previews da Vercel:** por padrão **fora** da allowlist de CORS e das Redirect URLs do Supabase Auth; se necessário, aponte previews para um projeto Supabase de staging.
+- **Previews da Vercel:** por padrão **fora** da allowlist de CORS e das Redirect URLs do Supabase Auth. O projeto de staging existe e é o destino deles — `wbzaqjlfpqteesehapnn`, env em `backend/.env.staging`. Produção é `nklobmlxyidqxarzisph` ("Kastro Park Ponto"), que recebe o Secullum e ainda não conversa com este repositório: ver `docs/PLANO-RECONCILIACAO-NUVEM.md`.
 
 ---
 

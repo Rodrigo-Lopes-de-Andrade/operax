@@ -104,13 +104,20 @@ fechar.
   passa a testar contra o schema real. Ganho imediato, risco zero, e não depende
   de decidir mais nada.
 
-### Fase 2 — provar a fusão num banco descartável
+### Fase 2 — provar a fusão, duas vezes
+
+Primeiro num Postgres descartável, depois em staging. São ensaios diferentes: o
+descartável prova o SQL; staging prova o resto do Supabase — PostgREST, Auth,
+extensões, grants, o `security_invoker` valendo de verdade.
 
 - Escrever a migration de rename a partir do que o dump mostrar, usando
   `scripts/rename_map.py` como mapa canônico.
 - Aplicar baseline + 16 migrations + rename no descartável.
 - **Verificar:** `make db-test` verde, e nenhuma tabela duplicada
-  (`colaborador` e `employee` coexistindo).
+  (colaborador e app.employee coexistindo).
+- Repetir em **staging** e apontar o dashboard deste repositório para lá.
+- **Verificar:** a tela abre contra um Supabase de verdade, com a RLS decidindo
+  o escopo — não contra o stack local.
 
 ### Fase 3 — janela
 
@@ -123,11 +130,26 @@ fechar.
 
 ---
 
-## 4. O que não decidir sozinho
+## 4. Os dois projetos, e o papel de cada um
+
+Decidido em 22/08/2026: **coexistem**.
+
+| Projeto | Papel |
+|---|---|
+| nklobmlxyidqxarzisph — "Kastro Park Ponto" | **Produção.** Recebe o Secullum por Edge Function. Schema em nomenclatura pt. É o alvo da reconciliação. |
+| wbzaqjlfpqteesehapnn | **Staging.** Vazio. Ensaio da fase 2, e destino dos previews da Vercel — que o `CLAUDE.md` já mandava manter fora da allowlist de CORS e das Redirect URLs de produção. |
+
+O env de staging é `backend/.env.staging` e `frontend/.env.local.staging`,
+renomeados de `.env.cloud` na mesma data. **A senha de staging pode ser resetada
+à vontade** — projeto vazio, sem dado de cliente. É o desbloqueio mais barato que
+existe agora: destrava a fase 2 inteira sem depender da senha de produção.
+
+---
+
+## 5. O que não decidir sozinho
 
 - Qualquer DDL na nuvem antes da Fase 2 fechar verde.
 - O que fazer com rls_auto_enable: função que existe lá e não aqui. Pode ser
   andaime de uma sessão anterior ou parte do desenho de alguém. Ler antes de
   remover.
-- O segundo projeto (`wbzaqjlfpqteesehapnn`, vazio, é o que o `.env.cloud`
-  aponta): abandonar ou virar staging.
+*(A pergunta sobre o segundo projeto foi respondida em 22/08/2026 — ver a seção 4.)*
