@@ -103,19 +103,36 @@ Estado local do protótipo, que na implementação vira URL + query cache:
 
 Use `prototipo/_ds/.../tokens/`. Os valores que mais aparecem:
 
+A interface é **white-label**. A marca é configuração do tenant — tokens de cor,
+tokens de tipografia e um logotipo — não constante do produto. **FastPark é o
+primeiro tema**, e é o que está aplicado no protótipo. Os nomes de token não
+mudam de tenant para tenant; só os valores.
+
 **Cor (tema claro, que é o padrão)**
-- Chrome navy `#111D2D` (sidebar) · canvas `--surface-app` · card `--surface-card`
-- Ação `--brand` `#015DFC`; pressionado `--brand-strong`; fundo suave `--brand-soft`
-- Direção do desvio: `--accent-violet` (excedente) · `--accent-orange` `#CE4B02` (faltante)
+- Chrome cinza `#5A5A5A` (sidebar, Pantone 425 C) · canvas `--surface-app` `#F1F1F1`
+  (427 C a 50%) · card `--surface-card` `#FFFFFF`
+- Ação `--brand` `#FF8C00` (151 C) **como preenchimento**, com
+  `--text-on-accent` `#262626` por cima (5,42:1)
+- Texto e link em laranja: `--brand-strong` `#A85F00` (4,88:1). O laranja puro
+  nunca é texto sobre fundo claro — 2,33:1
+- Direção do desvio: `--accent-violet` `#1F7A8A` (excedente, teal — o nome do
+  token foi mantido) · `--accent-orange` `#C2410C` (faltante, laranja queimado)
 - Semânticos: `--good-foreground` `#028402` · `--alert-foreground` `#996601` ·
   `--bad-foreground` `#C10202`, cada um com seu `*-background`
 - Texto: `--text-strong` · `--text-body` · `--text-muted` · `--text-faint` `#767676`
 
-Os cinco últimos foram escurecidos em relação à primeira versão do design system
-para passar em WCAG AA (4,5:1) sobre o próprio fundo. O matiz não mudou. **O tema
-escuro não foi alterado** — já estava conforme.
+Os semânticos e o `--text-faint` foram escurecidos em relação à primeira versão do
+design system para passar em WCAG AA (4,5:1) sobre o próprio fundo, e assim
+permanecem. Os derivados da marca seguem a mesma regra: escurecem o matiz do
+manual só até passar.
 
-**Tipografia** — Manrope 400/500/600/700/800 na interface; JetBrains Mono em código,
+**Tema escuro** — usado pelo painel de TV, que segue a sinalização física do
+manual: fundo `#2E2E2E`, números grandes em `#FF8C00` (5,82:1 nessa base), texto
+em branco ou cinza claro, e o arco do sorriso como elemento de base dos cards.
+
+**Tipografia** — Hanken Grotesk 300/400/500/600/700/800 na interface, com Verdana
+como fallback institucional (ambos definidos pelo manual da marca); número
+tabular pelo `"tnum"` da própria família. JetBrains Mono em código,
 horário e número tabular (classes `aegis-mono` e `aegis-tnum`). Escala em
 `tokens/typography.css`: `--text-2xs` 11px → `--text-4xl` 40px. Eyebrow = 11px, 700,
 uppercase, tracking 0.08em.
@@ -135,9 +152,14 @@ entrada; menu faz fade. Respeitar `prefers-reduced-motion`.
 
 - Ícones: **Lucide** (`https://unpkg.com/lucide@latest`), traço 2px, `currentColor`.
   Vendorizar no repositório em vez de CDN.
-- Logo: o pacote traz o monograma Aegis em `_ds/.../assets/` (não referenciado pelas
-  telas). O chrome do OperaX usa o glifo `timer` sobre `--brand` mais o wordmark
-  "OperaX" em Manrope 800, até existir marca própria.
+- Logo: **FastPark**, desenhado como SVG inline no chrome (sidebar, login do
+  celular, cabeçalho do celular) — moldura arredondada aberta na base em
+  `#FF8C00` e o sorriso abaixo, `viewBox="0 0 269.8 257.1"`, geometria traçada do
+  manual da marca. Wordmark "Fast" + "Park" em Hanken Grotesk 700, "Park" sempre
+  laranja. Símbolo à esquerda do wordmark, área de proteção ½X, mínimo digital de
+  35px de largura para o conjunto. Nenhum arquivo vetorial oficial foi fornecido:
+  **substitua as paths pelo asset oficial quando ele existir**. O arco do sorriso
+  reaparece sozinho como base dos cards do painel de TV.
 - **Nenhuma imagem de pessoa, nenhum documento.** Avatares são iniciais.
 - Nomes de pessoa no protótipo são fictícios; **não há CPF, RG ou PIS em nenhum mock**,
   e não deve haver — nem em fixture de teste.

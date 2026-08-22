@@ -67,7 +67,7 @@ function Avatar({
       display: 'inline-flex',
       alignItems: 'center',
       justifyContent: 'center',
-      background: 'linear-gradient(135deg, var(--categorical-3), var(--categorical-5))',
+      background: 'linear-gradient(135deg, var(--categorical-7), #3D3D3D)',
       color: '#fff',
       fontSize: dim * 0.38,
       fontWeight: 'var(--weight-bold)',
@@ -102,7 +102,7 @@ const tones = {
   },
   brand: {
     bg: 'var(--brand-soft)',
-    fg: 'var(--brand)',
+    fg: 'var(--brand-strong)',
     dot: 'var(--brand)'
   },
   bad: {
@@ -235,7 +235,7 @@ function CardHeader({
       height: 36,
       borderRadius: 'var(--radius-lg)',
       background: 'var(--brand-soft)',
-      color: 'var(--brand)',
+      color: 'var(--brand-strong)',
       flex: 'none'
     }
   }, icon), /*#__PURE__*/React.createElement("div", {
@@ -620,10 +620,10 @@ function ExposureCard({
   const a = {
     violet: {
       fg: 'var(--accent-violet)',
-      bg: 'rgba(131,95,242,0.14)'
+      bg: 'rgba(31,122,138,0.14)'
     },
     brand: {
-      fg: 'var(--brand)',
+      fg: 'var(--brand-strong)',
       bg: 'var(--brand-soft)'
     },
     amber: {
@@ -632,7 +632,7 @@ function ExposureCard({
     }
   }[accent] || {
     fg: 'var(--accent-violet)',
-    bg: 'rgba(131,95,242,0.14)'
+    bg: 'rgba(31,122,138,0.14)'
   };
   return /*#__PURE__*/React.createElement("div", {
     className: `aegis-exposure ${className}`,
@@ -714,7 +714,7 @@ Object.assign(__ds_scope, { ExposureCard });
 try { (() => {
 const accents = {
   brand: {
-    fg: 'var(--brand)',
+    fg: 'var(--brand-strong)',
     bg: 'var(--brand-soft)'
   },
   alert: {
@@ -731,7 +731,7 @@ const accents = {
   },
   violet: {
     fg: 'var(--accent-violet)',
-    bg: 'rgba(131,95,242,0.14)'
+    bg: 'rgba(31,122,138,0.14)'
   }
 };
 
@@ -943,7 +943,7 @@ function Checkbox({
   }, rest), checked && /*#__PURE__*/React.createElement(__ds_scope.Icon, {
     name: "check",
     size: 13,
-    color: "#fff",
+    color: "var(--text-on-accent)",
     strokeWidth: 3
   })), label && /*#__PURE__*/React.createElement("span", {
     style: {
@@ -1247,7 +1247,7 @@ function Select({
         border: 'none',
         cursor: 'pointer',
         background: isSel ? 'var(--brand-soft)' : 'transparent',
-        color: isSel ? 'var(--brand)' : 'var(--text-body)',
+        color: isSel ? 'var(--brand-strong)' : 'var(--text-body)',
         borderRadius: 'var(--radius-sm)',
         textAlign: 'left',
         fontFamily: 'var(--font-sans)',
@@ -1351,10 +1351,10 @@ function PanelCard({
   }, children);
 }
 const PANEL_TONES = {
-  brand: ['var(--brand-soft)', 'var(--brand)'],
-  violet: ['rgba(131,95,242,0.14)', 'var(--accent-violet)'],
+  brand: ['var(--brand-soft)', 'var(--brand-strong)'],
+  violet: ['rgba(31,122,138,0.14)', 'var(--accent-violet)'],
   amber: ['var(--alert-background)', 'var(--alert-foreground)'],
-  heat: ['rgba(13,157,165,0.14)', '#0D9DA5'],
+  heat: ['rgba(255,140,0,0.14)', 'var(--brand-strong)'],
   good: ['var(--good-background)', 'var(--good-foreground)'],
   bad: ['var(--bad-background)', 'var(--bad-foreground)']
 };
@@ -1560,7 +1560,7 @@ function ReportHeader({
       flex: 'none',
       borderRadius: 'var(--radius-lg)',
       background: 'var(--brand-soft)',
-      color: 'var(--brand)'
+      color: 'var(--brand-strong)'
     }
   }, /*#__PURE__*/React.createElement(RC.Icon, {
     name: "file-bar-chart-2",
@@ -1701,7 +1701,7 @@ function ActionsBar({
       height: 34,
       borderRadius: 'var(--radius-md)',
       background: 'var(--brand-soft)',
-      color: 'var(--brand)',
+      color: 'var(--brand-strong)',
       flex: 'none'
     }
   }, /*#__PURE__*/React.createElement(RC.Icon, {
@@ -1778,7 +1778,7 @@ function FilterChip({
       fontWeight: 700,
       textTransform: 'uppercase',
       letterSpacing: '0.04em',
-      color: 'var(--brand)'
+      color: 'var(--brand-strong)'
     }
   }, label), /*#__PURE__*/React.createElement("span", {
     style: {
@@ -1879,7 +1879,7 @@ function ReportFilters({
       height: 34,
       borderRadius: 'var(--radius-md)',
       background: 'var(--brand-soft)',
-      color: 'var(--brand)'
+      color: 'var(--brand-strong)'
     }
   }, /*#__PURE__*/React.createElement(RC.Icon, {
     name: "sliders-horizontal",
@@ -2029,7 +2029,7 @@ function ReportFilters({
     style: {
       fontSize: 'var(--text-xs)',
       fontWeight: 600,
-      color: 'var(--brand)',
+      color: 'var(--brand-strong)',
       background: 'none',
       border: 'none',
       cursor: 'pointer'
@@ -2055,7 +2055,7 @@ function Toasts({
   toasts
 }) {
   const tone = {
-    info: ['var(--brand-soft)', 'var(--brand)', 'loader'],
+    info: ['var(--brand-soft)', 'var(--brand-strong)', 'loader'],
     success: ['var(--good-background)', 'var(--good-foreground)', 'check-circle-2'],
     error: ['var(--bad-background)', 'var(--bad-foreground)', 'x-circle']
   };
@@ -2652,7 +2652,7 @@ function NextStepRow({
       fontWeight: 700,
       textTransform: 'uppercase',
       letterSpacing: '0.05em',
-      color: 'var(--brand)',
+      color: 'var(--brand-strong)',
       marginBottom: 8
     }
   }, "O que fazer"), step.acoes.map((a, i) => /*#__PURE__*/React.createElement("div", {
@@ -2990,7 +2990,7 @@ function DetailSection({
       padding: '1px 7px',
       borderRadius: 'var(--radius-pill)',
       background: tab === id ? 'var(--brand-soft)' : 'var(--border-subtle)',
-      color: tab === id ? 'var(--brand)' : 'var(--text-muted)'
+      color: tab === id ? 'var(--brand-strong)' : 'var(--text-muted)'
     }
   }, n)))), /*#__PURE__*/React.createElement("div", {
     style: {
@@ -3049,7 +3049,7 @@ function AnnexDivider({
       flex: 'none',
       borderRadius: 'var(--radius-lg)',
       background: 'var(--brand-soft)',
-      color: 'var(--brand)'
+      color: 'var(--brand-strong)'
     }
   }, /*#__PURE__*/React.createElement(RX.Icon, {
     name: "paperclip",
@@ -3663,7 +3663,7 @@ function ReportCover({
     style: {
       position: 'absolute',
       inset: 0,
-      background: 'radial-gradient(900px 300px at 88% -40%, rgba(64,127,252,0.28), transparent 70%)',
+      background: 'radial-gradient(900px 300px at 88% -40%, rgba(255,140,0,0.22), transparent 70%)',
       pointerEvents: 'none'
     }
   }), /*#__PURE__*/React.createElement("div", {
@@ -3855,7 +3855,7 @@ function TeamSection({
       fontWeight: 700,
       textTransform: 'uppercase',
       letterSpacing: '0.06em',
-      color: 'var(--brand)'
+      color: 'var(--brand-strong)'
     }
   }, m.funcao), /*#__PURE__*/React.createElement(RT.Badge, {
     tone: "brand",
@@ -4801,7 +4801,7 @@ function TTRow({
     style: {
       fontSize: strong ? 'var(--text-sm)' : 'var(--text-xs)',
       fontWeight: strong ? 800 : 600,
-      color: strong ? 'var(--brand)' : 'var(--text-strong)'
+      color: strong ? 'var(--brand-strong)' : 'var(--text-strong)'
     }
   }, value));
 }
@@ -4972,7 +4972,7 @@ function renderPayload(p) {
         height: 18,
         borderRadius: 5,
         background: 'var(--brand-soft)',
-        color: 'var(--brand)'
+        color: 'var(--brand-strong)'
       }
     }, /*#__PURE__*/React.createElement(TTip_Icon, {
       name: "arrow-up-right",
@@ -5686,11 +5686,11 @@ function PanelHead({
   right
 }) {
   const tones = {
-    brand: ['var(--brand-soft)', 'var(--brand)'],
-    violet: ['rgba(131,95,242,0.14)', 'var(--accent-violet)'],
+    brand: ['var(--brand-soft)', 'var(--brand-strong)'],
+    violet: ['rgba(31,122,138,0.14)', 'var(--accent-violet)'],
     amber: ['var(--alert-background)', 'var(--alert-foreground)'],
-    heat: ['rgba(13,157,165,0.14)', '#0D9DA5']
-  }[iconTone] || ['var(--brand-soft)', 'var(--brand)'];
+    heat: ['rgba(255,140,0,0.14)', 'var(--brand-strong)']
+  }[iconTone] || ['var(--brand-soft)', 'var(--brand-strong)'];
   return /*#__PURE__*/React.createElement("div", {
     style: {
       display: 'flex',
@@ -6209,7 +6209,7 @@ function DrawerDetail({
       border: 'none',
       background: 'transparent',
       cursor: 'pointer',
-      color: 'var(--brand)',
+      color: 'var(--brand-strong)',
       fontSize: 'var(--text-sm)',
       fontWeight: 600,
       fontFamily: 'var(--font-sans)',
@@ -6404,7 +6404,7 @@ function Drawer({
       padding: '0 10px',
       borderRadius: 'var(--radius-pill)',
       background: 'var(--brand-soft)',
-      color: 'var(--brand)',
+      color: 'var(--brand-strong)',
       fontSize: 'var(--text-xs)',
       fontWeight: 600
     }
@@ -6665,7 +6665,7 @@ function FilterBar({
       height: 34,
       borderRadius: 'var(--radius-md)',
       background: 'var(--brand-soft)',
-      color: 'var(--brand)'
+      color: 'var(--brand-strong)'
     }
   }, /*#__PURE__*/React.createElement(FBIcon, {
     name: "sliders-horizontal",
@@ -6837,7 +6837,7 @@ function Header({
       flex: 'none',
       borderRadius: 'var(--radius-lg)',
       background: 'var(--brand-soft)',
-      color: 'var(--brand)'
+      color: 'var(--brand-strong)'
     }
   }, /*#__PURE__*/React.createElement(HDIcon, {
     name: "layout-dashboard",
@@ -7494,7 +7494,7 @@ function Sidebar({
       letterSpacing: '0.04em',
       textTransform: 'uppercase',
       color: 'var(--categorical-2)',
-      background: 'rgba(64,127,252,0.16)',
+      background: 'rgba(255,140,0,0.18)',
       padding: '1px 7px',
       borderRadius: 'var(--radius-pill)'
     }
