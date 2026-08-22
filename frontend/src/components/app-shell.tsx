@@ -27,7 +27,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </div>
 
         <nav aria-label="Seções" className="flex flex-col gap-1 px-4 py-2">
-          <p className="text-2xs px-3 py-2 font-bold tracking-[0.08em] text-white/40 uppercase">
+          <p className="text-2xs px-3 py-2 font-bold tracking-[0.08em] text-white/80 uppercase">
             Operação
           </p>
           <Link

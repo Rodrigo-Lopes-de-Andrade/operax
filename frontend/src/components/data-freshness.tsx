@@ -13,7 +13,7 @@ export async function DataFreshness() {
 
   if (!freshness) {
     return (
-      <span className="flex items-center gap-2 rounded-full bg-white/10 px-3.5 py-2 text-xs font-semibold text-white/70">
+      <span className="flex items-center gap-2 rounded-full bg-white/10 px-3.5 py-2 text-xs font-semibold text-white/80">
         <Clock size={14} aria-hidden />
         Sem leitura registrada
       </span>

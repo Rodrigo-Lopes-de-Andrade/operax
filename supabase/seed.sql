@@ -10,8 +10,8 @@
 --
 -- Três decisões que valem a leitura:
 --
---  (a) TENANT PRÓPRIO. Tudo nasce sob o tenant 'operax-dev', não sob
---      'kastro-park'. Dado sintético e dado de cliente nunca compartilham
+--  (a) TENANT PRÓPRIO. Tudo nasce sob o tenant 'fastpark-dev', não sob
+--      'fastpark'. Dado sintético e dado de cliente nunca compartilham
 --      chave — nem localmente, onde a confusão custa barato e ensina errado.
 --
 --  (b) SEM DOCUMENTO DE IDENTIDADE. Nenhum cpf, rg ou pis, nem em fixture
@@ -36,7 +36,7 @@ begin
   select count(*) into n
   from app.deviation_event d
   join app.tenant t on t.id = d.tenant_id
-  where t.slug <> 'operax-dev';
+  where t.slug <> 'fastpark-dev';
 
   if n > 0 then
     raise exception
@@ -48,7 +48,7 @@ end $$;
 -- Tenant, matriz de sensibilidade e usuários
 -- ---------------------------------------------------------------------------
 insert into app.tenant (id, slug, name) values
-  ('dede0000-0000-0000-0000-000000000001', 'operax-dev', 'OperaX · Desenvolvimento')
+  ('dede0000-0000-0000-0000-000000000001', 'fastpark-dev', 'FastPark · Desenvolvimento')
 on conflict (id) do nothing;
 
 insert into app.domain_permission (tenant_id, role, domain, allowed)
@@ -64,7 +64,7 @@ select t.id, p.role, d.domain,
 from app.tenant t
 cross join (select unnest(enum_range(null::app.user_role))        as role)   p
 cross join (select unnest(enum_range(null::app.sensitive_domain)) as domain) d
-where t.slug = 'operax-dev'
+where t.slug = 'fastpark-dev'
 on conflict (tenant_id, role, domain) do nothing;
 
 -- Senha única para todos: operax-dev. Vale só no stack local.
@@ -80,10 +80,10 @@ select '00000000-0000-0000-0000-000000000000',
        jsonb_build_object('name', u.nome),
        now(), now(), '', '', '', ''
 from (values
-  ('dede0000-0000-0000-0000-0000000000f1'::uuid, 'owner@operax.dev',      'Dev Owner'),
-  ('dede0000-0000-0000-0000-0000000000f2'::uuid, 'dp@operax.dev',         'Dev Departamento Pessoal'),
-  ('dede0000-0000-0000-0000-0000000000f3'::uuid, 'supervisor@operax.dev', 'Dev Supervisor Norte'),
-  ('dede0000-0000-0000-0000-0000000000f4'::uuid, 'consulta@operax.dev',   'Dev Consulta')
+  ('dede0000-0000-0000-0000-0000000000f1'::uuid, 'owner@fastpark.dev',      'Dev Owner'),
+  ('dede0000-0000-0000-0000-0000000000f2'::uuid, 'dp@fastpark.dev',         'Dev Departamento Pessoal'),
+  ('dede0000-0000-0000-0000-0000000000f3'::uuid, 'supervisor@fastpark.dev', 'Dev Supervisor Norte'),
+  ('dede0000-0000-0000-0000-0000000000f4'::uuid, 'consulta@fastpark.dev',   'Dev Consulta')
 ) as u(id, email, nome)
 on conflict (id) do nothing;
 
@@ -95,7 +95,7 @@ select gen_random_uuid(), u.id, u.id::text,
        jsonb_build_object('sub', u.id::text, 'email', u.email, 'email_verified', true),
        'email', now(), now(), now()
 from auth.users u
-where u.email like '%@operax.dev'
+where u.email like '%@fastpark.dev'
 on conflict do nothing;
 
 insert into app.tenant_member (tenant_id, user_id, role) values
@@ -303,8 +303,8 @@ insert into app.deviation_event (
   id, tenant_id, employee_id, company_id, unit_id, reference_date, type, minutes,
   expected_time, actual_time, status, mode, run_id, report_cycle_id, detected_at
 )
-select md5('operax-dev-event-' || c.id::text || '|' || d.reference_date::text)::uuid,
-       c.tenant_id, c.id, c.company_id, c.unit_id, d.reference_date,
+select md5('operax-dev-event-' || c.id::text || '|' || w.reference_date::text)::uuid,
+       c.tenant_id, c.id, c.company_id, c.unit_id, w.reference_date,
        s.type, s.minutes,
        s.expected_time,
        s.actual_time,
@@ -315,25 +315,34 @@ select md5('operax-dev-event-' || c.id::text || '|' || d.reference_date::text)::
             else 'active' end,
        'production',
        md5('operax-dev-run-production')::uuid,
-       case when d.reference_date <= current_date - 8
+       case when w.reference_date <= current_date - 8
             then md5('operax-dev-cycle-' || c.unit_id::text)::uuid end,
-       (d.reference_date + time '09:00' + make_interval(mins => h.b3 % 400))::timestamptz
+       (w.reference_date + time '09:00' + make_interval(mins => h.b3 % 400))::timestamptz
 from app.employee c
-cross join lateral (select generate_series(current_date - 44, current_date, interval '1 day')::date as reference_date) d
-cross join lateral (select decode(md5('operax-dev-event-' || c.id::text || '|' || d.reference_date::text), 'hex') as bytes) k
+-- O sorteio sai da jornada esperada, não de um calendário paralelo: atraso de
+-- entrada em dia de folga é contradição na tela, e tela que se contradiz não
+-- ensina ninguém a confiar no número.
+join app.expected_workday w
+  on w.employee_id = c.id
+ and w.reference_date between current_date - 44 and current_date
+cross join lateral (select decode(md5('operax-dev-event-' || c.id::text || '|' || w.reference_date::text), 'hex') as bytes) k
 cross join lateral (
   select get_byte(k.bytes, 0) as b0, get_byte(k.bytes, 1) as b1,
          get_byte(k.bytes, 2) as b2, get_byte(k.bytes, 3) as b3
 ) h
 cross join lateral (
   select case
-           when h.b0 % 100 between  0 and  8 then 'late_entry'
-           when h.b0 % 100 between  9 and 14 then 'early_exit'
-           when h.b0 % 100 between 15 and 20 then 'late_exit'
-           when h.b0 % 100 between 21 and 23 then 'break_exceeded'
-           when h.b0 % 100 = 24              then 'no_punches'
-           when h.b0 % 100 = 25              then 'incomplete_punches'
-           when h.b0 % 100 = 26              then 'punch_on_day_off'
+           when w.day_type = 'work' then
+             case
+               when h.b0 % 100 between  0 and  8 then 'late_entry'
+               when h.b0 % 100 between  9 and 14 then 'early_exit'
+               when h.b0 % 100 between 15 and 20 then 'late_exit'
+               when h.b0 % 100 between 21 and 23 then 'break_exceeded'
+               when h.b0 % 100 = 24              then 'no_punches'
+               when h.b0 % 100 = 25              then 'incomplete_punches'
+             end
+           -- Em dia sem jornada prevista o único desvio possível é ter batido.
+           when w.day_type = 'day_off' and h.b0 % 100 < 5 then 'punch_on_day_off'
          end as type
 ) t
 cross join lateral (
@@ -344,24 +353,24 @@ cross join lateral (
            when 'early_exit'         then -(5  + h.b1 % 40)
            when 'late_exit'          then  (8  + h.b1 % 52)
            when 'break_exceeded'     then -(10 + h.b1 % 26)
-           when 'no_punches'         then -480
+           when 'no_punches'         then -coalesce(w.workload_minutes, 480)
            when 'incomplete_punches' then 0
            when 'punch_on_day_off'   then  (60 + h.b1 % 180)
          end as minutes,
          case t.type
-           when 'late_entry'         then time '08:00'
-           when 'early_exit'         then time '17:00'
-           when 'late_exit'          then time '17:00'
+           when 'late_entry'         then w.expected_entry
+           when 'early_exit'         then w.expected_exit
+           when 'late_exit'          then w.expected_exit
            when 'break_exceeded'     then time '13:00'
-           when 'no_punches'         then time '08:00'
-           when 'incomplete_punches' then time '17:00'
+           when 'no_punches'         then w.expected_entry
+           when 'incomplete_punches' then w.expected_exit
          end as expected_time,
          case t.type
-           when 'late_entry'         then time '08:00' + make_interval(mins => 6  + h.b1 % 25)
-           when 'early_exit'         then time '17:00' - make_interval(mins => 5  + h.b1 % 40)
-           when 'late_exit'          then time '17:00' + make_interval(mins => 8  + h.b1 % 52)
+           when 'late_entry'         then w.expected_entry + make_interval(mins => 6  + h.b1 % 25)
+           when 'early_exit'         then w.expected_exit  - make_interval(mins => 5  + h.b1 % 40)
+           when 'late_exit'          then w.expected_exit  + make_interval(mins => 8  + h.b1 % 52)
            when 'break_exceeded'     then time '13:00' + make_interval(mins => 10 + h.b1 % 26)
-           when 'punch_on_day_off'   then time '09:00'
+           when 'punch_on_day_off'   then time '09:00' + make_interval(mins => h.b1 % 120)
          end as actual_time
 ) s
 where c.tenant_id = 'dede0000-0000-0000-0000-000000000001'
@@ -381,6 +390,8 @@ select md5('operax-dev-shadow-' || c.id::text)::uuid,
        time '08:00', time '08:15', 'active', 'shadow',
        md5('operax-dev-run-shadow')::uuid, now() - interval '19 minutes'
 from app.employee c
+join app.expected_workday w
+  on w.employee_id = c.id and w.reference_date = current_date and w.day_type = 'work'
 where c.tenant_id = 'dede0000-0000-0000-0000-000000000001'
   and c.status = 'active'
   and get_byte(decode(md5(c.id::text), 'hex'), 5) % 4 = 0
@@ -407,6 +418,112 @@ update app.detection_run dr
    and dr.events_detected is distinct from x.n;
 
 -- ---------------------------------------------------------------------------
+-- Domínio sensível — existe para que a tela possa provar que NÃO aparece
+-- ----------------------------------------------------------------------------
+-- Um teste que diz "o supervisor não vê remuneração" contra um bloco vazio não
+-- prova nada: ele passaria com a feature quebrada. Por isso remuneração,
+-- documento e exame nascem povoados.
+--
+-- Exame ocupacional guarda só aptidão e validade. Não existe diagnóstico, CID
+-- nem descrição de restrição — nem coluna para isso (regra 10).
+-- ---------------------------------------------------------------------------
+insert into app.document_type (id, tenant_id, name, requires_expiry, expiry_alert_days, required, domain)
+select md5('operax-dev-doctype-' || n)::uuid,
+       'dede0000-0000-0000-0000-000000000001',
+       (array['ASO','CNH','Certificado NR-35','Contrato de trabalho'])[n],
+       n <= 3,
+       (array[30, 45, 60, 30])[n],
+       n in (1, 4),
+       (array['health','pii','pii','pii'])[n]::app.sensitive_domain
+from generate_series(1, 4) n
+on conflict (tenant_id, name) do nothing;
+
+insert into app.document (
+  id, tenant_id, employee_id, type_id, storage_path, file_name,
+  issued_on, valid_until, status
+)
+select md5('operax-dev-document-' || c.id::text || '-' || d.n)::uuid,
+       c.tenant_id, c.id,
+       md5('operax-dev-doctype-' || d.n)::uuid,
+       c.id::text || '/' || d.n::text || '.pdf',
+       (array['aso','cnh','nr35','contrato'])[d.n] || '-' || c.registration_number || '.pdf',
+       current_date - (300 + h.b0 % 60),
+       -- Vencimento espalhado de 20 dias atrás a 200 à frente: a view de
+       -- vencimento precisa de caso em alerta, não só de caso tranquilo.
+       case when d.n = 4 then null else current_date - 20 + (h.b1 % 220) end,
+       'active'
+from app.employee c
+cross join generate_series(1, 4) d(n)
+cross join lateral (
+  select get_byte(decode(md5('operax-dev-document-' || c.id::text || '-' || d.n), 'hex'), 0) as b0,
+         get_byte(decode(md5('operax-dev-document-' || c.id::text || '-' || d.n), 'hex'), 1) as b1,
+         get_byte(decode(md5('operax-dev-document-' || c.id::text || '-' || d.n), 'hex'), 2) as b2
+) h
+where c.tenant_id = 'dede0000-0000-0000-0000-000000000001'
+  and (d.n = 1 or h.b2 % 3 <> 0)
+on conflict (id) do nothing;
+
+insert into app.occupational_exam (
+  id, tenant_id, employee_id, type, performed_on, valid_until, result, document_id
+)
+select md5('operax-dev-exam-' || c.id::text)::uuid,
+       c.tenant_id, c.id,
+       case when h.b0 % 7 = 0 then 'pre_employment' else 'periodic' end,
+       current_date - (330 + h.b0 % 30),
+       current_date + (h.b1 % 120) - 15,
+       case when h.b2 % 11 = 0 then 'fit_with_restriction' else 'fit' end,
+       md5('operax-dev-document-' || c.id::text || '-1')::uuid
+from app.employee c
+cross join lateral (
+  select get_byte(decode(md5('operax-dev-exam-' || c.id::text), 'hex'), 0) as b0,
+         get_byte(decode(md5('operax-dev-exam-' || c.id::text), 'hex'), 1) as b1,
+         get_byte(decode(md5('operax-dev-exam-' || c.id::text), 'hex'), 2) as b2
+) h
+where c.tenant_id = 'dede0000-0000-0000-0000-000000000001'
+on conflict (id) do nothing;
+
+-- Admissão e um reajuste. `effective_to` da primeira faixa fecha na véspera da
+-- segunda, que é o que faz "salário vigente" ser uma consulta e não um palpite.
+insert into app.employee_compensation (
+  id, tenant_id, employee_id, effective_from, effective_to, salary, reason, recorded_by
+)
+select md5('operax-dev-compensation-' || c.id::text || '-' || f.n)::uuid,
+       c.tenant_id, c.id,
+       case f.n when 1 then c.hired_on else c.hired_on + 365 end,
+       case f.n when 1 then c.hired_on + 364 else null end,
+       case f.n when 1 then base else round(base * 1.08, 2) end,
+       case f.n when 1 then 'Admissão' else 'Reajuste anual' end,
+       'dede0000-0000-0000-0000-0000000000f2'
+from app.employee c
+cross join lateral (
+  select 1600 + (get_byte(decode(md5('operax-dev-compensation-' || c.id::text), 'hex'), 0) % 18) * 100 as base
+) b
+cross join generate_series(1, 2) f(n)
+where c.tenant_id = 'dede0000-0000-0000-0000-000000000001'
+  and c.hired_on is not null
+on conflict (id) do nothing;
+
+-- Justificativa só onde o evento já foi tratado como justificado. Justificativa
+-- solta, sem evento, seria um estado que o produto não produz.
+insert into app.justification (
+  id, tenant_id, deviation_event_id, employee_id, reference_date, text, source,
+  author_user_id, author_name
+)
+select md5('operax-dev-justification-' || d.id::text)::uuid,
+       d.tenant_id, d.id, d.employee_id, d.reference_date,
+       (array['Trânsito parado na avenida de acesso.',
+              'Atestado entregue ao departamento pessoal.',
+              'Autorizado pelo gestor da unidade.',
+              'Falha do relógio de ponto na entrada.'])[1 + get_byte(decode(md5(d.id::text), 'hex'), 0) % 4],
+       'operax',
+       'dede0000-0000-0000-0000-0000000000f3',
+       'Dev Supervisor Norte'
+from app.deviation_event d
+where d.tenant_id = 'dede0000-0000-0000-0000-000000000001'
+  and d.status = 'justified'
+on conflict (id) do nothing;
+
+-- ---------------------------------------------------------------------------
 -- Prova: o seed sustenta o que promete, ou falha alto.
 -- ---------------------------------------------------------------------------
 do $$
@@ -417,6 +534,8 @@ declare
   v_pendentes bigint;
   v_divergentes bigint;
   v_pii      bigint;
+  v_sensivel bigint;
+  v_alerta   bigint;
 begin
   select count(*) into v_eventos
     from app.deviation_event
@@ -453,6 +572,22 @@ begin
     raise exception 'seed de desenvolvimento gravou % linha(s) de PII', v_pii;
   end if;
 
-  raise notice 'seed operax-dev: % desvios em produção, % pendentes de ciclo, % em sombra, % vínculos divergentes',
-    v_eventos, v_pendentes, v_sombra, v_divergentes;
+  -- Sem bloco sensível povoado, o teste "o supervisor não vê remuneração"
+  -- passaria com a funcionalidade quebrada.
+  select count(*) into v_sensivel
+    from app.employee_compensation where tenant_id = v_tenant;
+  if v_sensivel = 0 then
+    raise exception 'seed sem remuneração — o bloco que o supervisor não pode ver não existe';
+  end if;
+
+  select count(*) into v_alerta
+    from app.document
+   where tenant_id = v_tenant and status = 'active'
+     and valid_until is not null and valid_until <= current_date + 30;
+  if v_alerta = 0 then
+    raise exception 'seed sem documento perto do vencimento — a view de vencimento nasce sem caso em alerta';
+  end if;
+
+  raise notice 'seed fastpark-dev: % desvios em produção, % pendentes de ciclo, % em sombra, % vínculos divergentes, % faixas de remuneração',
+    v_eventos, v_pendentes, v_sombra, v_divergentes, v_sensivel;
 end $$;

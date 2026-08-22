@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 
+import { pageTitle } from "@/lib/brand";
+
 import { FilterBar } from "@/components/ponto/filter-bar";
 import { KpiGrid } from "@/components/ponto/kpi-grid";
 import { OccurrenceDrawer } from "@/components/ponto/occurrence-drawer";
@@ -11,7 +13,7 @@ import { loadPontoScreen } from "@/lib/ponto/queries";
 import { parsePaging } from "@/lib/ponto/url";
 
 export const metadata: Metadata = {
-  title: "Gestão de ponto · OperaX",
+  title: pageTitle("Gestão de ponto"),
 };
 
 /**

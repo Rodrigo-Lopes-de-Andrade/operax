@@ -1,4 +1,6 @@
 import type { Metadata } from "next";
+
+import { currentBrand } from "@/lib/brand";
 import { Manrope } from "next/font/google";
 import type { ReactNode } from "react";
 
@@ -11,7 +13,7 @@ const manrope = Manrope({
 });
 
 export const metadata: Metadata = {
-  title: "OperaX",
+  title: currentBrand().name,
   description: "Gestão de jornada e custo de pessoal",
 };
 

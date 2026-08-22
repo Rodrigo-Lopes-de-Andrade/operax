@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 **Projeto:** OperaX
-**Descrição:** Camada de gestão, automação e inteligência sobre sistemas de ponto — lê o Secullum, detecta desvio de jornada, avisa o gestor no dia e consolida custo de pessoal. Multi-tenant; Kastro Park é o primeiro cliente.
+**Descrição:** Camada de gestão, automação e inteligência sobre sistemas de ponto — lê o Secullum, detecta desvio de jornada, avisa o gestor no dia e consolida custo de pessoal. Multi-tenant e **white-label**: FastPark é o cliente âncora e a marca que aparece na interface. "OperaX" é o nome do produto no repositório, nos identificadores e nestes documentos — não aparece em nenhuma superfície.
 **Stack:** Next.js 16 (React 19) + FastAPI (gerenciado com `uv`) · Agente LangChain 1.x (`create_agent`) · Supabase (PostgreSQL + Auth + Storage; migrações com Supabase CLI) · Deploy: Railway (backend) / Vercel (frontend)
 
 ---
@@ -99,7 +99,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 - Ruff (Python), Prettier + TS strict (frontend). Sentry para erros da aplicação.
 - Observabilidade do agente: **LangSmith é o default** (traces de LLM, tools, latência e tokens). Não introduzir outro vendor sem decisão explícita.
 - Testes: pytest (backend), Vitest (frontend), Playwright (E2E).
-- **Suíte de banco** (`make db-test`): sobe Postgres descartável, aplica as 15 migrations, roda 23 asserções funcionais de isolamento (dois tenants, quatro papéis), 24 asserções de regra de alerta, cadência e provedor, e 13 verificações estruturais, regenera o dicionário de dados e valida que toda referência a objeto de banco na documentação existe. Obrigatória em qualquer PR que toque policy, view, grant ou migration.
+- **Suíte de banco** (`make db-test`): sobe Postgres descartável, aplica as 16 migrations, roda 23 asserções funcionais de isolamento (dois tenants, quatro papéis), 24 asserções de regra de alerta, cadência e provedor, e 13 verificações estruturais, regenera o dicionário de dados e valida que toda referência a objeto de banco na documentação existe. Obrigatória em qualquer PR que toque policy, view, grant ou migration.
 
 ### Deploy
 
@@ -121,7 +121,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 - **`backend/operax/agente/`** — `agente.py` = `create_agent`; `catalogo.py` = carrega `app.metric` e valida a escolha do modelo; `executor.py` = roda a métrica **como o usuário**.
 - **`backend/operax/core/`** — `db.py` = pools por schema; `tenant.py` = contexto de tenant (todo acesso com `service_role` passa por aqui); `config.py`; `vault.py` = leitura de credencial por tenant.
 - **`backend/server/`** — `main.py` = entrypoint; `deps.py` = valida o JWT do Supabase e resolve tenant e papel; `models.py` = **fonte da verdade dos schemas**; `routers/` = endpoints por área.
-- **`supabase/migrations/`** — 15 migrations aplicadas em ordem. Ver `docs/PLANO-BANCO-OPERAX.md`.
+- **`supabase/migrations/`** — 16 migrations aplicadas em ordem. Ver `docs/PLANO-BANCO-OPERAX.md`.
 - **`scripts/`** — diagnóstico, testes de isolamento, gerador do dicionário, verificador de documentação.
 - **`frontend/src/`** — `app/` roteamento; `components/` (`ui/` = design system); `lib/supabase.ts` = cliente com anon key; `lib/api.ts` = cliente do FastAPI; `state/` = sessão + streaming do assistente.
 
@@ -282,7 +282,7 @@ cp frontend/.env.local.example frontend/.env.local
 
 # 3. Banco local + migrações
 supabase start                                    # Postgres + Auth + Storage locais
-supabase db reset                                 # aplica as 15 migrations do zero
+supabase db reset                                 # aplica as 16 migrations do zero
 
 # 4. Rodar / verificar
 make dev                    # backend + frontend
@@ -328,11 +328,12 @@ make sender                 # consome a fila de alertas
 
 - **Backend:** Ruff (lint + format), type hints obrigatórios, Pydantic v2, pytest. Dependências via `uv` (não usar `pip install` direto). Schema do banco via Supabase CLI (nunca `CREATE TABLE` manual, nunca Alembic).
 - **Frontend:** Prettier + TypeScript strict (`tsc --noEmit` no `make lint`), validação com Zod, forms via React Hook Form. Vitest para componentes; Playwright para login, dashboard filtrado e assistente.
-- **SQL:** toda migration é idempotente (`if not exists`, `drop policy if exists`) e termina com um bloco `do $$` que **falha alto** se a garantia dela não se sustentar. Siga o padrão das 14 existentes.
+- **SQL:** toda migration é idempotente (`if not exists`, `drop policy if exists`) e termina com um bloco `do $$` que **falha alto** se a garantia dela não se sustentar. Siga o padrão das 15 existentes.
 - **E2E:** Playwright sobe front+back com provider de LLM **fake** (`E2E_FAKE_LLM=1`) e projeto Supabase local. Roda com `make e2e`, fora do gate `make test`.
 - **Idioma:** código, identificadores, commits e comentários em inglês; UI e textos ao usuário em pt-BR. O domínio segue inglês snake_case, alinhado com `work_schedule_day`, que já existia antes deste modelo. O mapa completo pt→en está em `scripts/rename_map.py` — consultar antes de nomear qualquer coisa nova.
 - **Exceção deliberada:** identificadores brasileiros que são nome próprio de instrumento legal permanecem sem tradução — `cnpj`, `cpf`, `rg`, `pis`, `ctps`, `fgts`, `inss`, `irrf`, `rat`, `aso`. "CNPJ" virar `tax_id` perde informação em vez de ganhar, do mesmo jeito que ninguém traduz "IBAN".
 - **Vocabulário de negócio em inglês:** *deviation*, não *desvio*, em nome de objeto. Na UI em pt-BR continua sendo "desvio" e "indício" — e **nunca** "hora extra".
+- **Marca:** a interface carrega a marca do tenant, nunca a do fornecedor. Cor de marca é token CSS (`frontend/src/app/globals.css`) e nome é configuração (`frontend/src/lib/brand.ts`) — nunca literal em componente. O laranja `#FF8C00` é preenchimento com texto escuro por cima, jamais texto e jamais sob texto branco; laranja de texto é `#A85F00`.
 - **Vocabulário de produto:** é sempre *desvio* ou *indício*. **Nunca "hora extra"** — o registro oficial é o Secullum, e divergência com ação do gestor em cima é exposição do fornecedor.
 - **Commits:** Conventional Commits. A mensagem explica **por quê**, não o quê.
 - **Branches:** `feature/*`, `fix/*` a partir de `main`; PR com review.
@@ -346,7 +347,7 @@ que o desenho está errado, não a regra.
 2. Toda view de `public` com `security_invoker = on`.
 3. Toda tabela de `app` com `tenant_id` e RLS.
 4. `service_role` só no backend FastAPI, e nenhuma consulta sem filtro de `tenant_id`.
-5. Agregação por empresa vai por `colaborador → empresa`, nunca `departamento → empresa` (~26% divergem na Kastro Park).
+5. Agregação por empresa vai por `colaborador → empresa`, nunca `departamento → empresa` (~26% divergem na FastPark).
 6. Nunca deletar desvio — usar `app.revoke_deviation()`.
 7. Alerta de conteúdo individual nunca vai para grupo.
 8. Nenhum alerta enviado antes do modo sombra fechar com falso positivo ≤5%.

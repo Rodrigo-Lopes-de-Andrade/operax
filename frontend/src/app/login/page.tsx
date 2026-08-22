@@ -1,12 +1,14 @@
 import type { Metadata } from "next";
 
+import { pageTitle } from "@/lib/brand";
+
 import { Brand } from "@/components/brand";
 import { DEFAULT_AUTHENTICATED_PATH, safeNextPath } from "@/lib/navigation";
 
 import { SignInForm } from "./sign-in-form";
 
 export const metadata: Metadata = {
-  title: "Entrar · OperaX",
+  title: pageTitle("Entrar"),
 };
 
 type LoginPageProps = {
@@ -53,7 +55,7 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
         <SignInForm next={next} />
       </div>
 
-      <p className="text-center text-xs text-white/50">
+      <p className="text-center text-xs text-white/80">
         Supervisor de unidade enxerga apenas a própria unidade.
       </p>
     </main>

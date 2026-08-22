@@ -1,27 +1,49 @@
 @import "tailwindcss";
 
 /* ---------------------------------------------------------------------------
-   Design tokens — copied from the handoff in
-   design/design_handoff_operax/prototipo/_ds/.../tokens/*.css.
-   Names are kept verbatim so the handoff stays readable against this code,
-   with two deliberate renames, because the direction of a deviation must not
-   be spelled as a hue that a repaint can invalidate:
-     handoff --accent-violet  ->  --accent-surplus    (excedente)
-     handoff --accent-orange  ->  --accent-shortfall  (faltante)
-   The prototype and the 19 call sites in _ds still use the old names.
-   Only the light theme ships: the dark theme exists in the token files but was
-   never designed screen by screen (handoff, "Pendencias conhecidas" 6).
+   Design tokens — FastPark, copied from the round-6 handoff in
+   design/_ds/.../tokens/colors.css. Values come from the client brand manual
+   (Pantone 151 C / 425 C / 427 C / 2975 C).
+
+   The product is white-label: the brand is tenant configuration, not a product
+   constant. Nothing below is referenced by a component as a literal — every
+   component reads a semantic alias, so a second tenant is a second set of
+   values, not a second set of components. FastPark is the first theme.
+
+   Two contrast rules that are measured, not estimated, and that the token
+   values encode so no component has to remember them:
+
+     - The brand orange #FF8C00 is never text and never carries white text
+       (2.33:1 either way). It is a FILL, with #262626 on top (5.42:1) — which
+       is why --text-on-accent is dark. Orange *text* is --brand-strong
+       #A85F00 (4.88:1 on white, and 4.88:1 the other way round, so white on
+       that fill is legible too).
+     - The direction of a deviation is still carried by hue, but the pair
+       changed: surplus is teal, shortfall is burnt orange. Pure orange is
+       reserved for chrome and action, so it can never be read as a direction.
+
+   Two names differ from the handoff on purpose, and this round is why: the
+   handoff keeps --accent-violet and --accent-orange and moved their values
+   (violet is now teal). A token named for a hue it no longer has is a trap the
+   next repaint springs, so here they are named for the thing that did not
+   change — the direction.
+     handoff --accent-violet  ->  --accent-surplus    (excedente, teal)
+     handoff --accent-orange  ->  --accent-shortfall  (faltante, laranja queimado)
+
+   Only the light theme ships. The dark values — including #7FC4D0 and #FE8F53
+   for the direction pair on the TV board — live in the handoff token file and
+   arrive with the screen that uses them.
    --------------------------------------------------------------------------- */
 :root {
   /* Categorical — data viz */
-  --categorical-1: #9fbffe;
-  --categorical-2: #6d9dfd;
-  --categorical-3: #407ffc;
-  --categorical-4: #015dfc;
-  --categorical-5: #013df2;
-  --categorical-6: #835ff2;
-  --categorical-7: #fdad0d;
-  --categorical-8: #f55902;
+  --categorical-1: #ffc372;
+  --categorical-2: #ff8c00;
+  --categorical-3: #c2410c;
+  --categorical-4: #a85f00;
+  --categorical-5: #1f7a8a;
+  --categorical-6: #98d2db;
+  --categorical-7: #5a5a5a;
+  --categorical-8: #dcdcdc;
 
   /* Foreground */
   --foreground-primary: #3d3d3d;
@@ -30,11 +52,11 @@
   --foreground-quaternary: #767676;
 
   /* Background / surfaces */
-  --background-primary: #f4f4f4;
+  --background-primary: #f1f1f1;
   --background-secondary: #ffffff;
-  --background-header: #111d2d;
+  --background-header: #5a5a5a;
   --background-card: #ffffff;
-  --background-muted: #f1f1f2;
+  --background-muted: #f5f1eb;
 
   /* Semantic states */
   --bad-foreground: #c10202;
@@ -55,26 +77,26 @@
   --text-body: var(--foreground-secondary);
   --text-muted: var(--foreground-tertiary);
   --text-faint: var(--foreground-quaternary);
-  --text-on-accent: #ffffff;
+  /* Dark, because the accent it sits on is a fill of #FF8C00. */
+  --text-on-accent: #262626;
   --text-on-dark: #f5f5f5;
 
-  --brand: var(--categorical-4);
-  --brand-strong: var(--categorical-5);
-  --brand-soft: var(--categorical-1);
-  /* Direction of the deviation: surplus is violet, shortfall is orange.
-     Red is reserved for failure, never for a deviation. */
-  --accent-surplus: var(--categorical-6);
-  --accent-shortfall: #ce4b02;
+  --brand: #ff8c00; /* fill only — never text, never under white text */
+  --brand-strong: #a85f00; /* links, orange text, pressed state */
+  --brand-soft: #fff1de; /* tints and chips */
+  /* Direction of the deviation. Red stays reserved for failure. */
+  --accent-surplus: var(--categorical-5); /* excedente — teal */
+  --accent-shortfall: var(--categorical-3); /* faltante — laranja queimado */
 
-  --border-subtle: rgba(17, 29, 45, 0.08);
-  --border-default: rgba(17, 29, 45, 0.12);
-  --border-strong: rgba(17, 29, 45, 0.18);
-  --border-focus: var(--categorical-4);
+  --border-subtle: rgba(45, 45, 45, 0.08);
+  --border-default: rgba(45, 45, 45, 0.12);
+  --border-strong: rgba(45, 45, 45, 0.18);
+  --border-focus: #a85f00;
 
   --control-bg: #ffffff;
-  --control-border: rgba(17, 29, 45, 0.14);
+  --control-border: rgba(45, 45, 45, 0.14);
 
-  --scrim: rgba(17, 29, 45, 0.45);
+  --scrim: rgba(30, 30, 30, 0.45);
 
   /* Layout */
   --sidebar-width: 264px;
