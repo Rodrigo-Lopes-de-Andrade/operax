@@ -433,13 +433,13 @@ nem tabela de usuários própria.**
 ```ts
 // KPIs do período
 await supabase.rpc('fn_kpi_period', {
-  p_de, p_ate, p_empresa_id, p_unidade_id
+  p_de, p_ate, p_company_id, p_unit_id
 })
 
 // Rankings
-await supabase.rpc('fn_ranking_by_unit',     { p_de, p_ate, p_empresa_id, p_limite })
-await supabase.rpc('fn_ranking_by_employee', { p_de, p_ate, p_empresa_id, p_unidade_id, p_limite })
-await supabase.rpc('fn_recurrence',         { p_de, p_ate, p_min_dias, p_unidade_id })
+await supabase.rpc('fn_ranking_by_unit',     { p_de, p_ate, p_company_id, p_limite })
+await supabase.rpc('fn_ranking_by_employee', { p_de, p_ate, p_company_id, p_unit_id, p_limite })
+await supabase.rpc('fn_recurrence',         { p_de, p_ate, p_min_dias, p_unit_id })
 
 // Séries e listagens (grão de dia — o cliente filtra o intervalo)
 supabase.from('vw_deviation_daily_trend')
