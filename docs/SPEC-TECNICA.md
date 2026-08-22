@@ -488,18 +488,77 @@ não adianta mandar — a policy não confia em parâmetro do cliente.
 
 ### Filtros e estado
 
-Estado de filtro vive na URL: `?empresa=<uuid>&unidade=<uuid>&de=...&ate=...`.
-É requisito, não preferência: o link do relatório abre o dashboard já filtrado.
+Estado de filtro vive na URL. É requisito, não preferência: o link do relatório
+abre o dashboard já filtrado.
+
+As chaves são curtas e legíveis porque um humano lê a URL dentro de uma mensagem
+de WhatsApp — `?emp=` empresa, `?un=` unidade, `?per=` período, `?ev=` ocorrência,
+`?dia=` o dia do monitor. Empresa e unidade viajam como *slug* do código, não
+como uuid: o código é estável, único por tenant e cabe na tela; o uuid é ruído.
+Quem resolve slug → id é o servidor, contra as unidades que a sessão enxerga.
 
 ### Desempenho
 
 Alvo abaixo de 3 s. Séries e rankings vêm agregados do Postgres. O navegador não
 soma linha de evento. Sem realtime na v1 — os dados só mudam quando o worker roda.
 
+Medido em build de produção contra o seed de desenvolvimento, mediana de sete
+navegações: dashboard 760 ms (pior 2 022 ms), monitor diário 612 ms, painel de
+TV 552 ms.
+
+### Monitor diário
+
+**Caminho 2, não Caminho 1** — e a escolha não é de estilo. A escala do dia vive
+em `app.expected_workday`, que não está na superfície pública. Levá-la para lá
+seria expor coluna nova numa view de `public`, uma das três decisões que este
+projeto sempre para e pergunta. Não precisa ser tomada: a tela é sobre pessoa
+nomeada num dia específico, que é Caminho 2 de qualquer forma. `GET
+/monitor/diario?dia=&unidade=` lê por `user_scope`, e é a policy
+`expected_workday_read` que faz o supervisor ver uma unidade.
+
+O que a tela **não** pode afirmar é mais estreito do que parece, e o formato da
+resposta diz isso. As marcações não são espelhadas para o schema `app` — ficam no
+espelho da origem, que nunca é exposto. Então "sem indício" significa "a última
+leitura não encontrou nada", nunca "presente", e a idade dessa leitura fica ao
+lado da contagem.
+
+A urgência é carregada por agrupamento e ordem — *Agora*, *Ainda hoje*, *No
+fechamento* — e não por uma terceira escala de cor. A paleta já gasta matiz na
+direção do desvio; um segundo eixo de matiz na mesma tabela deixa os dois
+ilegíveis. O ranking de tipo → urgência vive num único lugar, em Python, e há
+teste que falha se um `case` no SQL começar a rankear também.
+
 ### Tela para TV
 
-Rota separada, sem autenticação individual e com token de exibição. Só agregado.
-**Nenhum nome de colaborador.** Auto-refresh no intervalo da sincronização.
+Rota separada (`/tv`), sem chrome — nem barra lateral, nem crachá de usuário, nem
+botão de sair: ninguém está sentado nela, e o único controle que um painel de
+parede não pode ter é o que desloga o andar inteiro por esbarrão.
+
+Só agregado. **Nenhum nome de colaborador** — e a regra não é "esconder os
+nomes": é que nenhuma consulta desta rota devolve um. `vw_deviation_event` e
+`vw_deviation_by_employee_day` estão ausentes de `lib/tv/queries.ts` mesmo sendo
+legíveis pela sessão, porque uma tela que nunca pede um nome não vaza um por
+refactor, tooltip ou descuido. O teste E2E lê os nomes que o dashboard mostra
+hoje e exige que nenhum deles apareça no painel.
+
+Tema escuro por `data-theme="dark"` no subtree da rota, **não** por
+`prefers-color-scheme`: o painel é escuro porque um retângulo claro a três metros
+num corredor iluminado é ilegível, o que não tem relação com a preferência de
+sistema de quem abre o dashboard. O par de direção clareia junto com a superfície
+— #7FC4D0 excedente, #FE8F53 faltante.
+
+Auto-refresh a cada 3 min por `router.refresh()`, não `location.reload()`: uma
+tela que roda por semanas não pode rebaixar o bundle e piscar branco num corredor
+escuro a cada ciclo.
+
+**Divergência assumida: não existe token de exibição.** Esta spec previa "sem
+autenticação individual e com token de exibição"; o que existe é uma sessão
+Supabase comum, autenticada uma vez no navegador da TV. O motivo é que um token
+de exibição não é uma flag — as views são `security_invoker` e a RLS decide por
+`auth.uid()`, então o token precisaria de um **principal novo** no modelo de
+autorização, o que é mudança de policy e para por regra. Fica registrado como
+decisão pendente, não como esquecimento. O custo prático: alguém precisa logar a
+TV uma vez, e o refresh do SDK sustenta dali em diante.
 
 ---
 
