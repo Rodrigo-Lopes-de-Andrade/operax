@@ -335,7 +335,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `Memoria` | time without time zone | sim |  |  |  |
 | `sincronizado_em` | timestamp with time zone | sim |  |  |  |
 | `atualizado_em` | timestamp with time zone | sim | `now()` |  |  |
-| `tenant_id` | uuid | sim | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | sim | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Policies**
 
@@ -884,7 +884,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `empresa_id` | bigint | sim |  |  |  |
 | `status` | text | sim |  |  |  |
 | `ocorrido_em` | timestamp with time zone | sim | `now()` |  |  |
-| `tenant_id` | uuid | sim | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | sim | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Policies**
 
@@ -1070,7 +1070,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `funcionario_id` | bigint | sim |  |  |  |
 | `status` | text | sim |  |  |  |
 | `ocorrido_em` | timestamp with time zone | sim | `now()` |  |  |
-| `tenant_id` | uuid | sim | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | sim | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Policies**
 
@@ -1739,7 +1739,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `tolerance_absence_minutes` | integer | sim |  |  |  |
 | `workload_minutes` | integer | sim |  |  |  |
 | `updated_at` | timestamp with time zone | sim | `now()` |  |  |
-| `tenant_id` | uuid | sim | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | sim | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Policies**
 
@@ -1825,7 +1825,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `status_dia_rotulo` | text | sim |  |  |  |
 | `sincronizado_em` | timestamp with time zone | sim |  |  |  |
 | `atualizado_em` | timestamp with time zone | sim | `now()` |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -1855,7 +1855,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `DataInclusao` | timestamp with time zone | sim |  |  |  |
 | `criado_em` | timestamp with time zone | sim | `now()` |  |  |
 | `atualizado_em` | timestamp with time zone | sim | `now()` |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -1875,7 +1875,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `Id` 🔑 | bigint | não |  |  |  |
 | `EmpresaId` | bigint | sim |  |  |  |
 | `Descricao` | text | sim |  |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -1896,7 +1896,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `Nome` | text | sim |  |  |  |
 | `Cnpj` | text | sim |  |  |  |
 | `Ativo` | boolean | sim | `true` |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -1916,7 +1916,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `Id` 🔑 | bigint | não |  |  |  |
 | `DepartamentoId` | bigint | sim |  |  |  |
 | `GestorNome` | text | sim |  |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -1949,7 +1949,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `DataAdmissao` | date | sim |  |  |  |
 | `DataDemissao` | date | sim |  |  |  |
 | `Ativo` | boolean | sim | `true` |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -1970,7 +1970,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `FuncionarioId` | bigint | sim |  |  |  |
 | `DataInicio` | date | sim |  |  |  |
 | `DataFim` | date | sim |  |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -1991,7 +1991,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `Descricao` | text | sim |  |  |  |
 | `ToleranciaExtra` | integer | sim |  |  |  |
 | `ToleranciaFalta` | integer | sim |  |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -2013,7 +2013,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `DiaSemana` | smallint | sim |  |  |  |
 | `Entrada` | time without time zone | sim |  |  |  |
 | `Saida` | time without time zone | sim |  |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -2036,7 +2036,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `ControleHorasExtrasAutorizadas` | boolean | sim |  |  |  |
 | `QuantidadeExtrasAutorizadas` | text | sim |  |  |  |
 | `atualizado_em` | timestamp with time zone | sim | `now()` |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -2059,7 +2059,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `DiaSemana` | smallint | sim |  |  |  |
 | `Controle` | smallint | sim |  |  |  |
 | `DiaEspecial` | smallint | sim |  |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -2084,7 +2084,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `Entrada1Ate` | time without time zone | sim |  |  |  |
 | `Saida1De` | time without time zone | sim |  |  |  |
 | `Saida1Ate` | time without time zone | sim |  |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 
@@ -2121,7 +2121,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `DividirJornadaQuandoHouverFolga` | boolean | sim |  |  |  |
 | `HorasRepousoFaixas` | jsonb | sim |  |  |  |
 | `atualizado_em` | timestamp with time zone | sim | `now()` |  |  |
-| `tenant_id` | uuid | não | `'95acdacd-c716-4855-a1c2-6280a6e60827'::uuid` | `app.tenant` |  |
+| `tenant_id` | uuid | não | `'<tenant kastro-park>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
 

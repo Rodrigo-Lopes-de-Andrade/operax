@@ -8,7 +8,10 @@ que documentação nenhuma.
 
     ./scripts/testar_migrations.sh && python3 scripts/gerar_dicionario.py
 """
-import subprocess, collections, os, sys
+import subprocess
+import collections
+import os
+import sys
 
 PSQL = ["psql", "-tAF\t", "-v", "ON_ERROR_STOP=1"]
 ENV = {**os.environ,
@@ -28,8 +31,8 @@ def q(sql, ncols=None):
     r = subprocess.run(PSQL + ["-c", sql], capture_output=True, text=True, env=ENV)
     if r.returncode != 0:
         sys.exit(f"psql falhou:\n{r.stderr}")
-    linhas = [l for l in r.stdout.split("\n") if l.strip()]
-    saida = [l.split("\t") for l in linhas]
+    linhas = [linha for linha in r.stdout.split("\n") if linha.strip()]
+    saida = [linha.split("\t") for linha in linhas]
     if ncols:
         saida = [row + [""] * (ncols - len(row)) for row in saida]
     return saida
@@ -128,6 +131,22 @@ select n.nspname, c.relname, coalesce(array_to_string(c.reloptions, ','), '')
 from pg_class c join pg_namespace n on n.oid = c.relnamespace
 where c.relkind in ('v','m');""", 3)}
 
+# A migration 03 grava o id do tenant como DEFAULT de tenant_id em toda tabela
+# que ela move de public. Esse id nasce de gen_random_uuid() na migration 02,
+# então é outro a cada banco recém-criado — e a suíte cria um banco descartável
+# por rodada. Sem normalizar, o dicionário gerado difere em 17 linhas toda vez
+# que alguém roda `db-test`, e o ruído esconde a mudança de schema de verdade.
+# O slug diz o que o uuid não dizia: qual tenant, não qual execução.
+tenants = {r[0]: r[1] for r in q("select id::text, slug from app.tenant order by slug;", 2)}
+
+
+def normalizar_default(expr):
+    for tenant_id, slug in tenants.items():
+        if tenant_id in expr:
+            return expr.replace(f"'{tenant_id}'", f"'<tenant {slug}>'")
+    return expr
+
+
 # ---------------------------------------------------------------------------
 por_tabela = collections.defaultdict(list)
 for r in colunas:
@@ -206,7 +225,7 @@ for schema in ('app', 'secullum'):
             ref = fks.get((schema, t, name), "")
             ref = f"`{ref}`" if ref else ""
             nulo = "não" if nn else "sim"
-            dflt = f"`{dflt[:44]}`" if dflt else ""
+            dflt = f"`{normalizar_default(dflt)[:44]}`" if dflt else ""
             w(f"| `{name}`{marca} | {typ} | {nulo} | {dflt} | {ref} | {cmt} |")
         w("")
 
