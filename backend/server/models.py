@@ -6,7 +6,7 @@ answers is declared here.
 
 from __future__ import annotations
 
-from datetime import date, time
+from datetime import date, datetime, time
 from decimal import Decimal
 from typing import Literal
 from uuid import UUID
@@ -148,3 +148,70 @@ class EmployeeDetail(BaseModel):
     compensation: list[CompensationBand] | None = None
     documents: list[EmployeeDocument] | None = None
     exams: list[OccupationalExamRow] | None = None
+
+
+Severity = Literal["critical", "attention", "watch"]
+
+
+class MonitorUnitRow(BaseModel):
+    """Presence of one unit on the day being watched.
+
+    `scheduled` counts people the roster expected to work, so a unit that is
+    entirely off today reports zero and still appears — "nobody was scheduled"
+    and "nothing was read" are different answers and the screen shows both.
+    """
+
+    unit_id: UUID | None = None
+    unit_name: str | None = None
+    scheduled: int
+    with_indication: int
+    clear: int
+    off_roster: int
+
+
+class MonitorRow(BaseModel):
+    """One indication of the day, with the reading that produced it.
+
+    `expected_time` and `actual_time` are what the engine compared. The screen
+    shows both side by side and never states a conclusion: the official record
+    of the workday stays in the time-clock system.
+    """
+
+    employee_id: UUID
+    employee_name: str
+    unit_id: UUID | None = None
+    unit_name: str | None = None
+    day_type: str | None = None
+    expected_entry: time | None = None
+    expected_exit: time | None = None
+    confidence: int | None = None
+    type: str
+    type_description: str
+    direction: str
+    severity: Severity
+    minutes: int
+    expected_time: time | None = None
+    actual_time: time | None = None
+    detected_at: datetime
+
+
+class DailyMonitor(BaseModel):
+    """The situation of one day, by unit.
+
+    What this can and cannot say is worth stating once. The product does not
+    mirror punches into its own schema — they live in the source mirror, which
+    is never exposed — so the monitor reports what the engine found, not who
+    walked through the door. "Sem indício" therefore means "the last reading
+    found nothing", never "present"; the age of that reading is on the screen
+    beside it, permanently, because a manager reading a 08:40 picture at 09:05
+    would otherwise conclude that nobody is late.
+    """
+
+    day: date
+    scheduled: int
+    with_indication: int
+    clear: int
+    off_roster: int
+    units: list[MonitorUnitRow]
+    rows: list[MonitorRow]
+    truncated: bool = False

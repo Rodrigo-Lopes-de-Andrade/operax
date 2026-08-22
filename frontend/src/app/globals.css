@@ -30,9 +30,11 @@
      handoff --accent-violet  ->  --accent-surplus    (excedente, teal)
      handoff --accent-orange  ->  --accent-shortfall  (faltante, laranja queimado)
 
-   Only the light theme ships. The dark values — including #7FC4D0 and #FE8F53
-   for the direction pair on the TV board — live in the handoff token file and
-   arrive with the screen that uses them.
+   The dark theme is opt-in per subtree, not a media query: it exists for the
+   wall board, which hangs in a lit corridor and is dark because a bright
+   rectangle at three metres is unreadable — not because somebody's OS is set to
+   dark. `prefers-color-scheme` would repaint the manager's dashboard as a side
+   effect of a setting that has nothing to do with it.
    --------------------------------------------------------------------------- */
 :root {
   /* Categorical — data viz */
@@ -105,8 +107,82 @@
 }
 
 /* ---------------------------------------------------------------------------
+   Dark — [data-theme="dark"], from the same handoff file.
+
+   Both the primitives and the aliases are redefined here, and the second half
+   is not redundant. A custom property whose value contains var() is substituted
+   where it is DECLARED, not where it is used: `--surface-app: var(--background-primary)`
+   on :root computes to #F1F1F1 there and inherits that literal, so moving
+   --background-primary in this block would repaint nothing. Only the aliases
+   that @theme inline reads through a second hop need repeating — a token the
+   theme reads directly (--brand, --good-foreground, --border-default) follows
+   its primitive on its own, because `inline` resolves those at the element.
+
+   The direction pair lightens because the surface did: #1F7A8A on #2E2E2E is
+   2.5:1 and unreadable across a room. #7FC4D0 is 6.9:1, #FE8F53 is 6.2:1.
+   --------------------------------------------------------------------------- */
+[data-theme="dark"] {
+  --categorical-1: #ffe3bf;
+  --categorical-2: #ffc372;
+  --categorical-3: #ffa640;
+  --categorical-4: #ff8c00;
+  --categorical-5: #e07a00;
+  --categorical-6: #98d2db;
+  --categorical-7: #dcdcdc;
+  --categorical-8: #fe8f53;
+
+  --foreground-primary: #f5f5f5;
+  --foreground-secondary: #d1d1d1;
+  --foreground-tertiary: #9e9e9e;
+  --foreground-quaternary: #6e6e6e;
+
+  --background-primary: #2e2e2e;
+  --background-secondary: #383838;
+  --background-header: #262626;
+  --background-card: #383838;
+  --background-muted: #333333;
+
+  /* Alert inverts on dark: amber becomes the fill and the text goes dark. */
+  --bad-foreground: #fe9f9f;
+  --bad-background: #990101;
+  --good-foreground: #03fc03;
+  --good-background: #004100;
+  --alert-foreground: #332200;
+  --alert-background: #fdad0d;
+
+  /* The second hop. Without these the board stays light. */
+  --surface-app: var(--background-primary);
+  --surface-raised: var(--background-secondary);
+  --surface-card: var(--background-card);
+  --surface-muted: var(--background-muted);
+  --surface-chrome: var(--background-header);
+
+  --text-strong: var(--foreground-primary);
+  --text-body: var(--foreground-secondary);
+  --text-muted: var(--foreground-tertiary);
+  --text-faint: var(--foreground-quaternary);
+
+  --brand: #ff8c00; /* still a fill — 5.82:1 on #2E2E2E */
+  --brand-strong: #ffc372; /* orange text has to lighten with the surface */
+  --brand-soft: rgba(255, 140, 0, 0.16);
+  --accent-surplus: #7fc4d0; /* excedente — teal, lightened */
+  --accent-shortfall: #fe8f53; /* faltante */
+
+  --border-subtle: rgba(255, 255, 255, 0.06);
+  --border-default: rgba(255, 255, 255, 0.1);
+  --border-strong: rgba(255, 255, 255, 0.16);
+  --border-focus: #ff8c00;
+
+  --control-bg: #383838;
+  --control-border: rgba(255, 255, 255, 0.14);
+
+  --scrim: rgba(0, 0, 0, 0.6);
+}
+
+/* ---------------------------------------------------------------------------
    Tailwind v4 theme. `inline` so every utility compiles to the token above and
-   keeps following it if the token is redefined (future dark theme).
+   keeps following it when the token is redefined — which is what the dark block
+   above relies on.
    --------------------------------------------------------------------------- */
 @theme inline {
   --color-canvas: var(--surface-app);

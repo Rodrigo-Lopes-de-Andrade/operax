@@ -17,6 +17,16 @@ const apiURL = `http://127.0.0.1:${API_PORT}`;
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
+  // Two, and measured rather than picked. The whole suite renders against a
+  // single `next dev` process, which compiles and renders serially: at four
+  // workers the run took 1m12s and three navigations timed out waiting on the
+  // dev server, at two it takes 48s and passes. More workers here make the run
+  // slower, not faster — the parallelism is on the wrong side of the wire.
+  //
+  // FastAPI is not what gives: eight concurrent individual-consultation calls
+  // answer in 230ms. Raising this is worth revisiting only against a production
+  // build, which is also where the 3-second acceptance target is measured.
+  workers: 2,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   reporter: "list",

@@ -3,18 +3,22 @@ import type { ReactNode } from "react";
 
 import { Brand } from "@/components/brand";
 import { DataFreshness } from "@/components/data-freshness";
+import { NavLink } from "@/components/nav-link";
 import { SignOutButton } from "@/components/sign-out-button";
 import { UserBadge } from "@/components/user-badge";
+import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
+import { TV_PATH } from "@/lib/tv/url";
 
 /**
  * Authenticated chrome: a 264px navy sidebar and an 84px header carrying the
  * permanent data-age pill.
  *
- * The navigation lists only what exists. The daily monitor, the individual
- * consultation, payroll, alert rules, the assistant, administration and the TV
- * board each arrive with their own screen — a nav item that leads nowhere reads
- * as a defect, and a disabled one without a reason reads worse.
+ * The navigation lists only what exists. The individual consultation is reached
+ * from a row, not from here, because it is always about somebody you were
+ * already looking at. Payroll, alert rules, the assistant and administration
+ * arrive with their own screens — a nav item that leads nowhere reads as a
+ * defect, and a disabled one without a reason reads worse.
  */
 export function AppShell({ children }: { children: ReactNode }) {
   return (
@@ -30,12 +34,9 @@ export function AppShell({ children }: { children: ReactNode }) {
           <p className="text-2xs px-3 py-2 font-bold tracking-[0.08em] text-white/80 uppercase">
             Operação
           </p>
-          <Link
-            href={PONTO_PATH}
-            className="text-on-chrome rounded-[10px] bg-white/12 px-3 py-2.5 text-sm font-bold"
-          >
-            Gestão de ponto
-          </Link>
+          <NavLink href={PONTO_PATH} label="Gestão de ponto" />
+          <NavLink href={MONITOR_PATH} label="Monitor diário" />
+          <NavLink href={TV_PATH} label="Painel de TV" />
         </nav>
       </aside>
 
