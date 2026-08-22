@@ -113,15 +113,38 @@ tenant. Falha em um tenant não interrompe os outros — registra em
 
 ### ⏳ Pendências
 
-- **Rate limit** — a cadência é 30 min, ou seja 48 execuções/dia por tenant só
-  para Batida. É a única pendência que ainda pode derrubar a cadência escolhida.
-- Tamanho de página.
-- ~~Autenticação: escopo do token, validade, renovação.~~ **Respondido em
-  22/08/2026 pela implementação:** a origem autentica com usuário, senha e
-  `client_id`. É o que os secrets da Edge Function de sincronização carregam.
-- A API devolve valor apurado (atraso, extra, saldo)? Se sim, ingerir como
-  verdade reduz drasticamente o risco do motor.
-- Justificativa e afastamento são leitura ou também escrita?
+Quatro das cinco fecharam em 22/08/2026, não por documentação, mas por leitura
+do código que já roda: `supabase/functions/_shared/secullum-client.ts`.
+
+- ~~**Autenticação**: escopo do token, validade, renovação.~~ **Respondido.**
+  OAuth *password grant* em `autenticador.secullum.com.br` (`/Token`,
+  `/ReinvidicacoesToken`), com `client_id` fixo `"3"` documentado pelo Secullum
+  para o Secullum RH. Quando o usuário tem acesso a mais de uma conta, o banco é
+  escolhido por `ListarBancos` e viaja no header
+  `secullumidbancoselecionado` — daí o quinto secret, `SECULLUM_BANK_ID`, que
+  não aparece no painel de secrets junto dos outros quatro.
+- ~~**Tamanho de página.**~~ **Respondido, e a resposta é "não há".** O endpoint
+  de Batidas não suporta paginação nem cursor por Id. A sincronização compensa
+  com uma **janela deslizante fixa de três dias** (hoje − 2 .. hoje), que nunca
+  reprocessa o passado.
+- ~~**A API devolve valor apurado?**~~ **Devolve** — existe a rota `Calcular`.
+  **E a sincronização atual não a usa.** A decisão de ingerir apuração como
+  verdade, que reduziria muito o risco do motor, continua disponível e continua
+  não tomada.
+- ~~**Justificativa e afastamento são leitura ou escrita?**~~ **Leitura, por
+  decisão estrutural.** Não existe sandbox do Secullum para este cliente: toda
+  chamada roda contra produção real. Por isso o client expõe **somente** `get`
+  para o webservice de integração — um verbo de escrita acidental não compila,
+  em vez de falhar em produção.
+
+Sobra uma:
+
+- **Rate limit.** O limite conhecido é por prefixo de rota, e o único codificado
+  é `Calcular`: 100 req/hora — justamente a rota que não é usada. As três que
+  são (`Funcionarios`, `Horarios`, `Batidas`) não têm limite documentado no
+  código. O limitador local existe mas é *best-effort*: Edge Function não
+  garante estado compartilhado entre invocações, então a defesa real contra
+  estouro é a frequência do Cron Trigger, não ele.
 
 ---
 

@@ -71,11 +71,30 @@ palpite.
    22/08 nos dois projetos e em quatro regiões de pooler. Precisa de reset em
    Dashboard → Project Settings → Database. Sem ela não há DDL nem `pg_dump`:
    o PostgREST não faz nenhum dos dois.
-2. **O código das Edge Functions não está aqui.** `sync-cadastro` e
-   `sync-batidas` escrevem em app.colaborador, app.unidade e afins. **O
-   rename quebra a sincronização**, e não dá para corrigi-la num repositório
-   que não a contém. `supabase functions download` precisa vir antes do rename,
-   não depois.
+2. ~~**O código das Edge Functions não está aqui.**~~ **Resolvido em
+   22/08/2026:** baixado para `supabase/functions/`. E o que ele mostra corrige
+   o medo que estava escrito aqui — as funções **não** escrevem em
+   app.colaborador nem app.unidade. Aquilo foi dedução minha a partir dos 403,
+   que descreviam as *views*, não elas.
+
+   O que elas realmente tocam:
+   - **secullum.\*** — vinte tabelas PascalCase, entre aspas. A mudança da
+     migration 03 já aconteceu em produção e as funções já foram ajustadas.
+     Como a convenção mantém PascalCase no espelho, **o rename pt→en não as
+     afeta aqui**.
+   - **quatro tabelas de app**: `app.empresa_evento_status`,
+     `app.funcionario_evento_status`, `app.batida_marcacao` e
+     app.cursor_sincronizacao.
+
+   **A última é o achado que importa:** app.cursor_sincronizacao existe em
+   produção e em nenhuma migration deste repositório. É o cursor da
+   sincronização — o que decide o que será lido na próxima execução. Precisa
+   entrar no baseline da fase 1 e ser tratada explicitamente no rename, ou a
+   sincronização perde a memória de onde parou.
+
+   O código também cita uma migration `20260813163000`, anterior às daqui
+   (`20260815…`): produção tem histórico de migration próprio, que o baseline
+   vai revelar.
 
 ---
 
