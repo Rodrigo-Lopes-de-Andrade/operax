@@ -109,6 +109,17 @@ NEW_BAND_SQL = """
     returning id
 """
 
+# Sem `close`: exame não tem faixa aberta a fechar. O anterior continua valendo
+# como o que foi — o que muda é qual é o mais recente.
+NEW_EXAM_SQL = """
+    insert into app.occupational_exam
+      (tenant_id, employee_id, type, performed_on, valid_until, result, created_by)
+    values
+      (%(tenant_id)s, %(employee_id)s, %(type)s, %(performed_on)s, %(valid_until)s,
+       %(result)s, %(user_id)s)
+    returning id
+"""
+
 
 @dataclass(frozen=True, slots=True)
 class Permissions:
@@ -249,10 +260,13 @@ async def apply_lines(
         for outcome in outcomes:
             if outcome.status != "ok" or outcome.employee_id is None:
                 continue
-            if template.strategy is Strategy.EMPLOYEE_UPDATE:
-                await _apply_employee_update(scope, tenant, template, outcome, import_id)
-            else:
-                await _apply_new_band(scope, tenant, outcome, import_id)
+            match template.strategy:
+                case Strategy.EMPLOYEE_UPDATE:
+                    await _apply_employee_update(scope, tenant, template, outcome, import_id)
+                case Strategy.COMPENSATION_VERSION:
+                    await _apply_new_band(scope, tenant, outcome, import_id)
+                case Strategy.EXAM_INSERT:
+                    await _apply_new_exam(scope, tenant, outcome, import_id)
             aplicadas += 1
 
         await scope.execute(
@@ -333,6 +347,31 @@ async def _apply_new_band(
         action="insert",
         entity="employee_compensation",
         entity_id=criada["id"] if criada else outcome.employee_id,
+        antes=outcome.previous,
+        depois={k: v for k, v in valores.items() if k != "user_id"},
+        origem={"file_import_id": str(import_id), "line": outcome.line},
+    )
+
+
+async def _apply_new_exam(
+    scope: Any, tenant: TenantContext, outcome: LineOutcome, import_id: UUID
+) -> None:
+    valores = {
+        "employee_id": outcome.employee_id,
+        "type": outcome.values.get("type"),
+        "performed_on": outcome.values.get("performed_on"),
+        "valid_until": outcome.values.get("valid_until"),
+        "result": outcome.values.get("result"),
+        "user_id": tenant.user_id,
+    }
+    await scope.execute(NEW_EXAM_SQL, valores)
+    criado = await scope.fetchone()
+    await audit(
+        scope,
+        tenant,
+        action="insert",
+        entity="occupational_exam",
+        entity_id=criado["id"] if criado else outcome.employee_id,
         antes=outcome.previous,
         depois={k: v for k, v in valores.items() if k != "user_id"},
         origem={"file_import_id": str(import_id), "line": outcome.line},

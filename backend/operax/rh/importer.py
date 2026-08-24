@@ -38,6 +38,7 @@ from operax.rh.validators import (
     check_owned_fields,
     check_unique,
     validate_compensation,
+    validate_exam,
 )
 from operax.rh.workbook import SheetRow
 
@@ -137,11 +138,15 @@ def validate(
             if texto:
                 vistos[coluna].setdefault(texto, row.line)
 
-        if template.strategy is Strategy.EMPLOYEE_UPDATE:
-            mudancas = _changed(template, valores, atual)
-        else:
-            mudancas, erros_vigencia = _new_band(template, valores, atual, context)
-            erros.extend(erros_vigencia)
+        match template.strategy:
+            case Strategy.EMPLOYEE_UPDATE:
+                mudancas = _changed(template, valores, atual)
+            case Strategy.COMPENSATION_VERSION:
+                mudancas, erros_da_linha = _new_band(template, valores, atual, context)
+                erros.extend(erros_da_linha)
+            case Strategy.EXAM_INSERT:
+                mudancas, erros_da_linha = _new_exam(template, valores, atual, context)
+                erros.extend(erros_da_linha)
 
         # Só a linha que escreve responde por coluna obrigatória. Célula vazia
         # numa planilha pré-preenchida é "não tenho o que dizer aqui" — de quem
@@ -220,6 +225,29 @@ def _new_band(
     )
     # A faixa vai inteira, não só o que mudou: uma vigência é uma linha nova, e
     # metade de uma linha nova não é nada.
+    return {column.column: valores.get(column.column) for column in template.editable()}, erros
+
+
+def _new_exam(
+    template: Template,
+    valores: dict[str, Any],
+    atual: dict[str, Any],
+    context: ImportContext,
+) -> tuple[dict[str, Any], list[LineError]]:
+    """O exame novo — ou a constatação de que a linha repete o que já está lá.
+
+    Mesma forma da vigência, e pela mesma razão: o exame vai inteiro, porque meia
+    linha nova não é nada. O que muda é o que se compara — não há faixa aberta
+    para fechar, só o exame mais recente, que é o que o modelo imprimiu.
+    """
+    if not _changed(template, valores, atual):
+        return {}, []
+    ultimo = atual.get("performed_on")
+    erros = validate_exam(
+        valores,
+        hoje=context.today,
+        last_performed_on=ultimo if isinstance(ultimo, date) else None,
+    )
     return {column.column: valores.get(column.column) for column in template.editable()}, erros
 
 

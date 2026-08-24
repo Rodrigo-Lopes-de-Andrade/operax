@@ -44,6 +44,11 @@ const TIPOS = [
     note: "Regime e CTPS. Carrega dado pessoal, então só desce para quem alcança o domínio de PII.",
   },
   {
+    value: "hr_exam",
+    label: "ASO",
+    note: "Um exame por pessoa: o modelo traz o mais recente e o upload é a diferença. Guarda aptidão e validade — nunca diagnóstico, CID ou descrição de restrição. Só desce para quem alcança o domínio de saúde.",
+  },
+  {
     value: "hr_compensation",
     label: "Remuneração",
     note: "Uma vigência por linha. Só desce para quem alcança o domínio de remuneração, e o download fica registrado na auditoria.",

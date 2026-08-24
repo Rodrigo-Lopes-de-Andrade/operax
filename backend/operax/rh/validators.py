@@ -396,6 +396,57 @@ def validate_documents(row: Mapping[str, Any], *, table: str = "document") -> li
     return check_enums(row, table=table)
 
 
+def validate_exam(
+    row: Mapping[str, Any], *, hoje: date, last_performed_on: date | None = None
+) -> list[LineError]:
+    """Domínio 2b — exame ocupacional: aptidão, realização e validade.
+
+    Três recusas, e a terceira é a que não é óbvia. O modelo imprime **um exame
+    por pessoa**, o mais recente, e o upload é a diferença contra ele. Uma data
+    anterior à que veio impressa não é uma correção: é um exame do passado, que
+    seria inserido de novo a cada reenvio do mesmo arquivo — o modelo continuaria
+    imprimindo o recente, a linha continuaria diferindo, e a pessoa juntaria uma
+    cópia por rodada. Backfill de histórico não passa por aqui.
+
+    O que não se recusa: validade no passado. ASO vencido é um fato do cadastro e
+    é exatamente o que a coluna de vencimentos existe para mostrar — a mesma
+    decisão de `validate_documents`.
+    """
+    erros: list[LineError] = []
+    realizado = row.get("performed_on")
+    validade = row.get("valid_until")
+
+    if isinstance(realizado, date):
+        if realizado > hoje:
+            erros.append(
+                LineError(
+                    "data_no_futuro",
+                    f"exame realizado em {realizado:%d/%m/%Y} é uma data futura: "
+                    "exame que ainda não aconteceu não se registra",
+                    "performed_on",
+                )
+            )
+        if isinstance(validade, date) and validade <= realizado:
+            erros.append(
+                LineError(
+                    "validade_invalida",
+                    f"a validade ({validade:%d/%m/%Y}) precisa ser depois da realização "
+                    f"({realizado:%d/%m/%Y})",
+                    "valid_until",
+                )
+            )
+        if last_performed_on is not None and realizado < last_performed_on:
+            erros.append(
+                LineError(
+                    "exame_anterior",
+                    f"já há exame registrado em {last_performed_on:%d/%m/%Y}; o modelo carrega o "
+                    "mais recente, e um exame anterior entraria de novo a cada reenvio",
+                    "performed_on",
+                )
+            )
+    return erros
+
+
 def validate_leave(
     row: Mapping[str, Any], *, existentes: Iterable[tuple[date, date | None]]
 ) -> list[LineError]:
@@ -443,6 +494,7 @@ __all__ = [
     "validate_agreement",
     "validate_compensation",
     "validate_documents",
+    "validate_exam",
     "validate_leave",
     "validate_registration",
 ]

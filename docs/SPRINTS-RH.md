@@ -325,9 +325,12 @@ confirmação humana.
   sistema** e emite o relatório de descarte.
 - `backend/tests/fixtures/planilha_cliente.py`: a planilha de 17 abas,
   sintética — a bagunça sem o dado.
-- `backend/tests/test_rh_carga_inicial.py`: **34 testes**, com o critério de
+- `backend/tests/test_rh_carga_inicial.py`: **36 testes**, com o critério de
   sucesso do PRD como asserção.
 - `docs/ROTEIRO-IMPLANTACAO-RH.md`: uma página, para a EURECA executar.
+- **Migration 17 + template `hr_exam`**: o quarto caminho de volta, que é o que
+  faz a coluna de vencimentos responder com o dado da planilha. Ver o adendo no
+  fim desta seção.
 
 ### Ele preenche o modelo em vez de gerar um
 
@@ -370,12 +373,12 @@ afirmar que nada foi esquecido, em vez de que nada foi encontrado.
    "APTO"/"PERIÓDICO" — mas as tabelas de destino não têm caminho de escrita
    pelo painel. Sai `.csv`, e não `.xlsx`, de propósito: um `.xlsx` pareceria
    template e alguém tentaria subi-lo.
-3. **ASO é o único bloqueio que não deveria existir.** `app.occupational_exam`
-   **concede** escrita a quem tem o domínio `health` e não exige arquivo. O que
-   falta é um valor em `app.file_import.type`: os sete tipos da migration 16
-   dobraram ASO dentro de `hr_document`, e `hr_document` está travado pelo
-   `storage_path` de `app.document`, que é **outra tabela**. Ver "o que falta",
-   abaixo.
+3. **ASO era o único bloqueio que não deveria existir** — e foi levantado no
+   mesmo sprint. `app.occupational_exam` **concede** escrita a quem tem o
+   domínio `health` e não exige arquivo; faltava só um valor em
+   `app.file_import.type`, porque os sete tipos da migration 16 dobraram ASO
+   dentro de `hr_document`, que está travado pelo `storage_path` de
+   `app.document` — **outra tabela**. Ver o adendo.
 4. **Modelo baixado antes do vínculo pode imprimir ID RH velho.** Apareceu no
    ensaio contra o banco local: o `hr_link` mudou o `hr_code` de alguém, e o
    modelo de cadastro baixado antes disso trazia o anterior — recusado com "ID
@@ -387,9 +390,9 @@ afirmar que nada foi esquecido, em vez de que nada foi encontrado.
 |---|---|
 | ensaio fecha em 100% | `test_o_ensaio_fecha_em_cem_por_cento` soma as quatro colunas contra o total lido; a CLI devolve ≠ 0 se não fechar |
 | relatório gerado e legível | dez seções, da mais acionável para a menos: balanço → modelos → abas → colunas recusadas **por regra** → sem destino → descartes → conferência → parqueado → células ilegíveis → observações |
-| suíte completa verde | `make db-test` OK · **188** no pytest (eram 154) · 324 no Vitest · Playwright **22 verdes, 1 pulado** (`E2E_PROD`) |
+| suíte completa verde | `make db-test` OK · **200** no pytest (eram 154) · 324 no Vitest · Playwright **22 verdes, 1 pulado** (`E2E_PROD`) |
 | demonstração ponta a ponta | modelos baixados do sistema rodando → conversor → upload → preview (12 `ok`, 30 "já estava assim") → confirmar → os 12 aparecem na lista com o ID RH do cliente |
-| lista responde "o que vence em 30 dias?" | responde — **com o dado que já estava no sistema**. O da fixture não chega lá: ASO e CNH estão parqueados |
+| lista responde "o que vence em 30 dias?" | responde, **com o ASO que veio da planilha** — o `hr_exam` do adendo fechou esta linha |
 
 Provas que valem citar, além da contagem:
 
@@ -410,14 +413,42 @@ Provas que valem citar, além da contagem:
   `periodic` atravessaria o parqueado inteiro e só falharia meses depois — o
   teste confere os 8 mapas contra `ownership.ENUMS`.
 
-### O que falta para a carga ser completa
+### Adendo — `hr_exam`, o quarto caminho de volta
 
-Uma decisão de dono, não de código. `hr_exam` custa: um valor em
-`app.file_import.type` (migration 17, o mesmo bloco idempotente da 16), um
-template com a forma do `hr_compensation`, um validador, a escrita e os testes.
-Com ele, ASO deixa de ser parqueado e a última linha do gate fecha com o dado da
-planilha. **No conversor, é uma linha:** o destino já está declarado no mapa, e o
-emissor decide entre template e `.csv` perguntando se o tipo existe.
+**Migration 17** acrescenta um valor a `app.file_import.type` e nada mais: sem
+policy nova, sem coluna nova, sem grant. O bloco de prova afirma os oito tipos, o
+`exame_write` ainda exigindo o domínio `health`, o `anon` ainda sem escrita, e —
+explicitamente — que `app.occupational_exam` **não** ganhou coluna de diagnóstico
+ou de restrição. A regra 10 é negada na migration antes de ser negada no
+template.
+
+O template `hr_exam` carrega **um exame por pessoa**: o mais recente. A pergunta
+que ele responde é "como está a saúde ocupacional desta pessoa hoje", que é a
+pergunta que a coluna de vencimentos faz — histórico não é assunto de planilha de
+edição. `Strategy.EXAM_INSERT` insere; não fecha nada, porque exame não tem faixa
+aberta. E `validate_exam` recusa três coisas: data no futuro, validade anterior à
+realização, e **exame anterior ao que veio impresso** — este último não por
+ordem, mas porque a linha continuaria diferindo do modelo na rodada seguinte e o
+mesmo arquivo criaria uma cópia por reenvio. Validade no passado passa: ASO
+vencido é o que a lista existe para mostrar.
+
+No conversor a aba ASO deixou de ser parqueada e virou `LatestOnly`: vence a
+linha de data maior e o histórico da mesma pessoa é **reescrito** para a tabela,
+saindo no `.csv` em vez de sumir. Sem isso, duas linhas da mesma pessoa
+escreveriam na mesma célula do modelo e a última lida ganharia — em silêncio,
+pela ordem da planilha.
+
+**O ensaio contra o banco local achou um defeito que nenhum teste tinha achado.**
+O exame gravado saiu metade da planilha e metade do pré-preenchimento: `2026-02-10`
+com a validade `2026-10-08` de um exame de setembro, e um tipo `periodic` herdado
+onde a planilha trazia um valor fora do catálogo. Num template que cria registro
+novo, célula em branco **é um valor** — só no `EMPLOYEE_UPDATE` ela quer dizer
+"não tenho o que dizer aqui". `Template.writes_whole_row` separa os dois casos, e
+o conversor agora apaga o que a origem não trouxe: a linha ou fica coerente, ou é
+recusada no preview por campo obrigatório vazio, que é a pergunta certa para o
+RH.
+
+### O que ainda falta para a carga ser completa
 
 Os outros três continuam bloqueados por onde já estavam: `app.document` e
 `app.financial_agreement` exigem o arquivo que uma planilha não tem, e

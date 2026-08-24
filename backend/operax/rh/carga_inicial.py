@@ -112,6 +112,22 @@ class MatrixSpec:
 
 
 @dataclass(frozen=True, slots=True)
+class LatestOnly:
+    """A planilha traz histórico e o template carrega um registro por pessoa.
+
+    Vence a linha de data maior. As outras não somem: os destinos delas são
+    reescritos para a tabela, e saem no .csv parqueado — o histórico fica
+    convertido, esperando quem o carregue.
+
+    Sem isto, várias linhas da mesma pessoa escreveriam na mesma célula do modelo
+    e a última lida ganharia. Em silêncio, e pela ordem da planilha.
+    """
+
+    by: str
+    park_as: str
+
+
+@dataclass(frozen=True, slots=True)
 class SourceSheet:
     """Uma aba da planilha do cliente."""
 
@@ -123,6 +139,7 @@ class SourceSheet:
     #: A coluna que diz de quem é a linha.
     key: str = "MATRICULA"
     matrix: MatrixSpec | None = None
+    latest_only: LatestOnly | None = None
     aliases: tuple[str, ...] = ()
 
 
@@ -383,28 +400,19 @@ SHEETS: tuple[SourceSheet, ...] = (
     ),
     SourceSheet(
         name="VENCIMENTO ASO",
-        purpose=Purpose.PARKED,
-        # Este é o único destino do mapa que a decisão do R2 travou por engano: o
-        # motivo declarado para `hr_document` é o `storage_path` de `app.document`
-        # — e ASO não mora lá. Ver a seção "o que desbloqueia o quê" do relatório.
-        reason=(
-            "`app.occupational_exam` aceita escrita de quem tem o domínio `health`, mas "
-            "`app.file_import.type` não tem valor para exame: os sete tipos da migration 16 "
-            "dobraram ASO dentro de `hr_document`, e `hr_document` está travado pelo "
-            "`storage_path` de `app.document`, que é outra tabela"
-        ),
+        purpose=Purpose.TEMPLATE,
         aliases=("ASO", "VENCIMENTOS ASO"),
+        # O modelo imprime o exame vigente de cada pessoa; a planilha do cliente
+        # guarda o histórico na mesma aba. O mais recente sobe, o resto é
+        # convertido e parqueado.
+        latest_only=LatestOnly(by="hr_exam.performed_on", park_as="occupational_exam"),
         columns=(
             SourceColumn("MATRICULA", CHAVE),
-            SourceColumn("TIPO", "occupational_exam.type", values=_TIPO_ASO, aliases=("EXAME",)),
+            SourceColumn("TIPO", "hr_exam.type", values=_TIPO_ASO, aliases=("EXAME",)),
+            SourceColumn("DATA", "hr_exam.performed_on", kind="date", aliases=("REALIZACAO",)),
+            SourceColumn("VENCIMENTO", "hr_exam.valid_until", kind="date", aliases=("VALIDADE",)),
             SourceColumn(
-                "DATA", "occupational_exam.performed_on", kind="date", aliases=("REALIZACAO",)
-            ),
-            SourceColumn(
-                "VENCIMENTO", "occupational_exam.valid_until", kind="date", aliases=("VALIDADE",)
-            ),
-            SourceColumn(
-                "RESULTADO", "occupational_exam.result", values=_RESULTADO_ASO, aliases=("APTIDAO",)
+                "RESULTADO", "hr_exam.result", values=_RESULTADO_ASO, aliases=("APTIDAO",)
             ),
             SourceColumn(
                 "RESTRICAO",
@@ -776,7 +784,7 @@ def ler_planilha(caminho: Path) -> list[SheetRead]:
 #: A ordem de emissão, que é a ordem de upload: o vínculo primeiro, porque é ele
 #: que grava o ID RH; o resto depois, quando a chave do cliente já existe dos
 #: dois lados.
-ORDEM = ("hr_link", "hr_employee", "hr_compensation")
+ORDEM = ("hr_link", "hr_employee", "hr_exam", "hr_compensation")
 
 _FALLBACK = "@fallback:"
 
@@ -911,6 +919,9 @@ class Resultado:
     notas: list[Discard] = field(default_factory=list)
     leituras: list[SheetRead] = field(default_factory=list)
     admissao_como_vigencia: int = 0
+    #: aba -> quantas linhas eram histórico e foram parqueadas no lugar do
+    #: template, porque o modelo carrega um registro por pessoa.
+    historico: dict[str, int] = field(default_factory=dict)
     relatorio: Path | None = None
 
     def fecha(self) -> bool:
@@ -984,6 +995,10 @@ def converter(
         if leitura.sheet is None:
             continue
         sheet = leitura.sheet
+        if sheet.latest_only:
+            reduzidas = _reduzir_ao_mais_recente(leitura.rows, sheet.latest_only)
+            if reduzidas:
+                resultado.historico[leitura.title] = reduzidas
 
         for row in leitura.rows:
             anotar(leitura.title, row)
@@ -1074,26 +1089,22 @@ def _distribuir(
             valores[real] = valor
             resultado.admissao_como_vigencia += 1
 
-    escreveu = False
     faltando: set[str] = set()
     registros: dict[str, dict[str, Any]] = {}
+    por_modelo: dict[str, dict[str, Any]] = {}
 
     for alvo, valor in valores.items():
         destino, coluna = alvo.split(".", 1)
         if destino == "conferencia":
             continue
-        model = carregados.get(destino)
-        if model is not None:
-            linha_modelo = model.rows.get(row.key)
-            if coluna not in _editaveis(model) or linha_modelo is None:
-                continue
-            model.sheet.cell(row=linha_modelo, column=model.positions[coluna], value=valor)
-            model.written.add(row.key)
-            escreveu = True
+        if destino in carregados:
+            por_modelo.setdefault(destino, {})[coluna] = valor
         elif destino in TEMPLATES:
             faltando.add(destino)
         else:
             registros.setdefault(destino, {"matricula": row.key})[coluna] = valor
+
+    escreveu = _preencher_modelos(row, por_modelo, carregados)
 
     for destino, registro in registros.items():
         parqueados[destino].append(registro)
@@ -1109,6 +1120,70 @@ def _distribuir(
         )
 
     return escreveu, bool(registros or row.periods), faltando
+
+
+def _preencher_modelos(
+    row: SourceRow, por_modelo: dict[str, dict[str, Any]], carregados: dict[str, Model]
+) -> bool:
+    """As células do modelo, na linha da pessoa — e as que ficam em branco.
+
+    A célula em branco é a parte que importa. Num template de vigência ou de
+    exame a linha vai **inteira**, e deixar o pré-preenchimento onde a planilha
+    não disse nada produz um registro que nunca existiu: o exame de fevereiro com
+    a validade do de setembro. O que a origem não trouxe é apagado, e a linha ou
+    fica coerente ou é recusada no preview por campo obrigatório vazio — que é a
+    pergunta certa para o RH.
+    """
+    escreveu = False
+    for destino, colunas in por_modelo.items():
+        model = carregados[destino]
+        linha_modelo = model.rows.get(row.key)
+        editaveis = _editaveis(model)
+        valores = {coluna: v for coluna, v in colunas.items() if coluna in editaveis}
+        if linha_modelo is None or not valores:
+            continue
+        if model.template.writes_whole_row:
+            valores = {coluna: valores.get(coluna) for coluna in editaveis}
+        for coluna, valor in valores.items():
+            # Atribuição, e não `cell(..., value=...)`: com `value=None` o
+            # openpyxl devolve a célula sem mexer nela, e o pré-preenchimento
+            # ficaria exatamente onde não pode ficar.
+            model.sheet.cell(row=linha_modelo, column=model.positions[coluna]).value = valor
+        model.written.add(row.key)
+        escreveu = True
+    return escreveu
+
+
+def _reduzir_ao_mais_recente(rows: list[SourceRow], regra: LatestOnly) -> int:
+    """Uma linha por pessoa vai para o template; as outras são reescritas.
+
+    Reescritas, não descartadas: os destinos `<template>.<coluna>` viram
+    `<tabela>.<coluna>`, e a linha cai no .csv parqueado pelo mesmo caminho de
+    qualquer outro histórico. A conversão já está feita e não se joga fora.
+    """
+    prefixo = regra.by.split(".", 1)[0] + "."
+    vence: dict[str, tuple[Any, int]] = {}
+    for row in rows:
+        valor = row.values.get(regra.by)
+        if not row.key or valor is None:
+            continue
+        atual = vence.get(row.key)
+        if atual is None or valor > atual[0]:
+            vence[row.key] = (valor, row.line)
+
+    linhas_vencedoras = {linha for _, linha in vence.values()}
+    reduzidas = 0
+    for row in rows:
+        if row.line in linhas_vencedoras:
+            continue
+        reescritas = {
+            (regra.park_as + "." + alvo.split(".", 1)[1] if alvo.startswith(prefixo) else alvo): v
+            for alvo, v in row.values.items()
+        }
+        if reescritas != row.values:
+            reduzidas += 1
+        row.values = reescritas
+    return reduzidas
 
 
 def _motivo_da_aba(leitura: SheetRead) -> str:
@@ -1396,6 +1471,12 @@ def _emitir_relatorio(
             f"{quebradas} célula(s) com fórmula quebrada (`#REF!` e vizinhos) lidas como vazias — "
             "o texto do erro nunca vira conteúdo."
         )
+    for aba, quantas in sorted(resultado.historico.items()):
+        observacoes.append(
+            f"`{aba}`: {quantas} linha(s) são histórico — a pessoa tem registro mais recente na "
+            "mesma aba. O modelo carrega um por pessoa; as demais foram convertidas e estão em "
+            "`parqueado/`."
+        )
     ocultas = [leitura.title for leitura in resultado.leituras if leitura.hidden]
     if ocultas:
         observacoes.append(
@@ -1421,6 +1502,10 @@ def _emitir_relatorio(
 #: Destinos parqueados cujo motivo não é o de uma aba inteira. `employee_position`
 #: é o único: ele nasce de uma coluna da aba de cadastro, que vira template.
 _MOTIVO_EXTRA = {
+    "occupational_exam": (
+        "histórico: o template `hr_exam` carrega o exame vigente de cada pessoa, e estes são os "
+        "anteriores — convertidos, à espera de quem os carregue"
+    ),
     "employee_position": (
         "`app.file_import.type` não tem valor para posição; a vigência de cargo se cria uma a "
         "uma pela tela do colaborador"

@@ -360,3 +360,188 @@ def test_o_teto_e_o_dia_seguinte_a_ultima_competencia_fechada():
 
     assert (HOJE - date(2026, 7, 1)).days == limite
     assert (HOJE - date(2026, 6, 30)).days == limite + 1
+
+
+# ---------------------------------------------------------------------------
+# ASO — um exame por pessoa, e o modelo imprime o mais recente
+# ---------------------------------------------------------------------------
+ASO = TEMPLATES["hr_exam"]
+
+ATUAL_ASO: dict[Any, dict[str, Any]] = {
+    ANA: {
+        "registration_number": "1001",
+        "name": "Ana Personagem",
+        "hr_code": "RH-01",
+        "type": "periodic",
+        "performed_on": date(2025, 9, 2),
+        "valid_until": date(2026, 9, 2),
+        "result": "fit",
+    },
+    BRUNO: {"registration_number": "1002", "name": "Bruno Personagem", "hr_code": None},
+}
+
+
+def test_a_planilha_de_aso_intocada_nao_registra_exame_nenhum():
+    """Baixar e subir de volta não pode criar um exame por pessoa."""
+    resultado = validate(
+        ASO,
+        linhas(
+            {
+                "registration_number": "1001",
+                "hr_code": "RH-01",
+                "name": "Ana Personagem",
+                "type": "periodic",
+                "performed_on": date(2025, 9, 2),
+                "valid_until": date(2026, 9, 2),
+                "result": "fit",
+            }
+        ),
+        contexto(ATUAL_ASO),
+    )
+
+    assert [r.status for r in resultado] == ["unchanged"]
+
+
+def test_o_exame_novo_leva_a_linha_inteira():
+    """Meia linha nova não é um exame: tipo, data, validade e aptidão vão juntos."""
+    resultado = validate(
+        ASO,
+        linhas(
+            {
+                "registration_number": "1001",
+                "hr_code": "RH-01",
+                "name": "Ana Personagem",
+                "type": "periodic",
+                "performed_on": date(2026, 8, 20),
+                "valid_until": date(2027, 8, 20),
+                "result": "fit",
+            }
+        ),
+        contexto(ATUAL_ASO),
+    )
+
+    assert resultado[0].status == "ok"
+    assert resultado[0].values == {
+        "type": "periodic",
+        "performed_on": date(2026, 8, 20),
+        "valid_until": date(2027, 8, 20),
+        "result": "fit",
+    }
+
+
+def test_exame_anterior_ao_impresso_e_recusado():
+    """O modelo carrega o mais recente: uma data anterior entraria a cada reenvio.
+
+    Não é preciosismo de ordenação. A linha continuaria diferindo do que o modelo
+    imprime na rodada seguinte, e o mesmo arquivo criaria uma cópia por vez.
+    """
+    resultado = validate(
+        ASO,
+        linhas(
+            {
+                "registration_number": "1001",
+                "hr_code": "RH-01",
+                "name": "Ana Personagem",
+                "type": "pre_employment",
+                "performed_on": date(2024, 8, 15),
+                "valid_until": date(2025, 8, 15),
+                "result": "fit",
+            }
+        ),
+        contexto(ATUAL_ASO),
+    )
+
+    assert codigos(resultado[0]) == ["exame_anterior"]
+
+
+def test_exame_com_data_no_futuro_e_recusado():
+    resultado = validate(
+        ASO,
+        linhas(
+            {
+                "registration_number": "1002",
+                "name": "Bruno Personagem",
+                "type": "periodic",
+                "performed_on": date(2026, 12, 1),
+                "result": "fit",
+            }
+        ),
+        contexto(ATUAL_ASO),
+    )
+
+    assert codigos(resultado[0]) == ["data_no_futuro"]
+
+
+def test_validade_antes_da_realizacao_e_recusada():
+    resultado = validate(
+        ASO,
+        linhas(
+            {
+                "registration_number": "1002",
+                "name": "Bruno Personagem",
+                "type": "periodic",
+                "performed_on": date(2026, 8, 1),
+                "valid_until": date(2026, 7, 1),
+                "result": "fit",
+            }
+        ),
+        contexto(ATUAL_ASO),
+    )
+
+    assert codigos(resultado[0]) == ["validade_invalida"]
+
+
+def test_aso_vencido_entra_sem_reclamacao():
+    """Validade no passado é um fato do cadastro — é o que a lista existe para mostrar."""
+    resultado = validate(
+        ASO,
+        linhas(
+            {
+                "registration_number": "1002",
+                "name": "Bruno Personagem",
+                "type": "periodic",
+                "performed_on": date(2024, 3, 1),
+                "valid_until": date(2025, 3, 1),
+                "result": "fit",
+            }
+        ),
+        contexto(ATUAL_ASO),
+    )
+
+    assert resultado[0].status == "ok"
+
+
+def test_exame_sem_tipo_numa_linha_que_escreve_e_recusado():
+    resultado = validate(
+        ASO,
+        linhas(
+            {
+                "registration_number": "1002",
+                "name": "Bruno Personagem",
+                "type": "",
+                "performed_on": date(2026, 8, 1),
+                "result": "fit",
+            }
+        ),
+        contexto(ATUAL_ASO),
+    )
+
+    assert codigos(resultado[0]) == ["campo_obrigatorio"]
+
+
+def test_aptidao_fora_do_catalogo_e_recusada_antes_do_banco():
+    resultado = validate(
+        ASO,
+        linhas(
+            {
+                "registration_number": "1002",
+                "name": "Bruno Personagem",
+                "type": "periodic",
+                "performed_on": date(2026, 8, 1),
+                "result": "apto",
+            }
+        ),
+        contexto(ATUAL_ASO),
+    )
+
+    assert codigos(resultado[0]) == ["enum_invalido"]

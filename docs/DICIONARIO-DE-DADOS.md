@@ -1019,7 +1019,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 **Restrições**
 
 - `CHECK ((status = ANY (ARRAY['received'::text, 'validating'::text, 'validation_error'::text, 'processed'::text, 'discarded'::text])))`
-- `CHECK ((type = ANY (ARRAY['benefit'::text, 'cost_center'::text, 'employee'::text, 'folha'::text, 'hr_agreement'::text, 'hr_compensation'::text, 'hr_document'::text, 'hr_employee'::text, 'hr_leave'::text, 'hr_link'::text, 'hr_movement'::text, 'other'::text, 'payroll_charge'::text, 'roster'::text])))`
+- `CHECK ((type = ANY (ARRAY['benefit'::text, 'cost_center'::text, 'employee'::text, 'folha'::text, 'hr_agreement'::text, 'hr_compensation'::text, 'hr_document'::text, 'hr_employee'::text, 'hr_exam'::text, 'hr_leave'::text, 'hr_link'::text, 'hr_movement'::text, 'other'::text, 'payroll_charge'::text, 'roster'::text])))`
 
 **Policies**
 
@@ -1381,7 +1381,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 ## `app.occupational_exam`
 
-> DADO DE SAÚDE (LGPD art. 5º II). Sem diagnóstico, sem CID, sem descrição de restrição. Só aptidão e validade.
+> DADO DE SAÚDE (LGPD art. 5º II). Sem diagnóstico, sem CID, sem descrição de restrição. Só aptidão e validade. Importável pelo template `hr_exam` desde a migration 17, por quem tem o domínio `health`.
 
 *tabela — RLS ligada*
 

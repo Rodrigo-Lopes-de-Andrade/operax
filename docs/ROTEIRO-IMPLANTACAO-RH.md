@@ -12,7 +12,7 @@ por chat, e-mail ou repositório.
 |---|---|---|
 | 1 | Sync do Secullum rodou e o quadro está no sistema | a lista de Colaboradores abre com gente |
 | 2 | Você tem login com papel `owner`, `hr` ou `personnel` **no tenant do cliente** | o menu mostra "Administração" |
-| 3 | Os domínios sensíveis que a carga toca estão no seu usuário (`pii`, `compensation`) | as abas Dados pessoais e Remuneração aparecem num colaborador |
+| 3 | Os domínios sensíveis que a carga toca estão no seu usuário (`pii`, `compensation`, `health`) | as abas Dados pessoais, Remuneração e ASO aparecem num colaborador |
 | 4 | O bucket `imports` existe no projeto Supabase do cliente, privado | `POST /rh/imports` não responde 503 |
 | 5 | `cd backend && uv sync` roda na máquina da implantação | `python3 scripts/rh_carga_inicial.py --help` |
 
@@ -24,13 +24,14 @@ pessoa nova. O OperaX nunca cria colaborador a partir de planilha.
 
 ## Passo a passo
 
-**1. Baixe os três modelos.** Administração → Importação → escolha o tipo →
+**1. Baixe os quatro modelos.** Administração → Importação → escolha o tipo →
 "Baixar modelo". Um arquivo por tipo, todos no mesmo diretório:
 
 ```
 ~/implantacao/modelos/
   modelo-hr_link.xlsx
   modelo-hr_employee.xlsx
+  modelo-hr_exam.xlsx
   modelo-hr_compensation.xlsx
 ```
 
@@ -69,14 +70,20 @@ cliente. Registre e escale.
 - **seção 9, células que não puderam ser lidas** — valor fora do catálogo, data
   ilegível, período de férias pela metade. Cada uma é uma pergunta para o RH.
 
-**4. Suba os três arquivos, na ordem do nome.** Administração → Importação →
+**4. Suba os quatro arquivos, na ordem do nome.** Administração → Importação →
 tipo correspondente → "Conferir sem gravar" → leia o preview → "Confirmar".
 
 | Ordem | Arquivo | O que grava |
 |---|---|---|
 | 1º | `01-hr_link.xlsx` | o ID RH do cliente em `app.employee` |
 | 2º | `02-hr_employee.xlsx` | regime e CTPS |
-| 3º | `03-hr_compensation.xlsx` | a faixa salarial vigente |
+| 3º | `03-hr_exam.xlsx` | o ASO vigente: tipo, realização, validade e aptidão |
+| 4º | `04-hr_compensation.xlsx` | a faixa salarial vigente |
+
+O ASO é o que faz a coluna de próximos vencimentos responder. Ele carrega **um
+exame por pessoa** — o mais recente; se a planilha do cliente guarda histórico na
+mesma aba, os anteriores saem convertidos em `parqueado/occupational_exam.csv` e
+o relatório diz quantos foram.
 
 O preview mostra erro por linha **antes** de gravar, e linha que já está como o
 banco aparece como "já estava assim" — reenviar não reescreve ninguém.
@@ -120,10 +127,10 @@ certa.
 - **Não altera o que é do sync** — nome, admissão, unidade, status. Se a
   planilha discorda do Secullum, quem está certo é o Secullum, e a divergência
   vai para o relatório.
-- **Não carrega documento, ASO, afastamento, movimentação nem acordo.** Esses
-  quatro estão convertidos e parqueados: `app.document` e
-  `app.financial_agreement` exigem o arquivo que uma planilha não tem, e
-  `app.leave_period` e `app.workforce_movement` ainda não concedem escrita ao
-  painel. O relatório diz, destino por destino, o que falta.
+- **Não carrega documento, afastamento, movimentação nem acordo.** Os quatro
+  estão convertidos e parqueados: `app.document` e `app.financial_agreement`
+  exigem o arquivo que uma planilha não tem, e `app.leave_period` e
+  `app.workforce_movement` ainda não concedem escrita ao painel. O relatório diz,
+  destino por destino, o que falta.
 - **Não substitui a conversa com o RH.** As seções 6, 7 e 9 do relatório são
   pauta de reunião, não log.

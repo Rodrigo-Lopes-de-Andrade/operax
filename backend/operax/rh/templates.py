@@ -12,13 +12,15 @@ second answer to "may the customer change this?", and the two would drift on the
 first change. Locking, the "origem: Secullum" note and the enum dropdown are all
 derived, never typed twice.
 
-WHY ONLY THREE TEMPLATES
-`app.file_import` accepts seven HR types since migration 16, and four of them
+WHY ONLY FOUR TEMPLATES
+`app.file_import` accepts eight HR types since migration 17, and four of them
 have no complete round trip yet:
 
   hr_document  — `app.document.storage_path` is NOT NULL, and a spreadsheet
                  carries no file. The document arrives with its upload, not with
-                 a row.
+                 a row. It answered for the occupational exam until migration 17,
+                 which is how the health domain ended up locked out by a
+                 constraint on a table it does not use.
   hr_agreement — `app.financial_agreement.document_id` is NOT NULL by explicit
                  decision ("desconto sem autorização documentada não se
                  registra"), and again the authorisation is a file.
@@ -59,6 +61,10 @@ class Strategy(StrEnum):
     #: Close the open compensation band and open the next one. Correcting is
     #: revoking and creating, never editing in place.
     COMPENSATION_VERSION = "compensation_version"
+    #: Record one more occupational exam. Nothing is closed — an exam has no
+    #: `effective_to`; it has a date it was taken and a date it stops covering
+    #: the person, and both belong to the row that carries them.
+    EXAM_INSERT = "exam_insert"
 
 
 @dataclass(frozen=True, slots=True)
@@ -110,6 +116,18 @@ class Template:
     #: The sensitive domain the whole template belongs to. Whoever lacks it does
     #: not download the file, because the file carries the data (SPEC §8).
     domain: Domain | None = None
+
+    @property
+    def writes_whole_row(self) -> bool:
+        """A linha vai inteira, ou não vai.
+
+        `EMPLOYEE_UPDATE` grava só o que mudou, e célula em branco quer dizer
+        "não tenho o que dizer aqui" — de quem ainda não tem CTPS, por exemplo.
+        As outras duas criam um **registro novo**, e ali uma célula em branco é
+        um valor: metade vinda da planilha e metade herdada do pré-preenchimento
+        é um exame que nunca aconteceu, com a validade de outro.
+        """
+        return self.strategy is not Strategy.EMPLOYEE_UPDATE
 
     def is_locked(self, column: Column) -> bool:
         """Printed and protected: the sync owns it, or it identifies the line."""
@@ -183,6 +201,29 @@ TEMPLATES: dict[str, Template] = {
         required_columns=("salary",),
         domain=Domain.COMPENSATION,
     ),
+    "hr_exam": Template(
+        type="hr_exam",
+        layout_version="hr_exam.v1",
+        sheet_title="ASO",
+        strategy=Strategy.EXAM_INSERT,
+        columns=(
+            *_EMPLOYEE_IDENTITY,
+            Column("employee", "hr_code", "ID RH"),
+            Column("occupational_exam", "type", "Tipo"),
+            Column("occupational_exam", "performed_on", "Realizado em", "date"),
+            Column("occupational_exam", "valid_until", "Vence em", "date"),
+            Column("occupational_exam", "result", "Resultado"),
+        ),
+        key_columns=("registration_number", "hr_code"),
+        # As duas colunas NOT NULL da tabela. `valid_until` fica de fora porque
+        # exame demissional não vence, e `result` porque um exame recém-realizado
+        # espera laudo — as duas ausências são estados reais, não esquecimento.
+        required_columns=("type", "performed_on"),
+        # Aptidão e validade são dado de saúde inteiro: quem não tem o domínio
+        # não baixa o arquivo. Diagnóstico, CID e descrição de restrição não têm
+        # coluna aqui porque não têm coluna em lugar nenhum (regra 10).
+        domain=Domain.HEALTH,
+    ),
 }
 
 
@@ -207,7 +248,12 @@ SEM_TEMPLATE: dict[str, str] = {
 # importa o driver, e o teste que confere estas colunas contra o schema real roda
 # no `make db-test`, fora do venv do backend. SQL que não pode ser conferido
 # contra o banco é SQL que só falha em produção.
-_ALIAS = {"employee": "e", "employee_pii": "p", "employee_compensation": "c"}
+_ALIAS = {
+    "employee": "e",
+    "employee_pii": "p",
+    "employee_compensation": "c",
+    "occupational_exam": "x",
+}
 
 _FROM = {
     Strategy.EMPLOYEE_UPDATE: """
@@ -222,6 +268,22 @@ _FROM = {
     from app.employee e
     left join app.employee_compensation c
            on c.employee_id = e.id and c.effective_to is null
+    where e.status <> 'desligado'
+    order by e.name
+""",
+    # Um exame por pessoa: o mais recente. A planilha do cliente traz histórico e
+    # o template não é o lugar dele — aqui se responde "como está a saúde
+    # ocupacional desta pessoa hoje", que é a pergunta que a lista de vencimentos
+    # faz. `distinct on` porque o `order by` já ordena por pessoa e data.
+    Strategy.EXAM_INSERT: """
+    from app.employee e
+    left join lateral (
+      select o.type, o.performed_on, o.valid_until, o.result
+      from app.occupational_exam o
+      where o.employee_id = e.id
+      order by o.performed_on desc, o.created_at desc
+      limit 1
+    ) x on true
     where e.status <> 'desligado'
     order by e.name
 """,

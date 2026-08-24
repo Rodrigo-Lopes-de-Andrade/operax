@@ -258,6 +258,10 @@ def escrever_planilha(caminho: Path) -> Path:
         ["MATRÍCULA", "TIPO", "DATA", "VENCIMENTO", "RESULTADO", "RESTRIÇÃO"],
         [
             [PESSOAS[0][0], "PERIÓDICO", date(2025, 9, 2), HOJE + timedelta(days=9), "APTO", ""],
+            # O exame anterior da mesma pessoa: a aba guarda histórico, e o
+            # modelo carrega um exame por pessoa. Este tem de ser parqueado, não
+            # sobrescrever a célula do mais recente.
+            [PESSOAS[0][0], "ADMISSIONAL", date(2024, 8, 15), date(2025, 8, 15), "APTO", ""],
             [
                 PESSOAS[1][0],
                 "ADMISSIONAL",
@@ -346,17 +350,29 @@ def escrever_planilha(caminho: Path) -> Path:
     return caminho
 
 
-def escrever_modelos(diretorio: Path, *, tenant_id: UUID = TENANT) -> Path:
-    """Os três modelos, como a tela de Importação os entregaria.
+def escrever_modelos(
+    diretorio: Path,
+    *,
+    tenant_id: UUID = TENANT,
+    gravado: dict[str, dict[str, Any]] | None = None,
+) -> Path:
+    """Os modelos, como a tela de Importação os entregaria.
 
-    Vazios nas colunas do RH e preenchidos nas do sistema — que é o estado de
-    quem acabou de rodar o sync e ainda não tem nada de RH gravado.
+    Por padrão vazios nas colunas do RH e preenchidos nas do sistema — o estado
+    de quem acabou de rodar o sync e ainda não tem nada de RH gravado.
+
+    `gravado` põe valor nas colunas do RH, por matrícula: é o cliente que **já
+    tem** dado no sistema, que é o caso em que o pré-preenchimento pode se
+    misturar com a planilha, se o conversor deixar.
     """
     diretorio.mkdir(parents=True, exist_ok=True)
     from datetime import datetime
 
     for tipo, template in TEMPLATES.items():
-        linhas = [{"registration_number": matricula, "name": nome} for matricula, nome in PESSOAS]
+        linhas = [
+            {"registration_number": matricula, "name": nome, **(gravado or {}).get(matricula, {})}
+            for matricula, nome in PESSOAS
+        ]
         dados = build(
             template,
             linhas,

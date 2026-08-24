@@ -14,6 +14,7 @@ certas.
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -138,7 +139,7 @@ class FakeDB:
         if "update app.employee set" in sql or "insert into app.employee_pii" in sql:
             self._gravar(params)
             return [{"id": params["employee_id"]}]
-        if "app.employee_compensation" in sql:
+        if "app.employee_compensation" in sql or "app.occupational_exam" in sql:
             self._gravar(params)
             return [{"id": uuid4()}]
         return []
@@ -375,6 +376,54 @@ def test_tipo_sem_caminho_de_volta_responde_501_com_o_motivo(
 
     assert resposta.status_code == 501
     assert "policy" in resposta.json()["detail"]
+
+
+def test_o_aso_vai_do_modelo_ao_exame_gravado(client: TestClient, issue_token, db, store):
+    """O caminho que a migration 17 abriu, ponta a ponta.
+
+    Vale o teste inteiro e não só o 200 do download: era exatamente aqui que a
+    trilha parava, e "o tipo existe" não é a mesma afirmação que "o exame é
+    gravado com a aptidão que veio na célula".
+    """
+    estado = db()
+    modelo = baixar(client, issue_token, "hr_exam")
+    assert modelo.status_code == 200
+
+    preenchido = editar(
+        modelo.content,
+        {
+            2: {
+                "Tipo": "periodic",
+                "Realizado em": date(2026, 8, 1),
+                "Vence em": date(2027, 8, 1),
+                "Resultado": "fit",
+            },
+            3: {"Tipo": "periodic", "Realizado em": date(2026, 8, 2), "Resultado": "apto"},
+        },
+    )
+    preview = enviar(client, issue_token, preenchido, "hr_exam").json()
+
+    assert preview["counts"] == {"total": 5, "ok": 1, "unchanged": 3, "error": 1}
+    assert preview["lines"][1]["errors"][0]["code"] == "enum_invalido"
+
+    confirmado = client.post(
+        f"/rh/imports/{preview['import_id']}/confirm", headers=auth(issue_token)
+    ).json()
+    assert confirmado["applied"] == 1
+
+    gravado = next(s for s in estado.statements if "insert into app.occupational_exam" in s[0])
+    assert gravado[1]["result"] == "fit"
+    assert gravado[1]["performed_on"] == date(2026, 8, 1)
+    # E a trilha aponta para a tabela certa, não para o colaborador.
+    assert any(a["entity"] == "occupational_exam" for a in estado.audit)
+
+
+def test_sem_o_dominio_de_saude_o_modelo_de_aso_nao_desce(
+    client: TestClient, issue_token, db, store
+):
+    db(dominios=False)
+
+    assert baixar(client, issue_token, "hr_exam").status_code == 403
 
 
 def test_tipo_inexistente_e_404(client: TestClient, issue_token, db, store):

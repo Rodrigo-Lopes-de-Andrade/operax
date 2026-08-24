@@ -12,6 +12,7 @@ escrever o que a regra proíbe (CID, restrição, conta bancária).
 from __future__ import annotations
 
 import inspect
+from datetime import date
 from pathlib import Path
 from uuid import UUID
 
@@ -279,14 +280,45 @@ def test_ferias_em_matriz_vira_formato_longo(ensaio: tuple[Resultado, Path]) -> 
 
 def test_aso_em_portugues_vira_o_vocabulario_do_banco(ensaio: tuple[Resultado, Path]) -> None:
     _, saida = ensaio
-    linhas = (
+    template = get_template("hr_exam")
+    assert template is not None
+    lido = parse(
+        next(saida.glob("*-hr_exam.xlsx")).read_bytes(), template=template, tenant_id=TENANT
+    )
+    por_matricula = {str(r.values["registration_number"]): r.values for r in lido.rows}
+
+    assert por_matricula[PESSOAS[0][0]]["type"] == "periodic"
+    assert por_matricula[PESSOAS[1][0]]["type"] == "pre_employment"
+    # "APTO COM RESTRIÇÃO" é aptidão e cabe; a descrição da restrição não.
+    assert por_matricula[PESSOAS[2][0]]["result"] == "fit_with_restriction"
+    assert "escada" not in _texto_de_tudo(saida)
+
+
+def test_o_historico_de_aso_e_parqueado_em_vez_de_sobrescrever(
+    ensaio: tuple[Resultado, Path],
+) -> None:
+    """A pessoa tem dois exames na aba, e o modelo carrega um por pessoa.
+
+    Sem a redução, as duas linhas escreveriam na mesma célula e a última lida
+    ganharia — em silêncio, pela ordem da planilha. O que vence é a data maior, e
+    o anterior sai convertido no .csv em vez de sumir.
+    """
+    resultado, saida = ensaio
+    assert resultado.historico.get("VENCIMENTO ASO") == 1
+
+    historico = (
         (saida / "parqueado" / "occupational_exam.csv").read_text(encoding="utf-8").splitlines()
     )
+    anterior = f"{PESSOAS[0][0]},pre_employment,2024-08-15"
+    assert any(linha.startswith(anterior) for linha in historico)
 
-    assert f"{PESSOAS[0][0]},periodic," in linhas[1]
-    assert any("fit_with_restriction" in linha for linha in linhas)
-    # "APTO COM RESTRIÇÃO" é aptidão e cabe; a descrição da restrição não.
-    assert "escada" not in "\n".join(linhas)
+    template = get_template("hr_exam")
+    assert template is not None
+    lido = parse(
+        next(saida.glob("*-hr_exam.xlsx")).read_bytes(), template=template, tenant_id=TENANT
+    )
+    por_matricula = {str(r.values["registration_number"]): r.values for r in lido.rows}
+    assert str(por_matricula[PESSOAS[0][0]]["performed_on"]).startswith("2025-09-02")
 
 
 def test_valor_fora_do_catalogo_nao_derruba_a_linha_mas_aparece(
@@ -507,7 +539,8 @@ def test_a_linha_de_comando_devolve_zero_quando_o_balanco_fecha(tmp_path: Path) 
     assert sorted(p.name for p in saida.glob("*.xlsx")) == [
         "01-hr_link.xlsx",
         "02-hr_employee.xlsx",
-        "03-hr_compensation.xlsx",
+        "03-hr_exam.xlsx",
+        "04-hr_compensation.xlsx",
     ]
 
 
@@ -524,3 +557,50 @@ def test_a_linha_de_comando_recusa_caminho_que_nao_existe(tmp_path: Path) -> Non
     )
 
     assert codigo == 2
+
+
+def test_o_exame_nao_herda_metade_do_pre_preenchimento(tmp_path: Path) -> None:
+    """A linha vai inteira: o que a planilha não disse é apagado, não herdado.
+
+    O caso que produziu isto: o cliente tinha um periódico de setembro gravado, a
+    planilha trazia um exame de mudança de função em fevereiro sem validade, e o
+    modelo saiu com a data de fevereiro e a validade de setembro — um exame que
+    nunca existiu, com a validade de outro. Numa coluna de vencimentos, é a data
+    errada na tela de quem persegue prazo de ASO.
+    """
+    planilha = escrever_planilha(tmp_path / "cliente.xlsx")
+    modelos = escrever_modelos(
+        tmp_path / "modelos",
+        gravado={
+            matricula: {
+                "type": "periodic",
+                "performed_on": date(2025, 9, 10),
+                "valid_until": date(2026, 9, 10),
+                "result": "fit",
+            }
+            for matricula in (PESSOAS[3][0], PESSOAS[4][0])
+        },
+    )
+    saida = tmp_path / "saida"
+    converter(planilha=planilha, modelos=modelos, saida=saida)
+
+    template = get_template("hr_exam")
+    assert template is not None
+    lido = parse(
+        next(saida.glob("*-hr_exam.xlsx")).read_bytes(), template=template, tenant_id=TENANT
+    )
+    por_matricula = {str(r.values["registration_number"]): r.values for r in lido.rows}
+
+    # A planilha traz tipo, data e aptidão para esta pessoa — e nenhuma validade.
+    sem_validade = por_matricula[PESSOAS[3][0]]
+    assert str(sem_validade["performed_on"]).startswith("2026-02-10")
+    assert sem_validade["type"] == "job_change"
+    assert sem_validade["result"] == "fit"
+    assert sem_validade["valid_until"] is None
+
+    # E aqui o tipo da planilha ("EXAME DE RETORNO") não está no catálogo: a
+    # célula fica vazia e o preview recusa por campo obrigatório. Herdar o
+    # `periodic` que estava gravado seria inventar o tipo do exame.
+    sem_tipo = por_matricula[PESSOAS[4][0]]
+    assert sem_tipo["type"] is None
+    assert str(sem_tipo["performed_on"]).startswith("2026-06-01")
