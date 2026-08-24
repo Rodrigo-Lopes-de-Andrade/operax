@@ -48,6 +48,17 @@ class Settings(BaseSettings):
     langsmith_project: str | None = None
 
     @property
+    def dashboard_url(self) -> str:
+        """De onde sai o link profundo do relatório.
+
+        É a primeira origem de `CORS_ORIGINS` — que é, por definição, a origem
+        exata do painel. Uma variável nova para a mesma coisa seria uma variável
+        a mais para esquecer num dos dois painéis de deploy, e um link quebrado
+        numa mensagem de WhatsApp não tem como ser corrigido depois de enviado.
+        """
+        return self.cors_origins[0]
+
+    @property
     def jwt_issuer(self) -> str:
         """Issuer Supabase Auth stamps on the access token of this project."""
         return f"{self.supabase_url.rstrip('/')}/auth/v1"

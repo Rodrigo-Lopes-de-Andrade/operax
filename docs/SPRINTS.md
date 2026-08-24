@@ -362,7 +362,7 @@ sintético. O teto continua sendo medido no S8.
 
 ---
 
-## S6 — Alertas e relatório consolidado · 5–7 dias
+## S6 — Alertas e relatório consolidado · 5–7 dias · esteira entregue, ⚠️ G4 na frente
 
 **Objetivo:** o produto começa a falar com o gestor.
 
@@ -387,6 +387,52 @@ próprio Owner.
 - Custo por mensagem sendo registrado.
 
 **⚠️ G5**
+
+---
+
+### Andamento em 24/08/2026 — a esteira existe e não entrega nada
+
+**O que foi entregue.** `ciclo.py` monta `app.report_cycle` por unidade e reserva
+os eventos numa transação; `outbox.py` enfileira em `app.alert_queue` com chave de
+idempotência; `sender.py` consome com `for update skip locked`, backoff e
+descarte; `provedores/base.py` é o contrato `(template, variáveis, destino)`.
+
+**"Um desvio em exatamente um ciclo" é uma cláusula, não uma convenção.** A
+reserva é `update ... where report_cycle_id is null` — quem já está num ciclo não
+entra em outro, e reservar duas vezes não move ninguém. E ela **não tem piso de
+data**: um desvio detectado tarde é de antes do início do ciclo e tem de entrar,
+porque bloqueá-lo derrubaria justamente as ocorrências que o gestor ainda não
+ouviu. Daí a frase obrigatória — *"Inclui 3 ocorrências de dias anteriores
+detectadas após o último envio"* — que existe porque o painel filtra por data do
+fato e o relatório agrupa por ciclo: **os dois números estão certos e são
+diferentes**, e sem a declaração o gestor conclui que o sistema está errado.
+
+**O gate G4 é perguntado, não lembrado.** A regra 8 diz que nenhum alerta sai
+antes de a sombra fechar. Isso virou uma pergunta ao banco: *este cliente já teve
+alguma execução do motor concluída em `mode = 'production'`?* Enquanto o motor só
+rodou em sombra, o remetente reserva o lote, registra a tentativa com o motivo em
+`app.alert_sent` e **não entrega nada**. Promover o motor é o que abre a porta — e
+promover o motor é exatamente o que "a sombra fechou" quer dizer. Um teste roda o
+remetente contra as duas respostas.
+
+**O destino em claro na fila, hasheado no log.** `alert_queue.destination` guarda
+o número porque o remetente precisa discar; `alert_sent.destination_hash` guarda
+só o hash, porque um log de entrega de longo prazo não precisa do telefone de
+ninguém para ser útil. E `cost_cents` entra desde o primeiro envio.
+
+**Prova.** `scripts/93_teste_ciclo.py` entrou no `make db-test` e faz duas coisas:
+compila **as 15 instruções fixas** dos três módulos contra o schema real — `prepare`
+pega coluna errada e join inválido antes de a primeira mensagem sair — e roda o
+cenário funcional da reserva, com sete desvios, cada um por um caso: o do período,
+o detectado tarde, o já reservado, o de sombra, o revogado e o de uma unidade sem
+regra. Mais 21 asserções no pytest.
+
+**O que falta:** as três integrações de WhatsApp e o SMTP. Elas recebem credencial
+**por tenant**, do Supabase Vault via `app.integration_secret`, e nenhum tenant
+tem uma configurada — montar um cliente HTTP contra uma API que não se consegue
+exercitar seria código que só falha na primeira mensagem real. Enquanto isso o
+`NullProvider` registra o que teria saído, que é o mesmo comportamento que o gate
+G4 impõe de qualquer forma.
 
 ---
 

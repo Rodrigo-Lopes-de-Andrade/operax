@@ -202,3 +202,19 @@ def test_a_supersessao_preserva_empresa_e_unidade_do_fato():
     """Substituir não é uma chance de reescrever onde o fato aconteceu."""
     assert "d.company_id, d.unit_id" in revogacao._SUPERSEDE_SQL
     assert "d.id" in revogacao._SUPERSEDE_SQL.split("supersede_id")[1]
+
+
+# ---------------------------------------------------------------------------
+# Cadência
+# ---------------------------------------------------------------------------
+def test_o_escopo_da_execucao_sai_da_janela_e_nao_de_uma_flag():
+    """`app.detection_run.scope` é o que `fn_detection_health` olha.
+
+    A migration 13 separou as duas cadências — incremental no dia corrente,
+    retroativa em sete dias — e a saúde do motor é medida por esse rótulo. Um
+    `--dias 1` rotulado `backfill` faria a medição dizer que a passada retroativa
+    rodou quando ela não rodou, que é o pior tipo de sinal verde.
+    """
+    assert "%(scope)s" in deteccao._OPEN_RUN_SQL
+    assert "scope" in deteccao._OPEN_RUN_SQL.replace("%(scope)s", "")
+    assert "%(scope)s" in revogacao._OPEN_RUN_SQL

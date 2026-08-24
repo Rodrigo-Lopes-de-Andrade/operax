@@ -1,5 +1,5 @@
 .PHONY: help dev dev-backend dev-frontend test lint db-test e2e build \
-        sync motor revogacao sender dicionario carga-inicial
+        sync motor revogacao ciclo sender dicionario carga-inicial
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -52,7 +52,10 @@ motor:          ## jornada + detecção — MODO=sombra (padrão) | producao
 revogacao:      ## reconcilia indícios com batidas corrigidas na origem (retroativo)
 	cd backend && uv run python -m operax.motor.revogacao --modo=$(or $(MODO),producao) --dias=$(or $(DIAS),7)
 
-sender:         ## consome app.alerta_fila
+ciclo:          ## monta o ciclo de relatório por unidade e enfileira (não envia)
+	cd backend && uv run python -m operax.alertas
+
+sender:         ## consome app.alert_queue — não entrega antes do gate G4
 	cd backend && uv run python -m operax.alertas.sender
 
 carga-inicial:  ## converte a planilha de RH do cliente em templates (implantação)

@@ -47,8 +47,8 @@ REASON_SUPERSEDED = "batida corrigida na origem: o indício mudou de tamanho dep
 
 _OPEN_RUN_SQL = """
 insert into app.detection_run
-  (tenant_id, mode, period_start, period_end, engine_version)
-values (%(tenant_id)s, %(mode)s, %(start)s, %(end)s, %(engine_version)s)
+  (tenant_id, mode, period_start, period_end, engine_version, scope)
+values (%(tenant_id)s, %(mode)s, %(start)s, %(end)s, %(engine_version)s, %(scope)s)
 returning id
 """
 
@@ -116,7 +116,14 @@ async def reconcile(
 
     async with tenant_scope(context) as scope:
         await scope.execute(
-            _OPEN_RUN_SQL, {**window, "engine_version": f"{ENGINE_VERSION}+revogacao"}
+            _OPEN_RUN_SQL,
+            {
+                **window,
+                "engine_version": f"{ENGINE_VERSION}+revogacao",
+                # Sempre retroativa: reconciliar o dia corrente com ele mesmo não
+                # tem o que achar, porque a correção de batida chega depois.
+                "scope": "backfill",
+            },
         )
         run_id = (await scope.fetchone())["id"]
 

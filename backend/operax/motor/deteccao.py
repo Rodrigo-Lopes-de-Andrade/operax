@@ -87,8 +87,8 @@ MODES = {
 
 _OPEN_RUN_SQL = """
 insert into app.detection_run
-  (tenant_id, mode, period_start, period_end, engine_version)
-values (%(tenant_id)s, %(mode)s, %(start)s, %(end)s, %(engine_version)s)
+  (tenant_id, mode, period_start, period_end, engine_version, scope)
+values (%(tenant_id)s, %(mode)s, %(start)s, %(end)s, %(engine_version)s, %(scope)s)
 returning id
 """
 
@@ -182,7 +182,16 @@ async def detect(
     window = {"start": start, "end": end}
     async with tenant_scope(context) as scope:
         await scope.execute(
-            _OPEN_RUN_SQL, {**window, "mode": mode, "engine_version": ENGINE_VERSION}
+            _OPEN_RUN_SQL,
+            {
+                **window,
+                "mode": mode,
+                "engine_version": ENGINE_VERSION,
+                # Derivado da janela, e não de uma flag ao lado dela: um `--dias 1`
+                # rotulado `backfill` faria `fn_detection_health` medir a cadência
+                # errada, e o rótulo é a única coisa que ela tem para olhar.
+                "scope": "incremental" if start == end else "backfill",
+            },
         )
         run = await scope.fetchone()
         run_id = run["id"]
