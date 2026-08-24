@@ -379,23 +379,50 @@ DDL bem-sucedido seguido de `select 1/0`, e o DDL não sobreviveu. Aplicar 11b p
 `scripts/sb_sql.sh` é tudo-ou-nada — **não existe produção meio renomeada** por
 esse caminho.
 
-#### O que continua sem prova, e por quê
+#### A fronteira por HTTP, provada no PostgREST de verdade
 
-O PostgREST **por HTTP** não foi exercitado: revelar a anon key do projeto foi
-bloqueado, e não foi contornado. O que deu para provar sem ela:
+`scripts/provar_postgrest.sh <ref>`, encadeado como passo 8 do ensaio quando
+`SUPABASE_PUBLISHABLE_KEY` e `SUPABASE_SECRET_KEY` estão no ambiente. As suítes
+97/98/99 provam a RLS **dentro** do banco, com `set local role`. Este prova o
+caminho que o navegador percorre de fato: Kong, a chave de API, o GoTrue
+emitindo o JWT, o PostgREST resolvendo o role e a view rodando como o usuário.
 
-- `db_schema` do PostgREST é `public,graphql_public` **nos dois projetos** — lido
-  pela Management API. É a exigência do CLAUDE.md, verificada e não presumida.
-- A suíte 98 roda com `set local role authenticated`, que é o mesmo role que o
-  PostgREST assume.
-- E roda **também** na forma em que o PostgREST entrega o claim. `auth.uid()` é
-  um `coalesce` de dois braços: `request.jwt.claim.sub` (achatado) e
-  `request.jwt.claims ->> 'sub'` (JSON). As suítes usam o primeiro; o PostgREST
-  real usa o segundo. O ensaio converte as cinco claims e roda as duas formas —
-  antes disso, o braço que produção usa nunca tinha sido testado.
+O cenário não é digitado ali — é **extraído** de
+`scripts/98_teste_isolamento_tenant.sql`, para não existirem duas versões dele.
+Os quatro usuários são criados no Auth de verdade (a Admin API aceita `id` fixo,
+então os UUIDs da suíte são reaproveitados) e fazem login por senha.
 
-Falta, e só a anon key destrava: um `GET` de verdade contra `/rest/v1/`, com e
-sem sessão.
+| | |
+|---|---|
+| `anon` com a chave publicável, sem sessão | **401** nas quatro views |
+| sem `apikey` nenhuma | 401 |
+| `app`, `secullum`, `util` via `Accept-Profile` — **com a chave de serviço** | **406**, "Only the following schemas are exposed: public, graphql_public" |
+| `app.mv_deviation_day` | 404, fora do schema cache |
+| owner A / owner B / supervisor A | cada um só o seu recorte, conferido por nome |
+| owner A pedindo `tenant_id=eq.<B>` | 0 linhas — a policy não confia no filtro do cliente |
+| `vw_employee?select=cpf` | 400 |
+| `fn_kpi_period` com sessão / sem sessão | 200 / 401 |
+
+**Duas coisas que só apareceram por HTTP:**
+
+1. **`service_role` recebe 403 nas views de `public`**, com a dica "GRANT SELECT
+   ON app.unit TO service_role". Não é defeito: é o `security_invoker` fazendo
+   exatamente o que promete — a view roda como quem chama, e `service_role` não
+   tem grant nas tabelas de `app`. A chave-mestra não atravessa a superfície
+   pública. Vale saber antes de alguém perder uma tarde achando que é bug.
+2. **A superfície pública é somente leitura por acidente, não por política.**
+   `authenticated` **tem** grant de insert nas views — a ACL é `arwdDxtm`, herdada
+   do privilégio default do Supabase em `public`. O que barra a escrita não é
+   esse grant nem a RLS: é que nenhuma das oito views seleciona de uma relação
+   só, e o Postgres recusa antes de consultar policy alguma. No dia em que
+   alguém publicar em `public` uma view de tabela única, ela nasce gravável pelo
+   navegador. Por isso a asserção do script é sobre a causa — "nenhuma view de
+   `public` é gravável" — e não sobre o código de erro.
+
+E o que já estava provado sem as chaves continua valendo: `db_schema` é
+`public,graphql_public` nos dois projetos, e a suíte 98 roda também na forma em
+que o PostgREST entrega o claim (`auth.uid()` é um `coalesce` de dois braços, e
+as suítes só dirigiam o braço que produção não usa).
 
 ### Fase 3 — janela
 

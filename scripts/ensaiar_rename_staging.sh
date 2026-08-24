@@ -108,5 +108,14 @@ else
   falhou=1
 fi
 
+passo "8. a fronteira por HTTP, no PostgREST de verdade"
+# Só com as duas chaves do projeto em mão. Sem elas o ensaio segue válido — só
+# não alcança Kong, GoTrue nem o PostgREST, que é onde o navegador vive.
+if [ -n "${SUPABASE_PUBLISHABLE_KEY:-}" ] && [ -n "${SUPABASE_SECRET_KEY:-}" ]; then
+  ./scripts/provar_postgrest.sh "$STG" | sed -n '/=== 5/,$p' || falhou=1
+else
+  echo "  pulado: defina SUPABASE_PUBLISHABLE_KEY e SUPABASE_SECRET_KEY do staging"
+fi
+
 [ "$falhou" -eq 0 ] && echo -e "\n=== ENSAIO EM PROJETO REAL OK ===" \
                     || { echo -e "\n=== ENSAIO EM PROJETO REAL FALHOU ==="; exit 1; }
