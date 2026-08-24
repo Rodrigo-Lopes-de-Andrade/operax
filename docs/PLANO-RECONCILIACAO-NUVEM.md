@@ -264,18 +264,65 @@ token de conta válido, e a Management API aceita SQL com ele.
 
 ### Fase 2 — provar a fusão, duas vezes
 
-Primeiro num Postgres descartável, depois em staging. São ensaios diferentes: o
-descartável prova o SQL; staging prova o resto do Supabase — PostgREST, Auth,
-extensões, grants, o `security_invoker` valendo de verdade.
+**Primeiro ensaio: fechado em 22/08/2026.** Num Postgres descartável, contra uma
+cópia fiel de produção. Reproduzível por `scripts/ensaiar_rename_nuvem.sh <ref>`.
 
-- Escrever a migration de rename a partir do que o dump mostrar, usando
-  `scripts/rename_map.py` como mapa canônico.
-- Aplicar baseline + 16 migrations + rename no descartável.
-- **Verificar:** `make db-test` verde, e nenhuma tabela duplicada
-  (colaborador e app.employee coexistindo).
-- Repetir em **staging** e apontar o dashboard deste repositório para lá.
-- **Verificar:** a tela abre contra um Supabase de verdade, com a RLS decidindo
-  o escopo — não contra o stack local.
+A migration é `supabase/migrations/20260815101150_11b_rename_pt_en.sql`, e ela é
+**gerada**, não digitada: `scripts/gerar_rename_nuvem.py` confronta o histórico
+de migration da própria nuvem — que guarda as doze migrations compartilhadas na
+grafia em português — com os dois catálogos lidos pelo mesmo código. São 353
+identificadores pareados um a um, e a única ambiguidade é `papel`, que é `role`
+como coluna e `user_role` como tipo.
+
+**O timestamp cai entre a 11 e a 12 por necessidade.** As migrations 12 a 15
+citam nomes em inglês; um rename depois delas deixaria a 12 encontrar
+app.jornada_dia e criar uma segunda tabela ao lado — o desfecho que a migration
+existe para evitar.
+
+Resultado do ensaio, contra o schema de produção mais as 69 linhas de
+configuração:
+
+| | |
+|---|---|
+| 11b aplica | sem erro |
+| 12 a 15 aplicam em cima | sem erro |
+| 97 regras de alerta e cadência | OK |
+| 98 isolamento multi-tenant (2 tenants × 4 papéis) | OK |
+| 99 verificação estrutural de RLS | OK |
+| catálogo resultante × alvo | **idêntico** em 9 espécies |
+
+Idêntico quer dizer 45 tabelas, 513 colunas, 24 funções, 9 views, 64 policies,
+180 índices, 241 constraints, 8 triggers e 2 enums com os mesmos rótulos. E num
+banco que já está em inglês a migration não faz nada: `make db-test` segue verde
+com as 17 migrations.
+
+#### O que o ensaio encontrou, e que a leitura não teria encontrado
+
+Cada bloco da migration existe por uma armadilha que só apareceu ao rodar:
+
+- **O alias de uma view não segue o rename.** O corpo segue, porque é parse
+  tree; o nome da coluna que ela entrega é texto. Sessenta colunas de saída
+  precisaram de rename, ou vw_deviation_by_employee_day continuaria devolvendo
+  `colaborador_id` ao frontend.
+- **Pior: seis corpos de view filtram por VALOR.** `status = 'ativo'` é dado, não
+  identificador, e não segue. Depois da tradução do dado essas views devolviam
+  **zero linha** — sem erro, só tela vazia.
+- **Renomear check constraint não muda o que ela aceita**, e o nome nem sempre
+  muda: `deviation_event_status_check` se chama igual dos dois lados enquanto
+  lista 'ativo' de um e 'active' do outro. Trinta e cinco caem antes da tradução
+  do dado e voltam depois, porque `add constraint` valida as linhas na hora.
+- **`create or replace` recusa trocar nome de parâmetro**, e quatro helpers
+  `util.pode_ver_*` trocam. Derrubá-los também é recusado: 57 policies os citam
+  no predicado. As duas variantes ficam no arquivo e um `if` escolhe.
+- **`string_to_array('', ',')` devolve array vazio**, e `array_length` dele é
+  `null` — a guarda por aridade nunca casava com função sem parâmetro, e quatro
+  helpers escapavam em silêncio.
+
+#### Segundo ensaio: em staging, e ainda não feito
+
+O que um Postgres descartável não prova: PostgREST, Auth, os grants como o
+Supabase os aplica, e o `security_invoker` valendo de verdade contra a anon key.
+Isso só o projeto `db-test` prova, e exige DDL nele.
 
 ### Fase 3 — janela
 
