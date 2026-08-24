@@ -49,7 +49,16 @@ export default defineConfig({
   // the session check comes back empty and the seeded tests skip themselves.
   webServer: [
     {
-      command: `npm run dev -- --port ${PORT}`,
+      // `E2E_PROD=1` swaps the dev server for a production build. The 3-second
+      // acceptance target of the dashboard sprint is only meaningful there:
+      // `next dev` compiles a route on first request, so measuring against it
+      // measures the compiler. e2e/desempenho.spec.ts skips itself without it.
+      command: process.env.E2E_PROD
+        ? `npm run build && npm run start -- --port ${PORT}`
+        : `npm run dev -- --port ${PORT}`,
+      // A production build from cold takes ~20s here, past the 60s default only
+      // on a slow machine — but the default leaves no room, so it is stated.
+      timeout: process.env.E2E_PROD ? 180_000 : 60_000,
       url: baseURL,
       reuseExistingServer: !process.env.CI,
       env: {

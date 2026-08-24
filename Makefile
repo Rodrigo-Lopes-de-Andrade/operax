@@ -55,6 +55,9 @@ sender:         ## consome app.alerta_fila
 e2e:            ## Playwright (1ª vez: npx playwright install)
 	cd frontend && npx playwright test
 
+e2e-prod:       ## Playwright contra build de produção — inclui o orçamento de 3s
+	cd frontend && E2E_PROD=1 npx playwright test
+
 build:          ## build de produção
 	cd frontend && npm run build
 	cd backend  && docker build -t operax-backend .
