@@ -1,5 +1,5 @@
 .PHONY: help dev dev-backend dev-frontend test lint db-test e2e build \
-        sync motor sender dicionario
+        sync motor sender dicionario carga-inicial
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -51,6 +51,9 @@ motor:          ## detecção — MODO=sombra (padrão) | producao
 
 sender:         ## consome app.alerta_fila
 	cd backend && uv run python -m operax.alertas.sender
+
+carga-inicial:  ## converte a planilha de RH do cliente em templates (implantação)
+	python3 scripts/rh_carga_inicial.py --planilha "$(PLANILHA)" --modelos "$(MODELOS)" --saida "$(SAIDA)"
 
 # ---------------------------------------------------------------------------
 # Fora do gate

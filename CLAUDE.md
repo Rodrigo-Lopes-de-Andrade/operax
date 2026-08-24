@@ -121,7 +121,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 - **`backend/operax/motor/`** — `jornada.py` materializa `app.expected_workday` com grau de confiança (é onde o 12x36 é tratado); `deteccao.py` gera `app.deviation_event`; `revogacao.py` trata correção retroativa.
 - **`backend/operax/alertas/`** — `ciclo.py` monta `app.report_cycle` com reserva transacional; `outbox.py` enfileira; `sender.py` consome. `provedores/` = WhatsApp e e-mail atrás de uma interface **template-first**: `enviar(template, variaveis, destino)`, nunca string pronta — ver `docs/DECISAO-WHATSAPP.md`.
 - **`backend/operax/agente/`** — `agente.py` = `create_agent`; `catalogo.py` = carrega `app.metric` e valida a escolha do modelo; `executor.py` = roda a métrica **como o usuário**.
-- **`backend/operax/rh/`** — `ownership.py` = a matriz dono-do-campo (sync x RH), lida por template, tela e import; `validators.py` = um funil só para formulário e planilha; `templates.py` = o que cada modelo `.xlsx` carrega; `workbook.py` = gera e lê o arquivo; `importer.py` = o veredito por linha, sem escrever; `repository.py` = o SQL, com leitura como o usuário e gravação junto da auditoria.
+- **`backend/operax/rh/`** — `ownership.py` = a matriz dono-do-campo (sync x RH), lida por template, tela e import; `validators.py` = um funil só para formulário e planilha; `templates.py` = o que cada modelo `.xlsx` carrega; `workbook.py` = gera e lê o arquivo; `importer.py` = o veredito por linha, sem escrever; `repository.py` = o SQL, com leitura como o usuário e gravação junto da auditoria; `employees.py` = a lista e o detalhe da aba Colaboradores; `carga_inicial.py` = o conversor de implantação, que preenche os modelos baixados e **não abre conexão com o banco**.
 - **`backend/operax/core/`** — `db.py` = pools por schema; `tenant.py` = contexto de tenant (todo acesso com `service_role` passa por aqui); `config.py`; `vault.py` = leitura de credencial por tenant.
 - **`backend/server/`** — `main.py` = entrypoint; `deps.py` = valida o JWT do Supabase e resolve tenant e papel; `models.py` = **fonte da verdade dos schemas**; `routers/` = endpoints por área.
 - **`supabase/migrations/`** — 16 migrations aplicadas em ordem. Ver `docs/PLANO-BANCO-OPERAX.md`.
@@ -153,7 +153,9 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 │   │   │   ├── templates.py
 │   │   │   ├── workbook.py
 │   │   │   ├── importer.py
-│   │   │   └── repository.py
+│   │   │   ├── repository.py
+│   │   │   ├── employees.py
+│   │   │   └── carga_inicial.py
 │   │   └── core/
 │   │       ├── config.py
 │   │       ├── db.py
@@ -193,6 +195,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 │   ├── 98_teste_isolamento_tenant.sql
 │   ├── 99_verificacao_rls.sql
 │   ├── gerar_dicionario.py
+│   ├── rh_carga_inicial.py
 │   ├── testar_migrations.sh
 │   └── verificar_docs.py
 ├── docs/

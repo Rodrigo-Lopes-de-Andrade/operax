@@ -313,27 +313,116 @@ mecanismo.
   allowlist o `fetch` morre no preflight e a interface mostra a mensagem
   genérica — indistinguível de um bug de produto.
 
-## R4 — Carga inicial e homologação
+## R4 — Carga inicial e homologação ✅
 
-**Entrega:** conversor de implantação + ensaio geral da carga com fixture; a
-carga real acontece na implantação, fora do repositório.
+**Entregue:** conversor de implantação + ensaio geral com fixture sintética. A
+carga real acontece na implantação, fora do repositório, e o conversor **não
+abre conexão com o banco** — a entrada continua sendo template, preview e
+confirmação humana.
 
-- `scripts/rh_carga_inicial.py`: lê a planilha do cliente, emite os templates
-  de domínio na ordem (vínculo → cadastro/posição → documentos/ASO →
-  afastamentos/movimentações → remuneração/acordos) e o **relatório de
-  descarte** (CID, dados bancários, abas de dashboard — com motivo).
-- Conversões específicas: FÉRIAS matriz→formato longo; DESLIGADOS→status
-  desligado; VENCIMENTO ASO→`app.occupational_exam` (aptidão+validade).
-- Ensaio com a fixture sintética: 100% das linhas com destino ou descarte
-  justificado — o critério de sucesso do PRD vira teste.
-- Roteiro de implantação de 1 página para a EURECA executar no cliente.
+- `scripts/rh_carga_inicial.py` (atalho) → `backend/operax/rh/carga_inicial.py`
+  (o código): lê a planilha do cliente, **preenche os modelos baixados do
+  sistema** e emite o relatório de descarte.
+- `backend/tests/fixtures/planilha_cliente.py`: a planilha de 17 abas,
+  sintética — a bagunça sem o dado.
+- `backend/tests/test_rh_carga_inicial.py`: **34 testes**, com o critério de
+  sucesso do PRD como asserção.
+- `docs/ROTEIRO-IMPLANTACAO-RH.md`: uma página, para a EURECA executar.
 
-**Gate:** ensaio da carga fecha em 100% (destino ou descarte) · relatório de
-descarte gerado e legível · suíte completa verde (`make db-test`, pytest,
-Playwright) · demonstração: planilha de fixture → sistema → aba Colaboradores
-respondendo "o que vence em 30 dias?".
+### Ele preenche o modelo em vez de gerar um
 
----
+O template tem identidade — `_meta` com tenant, versão de layout e hash do
+cabeçalho. Um conversor que gera o arquivo do zero é um conversor que pode gerar
+**identidade errada**, e o arquivo com identidade errada é o pior desfecho
+possível: o import o aceita. Preenchendo o modelo que o próprio sistema emitiu, a
+identidade é a que veio — e o ensaio prova isso mandando o resultado de volta por
+`workbook.parse`, que recusa o arquivo inteiro se uma célula do cabeçalho tiver
+se mexido.
+
+Como efeito, o conversor não precisa de credencial nem de tenant: ele descobre os
+dois abrindo a aba de controle. E um teste sintático garante que continue assim —
+`psycopg`, `operax.core.db`, `service_role` e `DATABASE_URL` não podem aparecer no
+módulo.
+
+### Fechar em 100% é uma soma, não uma frase
+
+Toda linha lida termina em um de quatro lugares, e a soma dos quatro é o total:
+**destino** (célula de template emitido), **parqueado** (convertido para o formato
+de destino, à espera de caminho de escrita), **conferência** (comparado contra o
+ponto, não importado) e **descarte** (com motivo nomeado). O balanço é conferido
+no fim e o processo termina em erro se não fechar.
+
+O mapa das 17 abas é a tabela §7 de `DECISAO-RH-UPLOAD-TELAS.md` escrita em
+código — inclusive as abas que **não** entram. É o que permite ao relatório
+afirmar que nada foi esquecido, em vez de que nada foi encontrado.
+
+### O que a execução decidiu diferente do plano
+
+1. **DESLIGADOS virou conferência, não escrita.** O plano dizia
+   "DESLIGADOS→status desligado"; a matriz do R1 já tinha decidido o contrário —
+   `employee.status` é do sync (`Funcionario.Demissao`), e "duas fontes para o
+   mesmo fato é uma a mais". A aba agora produz a lista de quem a planilha dá
+   como desligado e o Secullum ainda traz ativo, para o implantador levar ao
+   RH. A decisão mais recente e mais específica ganhou.
+2. **FÉRIAS, ASO, CNH, afastamentos, movimentações e acordos são convertidos e
+   parqueados.** A conversão declarada no sprint está feita — FÉRIAS sai da
+   matriz por ano em formato longo, ASO sai com `fit`/`periodic` no lugar de
+   "APTO"/"PERIÓDICO" — mas as tabelas de destino não têm caminho de escrita
+   pelo painel. Sai `.csv`, e não `.xlsx`, de propósito: um `.xlsx` pareceria
+   template e alguém tentaria subi-lo.
+3. **ASO é o único bloqueio que não deveria existir.** `app.occupational_exam`
+   **concede** escrita a quem tem o domínio `health` e não exige arquivo. O que
+   falta é um valor em `app.file_import.type`: os sete tipos da migration 16
+   dobraram ASO dentro de `hr_document`, e `hr_document` está travado pelo
+   `storage_path` de `app.document`, que é **outra tabela**. Ver "o que falta",
+   abaixo.
+4. **Modelo baixado antes do vínculo pode imprimir ID RH velho.** Apareceu no
+   ensaio contra o banco local: o `hr_link` mudou o `hr_code` de alguém, e o
+   modelo de cadastro baixado antes disso trazia o anterior — recusado com "ID
+   RH não existe neste cliente", que é o comportamento certo. Está no roteiro.
+
+### Gate do R4: cumprido
+
+| Asserção do gate | Como ficou |
+|---|---|
+| ensaio fecha em 100% | `test_o_ensaio_fecha_em_cem_por_cento` soma as quatro colunas contra o total lido; a CLI devolve ≠ 0 se não fechar |
+| relatório gerado e legível | dez seções, da mais acionável para a menos: balanço → modelos → abas → colunas recusadas **por regra** → sem destino → descartes → conferência → parqueado → células ilegíveis → observações |
+| suíte completa verde | `make db-test` OK · **188** no pytest (eram 154) · 324 no Vitest · Playwright **22 verdes, 1 pulado** (`E2E_PROD`) |
+| demonstração ponta a ponta | modelos baixados do sistema rodando → conversor → upload → preview (12 `ok`, 30 "já estava assim") → confirmar → os 12 aparecem na lista com o ID RH do cliente |
+| lista responde "o que vence em 30 dias?" | responde — **com o dado que já estava no sistema**. O da fixture não chega lá: ASO e CNH estão parqueados |
+
+Provas que valem citar, além da contagem:
+
+- **Regra 10 no arquivo, não no desenho.** A fixture carrega CID (`F32`, `M54`,
+  `J11`, `K52`) e uma descrição de restrição de propósito — o teste só vale se o
+  dado proibido tiver estado ali para ser recusado. Nenhum deles aparece em
+  nenhum arquivo de saída, e o relatório **nomeia** a coluna recusada: "estava
+  aqui e não entrou" é a prova; ficar em silêncio não é.
+- **Cabeçalho na 1, na 2, na 6 e na 8**, todos encontrados — a busca é pelo
+  rótulo, não pela posição. Sem cabeçalho reconhecível a aba inteira vira
+  descarte: adivinhar pela posição grava o dado de um na linha de outro.
+- **`#REF!` nunca vira conteúdo**, aba oculta é lida como qualquer outra, e aba
+  duplicada é descartada inteira — importar as duas dobraria cada pessoa.
+- **O parqueado agrupa por linha de origem, não por matrícula.** Três atestados
+  da mesma pessoa são três registros; juntar por pessoa seria uma limpeza que é
+  uma perda.
+- **Toda tradução de valor cai no catálogo do banco.** Um `periodico` no lugar de
+  `periodic` atravessaria o parqueado inteiro e só falharia meses depois — o
+  teste confere os 8 mapas contra `ownership.ENUMS`.
+
+### O que falta para a carga ser completa
+
+Uma decisão de dono, não de código. `hr_exam` custa: um valor em
+`app.file_import.type` (migration 17, o mesmo bloco idempotente da 16), um
+template com a forma do `hr_compensation`, um validador, a escrita e os testes.
+Com ele, ASO deixa de ser parqueado e a última linha do gate fecha com o dado da
+planilha. **No conversor, é uma linha:** o destino já está declarado no mapa, e o
+emissor decide entre template e `.csv` perguntando se o tipo existe.
+
+Os outros três continuam bloqueados por onde já estavam: `app.document` e
+`app.financial_agreement` exigem o arquivo que uma planilha não tem, e
+`app.leave_period` e `app.workforce_movement` não concedem escrita ao painel —
+abrir isso é decisão de policy, e decisão de policy para e pergunta.
 
 ## Fora destes sprints, registrado
 

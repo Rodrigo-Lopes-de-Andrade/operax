@@ -263,6 +263,22 @@ def parse(data: bytes, *, template: Template, tenant_id: UUID) -> ParsedWorkbook
     return ParsedWorkbook(layout_version=meta["layout_version"], rows=tuple(linhas))
 
 
+def read_meta(wb: Workbook) -> dict[str, str]:
+    """A identidade do arquivo, para quem precisa lê-la antes de escolher o template.
+
+    `parse` já exige saber qual template esperar; o conversor de implantação não
+    sabe — ele recebe um diretório de modelos baixados e descobre o que cada um é
+    abrindo a aba de controle. Mesmo leitor, mesmas recusas.
+    """
+    if META_SHEET not in wb.sheetnames:
+        raise WorkbookError(
+            "sem_meta",
+            f"Arquivo sem a aba de controle `{META_SHEET}` — ele não foi gerado pelo sistema. "
+            f"{_BAIXE_O_MODELO}",
+        )
+    return _ler_meta(wb[META_SHEET])
+
+
 def _primeira_aba(wb: Workbook):
     for nome in wb.sheetnames:
         if nome != META_SHEET:
