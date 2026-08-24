@@ -26,6 +26,55 @@ de domínio prontos e testados **antes de existir tela ou endpoint**.
 cobrindo os seis casos de erro por linha · asserção de que o painel não tem
 grant de escrita em tabela de RH.
 
+### Andamento em 24/08/2026 — em curso
+
+**Feito.** `supabase/migrations/20260824140000_16_hr_management.sql` aplica limpa
+e é idempotente (provado rodando duas vezes seguidas). Ela traz `hr_code` com
+índice único **parcial** por tenant — parcial de propósito: um índice único comum
+deixaria exatamente um colaborador sem ID RH e recusaria o segundo, que é o
+oposto do que "vazio até vincular" precisa. Traz também os sete tipos de
+`app.file_import`, somados aos existentes **lidos do catálogo** em vez de
+reescritos de memória, que é como se apaga em silêncio um valor já gravado. O
+bloco de prova já carrega a asserção do gate: `anon` não escreve em nenhuma das
+nove tabelas de RH.
+
+**Falta.** `operax/rh/ownership.py`, `operax/rh/validators.py` e a fixture
+sintética.
+
+### Duas coisas que a execução expôs, e que decidem antes do R2
+
+**1. Sete campos da matriz não têm coluna.** A SPEC §4 é explícita em ser
+"proposta — confirmar antes do template congelar", e a conferência contra o
+schema real mostra que estes não existem em lugar nenhum:
+
+| Campo da matriz | Situação |
+|---|---|
+| CBO | sem coluna |
+| uniforme | sem coluna |
+| nível (posição) | sem coluna — `app.employee_position` tem só `cargo` |
+| benefícios: VR, planos, cesta, VT | sem coluna — `app.employee_compensation` tem só `salary` |
+| periculosidade | sem coluna |
+| cargo de confiança | sem coluna |
+| unidade de atuação ("atuando") | sem coluna — e é um dos três pendentes |
+
+Os demais existem: matrícula, nome, admissão, demissão, unidade, status,
+supervisor (`manager_employee_id`), cargo, salário, documentos, ASO,
+afastamentos, movimentações, acordos e parcelas.
+
+A SPEC §1c diz "sem tabela nova" e a migration 16 não cria coluna alguma além de
+`hr_code` — corretamente, porque é o que ela especifica. Mas **o template de
+remuneração do R2 não tem como carregar benefício que não tem coluna**. Então a
+matriz nasce cobrindo só o que existe, o resto fica nomeado como lacuna em
+`ownership.py`, e a decisão — criar as colunas numa migration 17 ou tirar os
+campos do escopo v1 — precisa sair **antes do R2**, não durante.
+
+**2. `app.file_import.status` não aceita `partial`.** A SPEC §3 diz que o import
+"fica `partial` até as demais entrarem (mesma semântica da folha)", e o check
+atual aceita `received`, `validating`, `validation_error`, `processed` e
+`discarded`. Ou a semântica da folha é `processed` com `rows_error > 0` e o texto
+usa "partial" como descrição, ou falta um valor. É pergunta do R2, registrada
+aqui para não virar descoberta no meio dele.
+
 ## R2 — Template e pipeline de importação
 
 **Entrega:** baixar template pré-preenchido, subir, ver preview por linha,

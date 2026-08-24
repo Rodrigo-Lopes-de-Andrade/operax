@@ -11,23 +11,115 @@ recebimento dos acessos.
 
 ---
 
+## Estado em 24/08/2026
+
+Conferido contra o repositório e contra o projeto de produção, não de memória.
+Este bloco registra **andamento**; o plano abaixo permanece como foi escrito.
+
+| Sprint | Estado |
+|---|---|
+| S0 · Diagnóstico e blindagem | ✅ fechada |
+| S1 · Isolamento e ajuste do worker | ✅ fechada — a sincronização virou Edge Function (22/08) |
+| S2 · Modelo completo e superfície de API | ✅ fechada |
+| **S3 · Jornada esperada** | **em andamento** — o motor existe e está testado; falta rodar contra produção |
+| S4 · Motor em modo sombra | não começou |
+| **S5 · Dashboard** | ✅ **fechada** — os quatro critérios de aceite com teste |
+| S6 · Alertas e relatório | não começou — travada em G4 |
+| S7 · Assistente de IA | não começou |
+| S8 · Homologação e produção | não começou |
+
+**Números que mudaram desde que este plano foi escrito.** São **17 migrations**
+(entraram a `11b`, que renomeia o schema da nuvem de pt para en, a `15` do
+rebrand FastPark e a `16` de RH). A suíte de banco tem **quatro** conjuntos:
+motor de jornada (24 asserções), regras de alerta e cadência (24), isolamento
+multi-tenant (21) e verificações estruturais (13).
+
+**A fronteira de segurança passou a ser provada também por HTTP**, contra o
+PostgREST do projeto de staging: `anon` toma 401 em toda view, `app`/`secullum`/
+`util` respondem 406 mesmo para a chave de serviço, e cada sessão vê só o seu
+recorte. `scripts/provar_postgrest.sh` reproduz.
+
+### O que trava o caminho crítico
+
+**Falta o elo entre o espelho e o domínio.** Produção tem 172 pessoas em
+`secullum."Funcionario"` e 3.211 marcações em `app.batida_marcacao`, e tem
+**zero** linha em `app.employee`, `app.unit` e `app.expected_workday` — e zero
+usuário em `auth.users`. Nada promove o espelho para o domínio: não há função de
+promoção, e `app.unit_secullum_map` está vazia. Enquanto isso não existir, o
+motor de jornada roda sobre uma base vazia e o dashboard abre sem dado.
+
+O S1 já previa essa curadoria ("cadastrar unidades reais; preencher o mapeamento
+Departamento → unidade"). Ela não foi feita, e é ela que destrava S3 e S4.
+
+### O S3 tinha uma pergunta que decidia o cronograma. Ela foi respondida
+
+O plano avisava: *"se `HorarioDia` descreve semana fixa, a escala não cabe e a
+confiança despenca"*. Medido em 24/08 contra produção:
+
+`secullum."HorarioDia"` é **semana fixa de sete dias** — chave
+`(horario_id, "DiaSemana")`, `DiaSemana` de 0 a 6, sem índice de ciclo e sem data
+de início. Um 12x36 é ciclo de 48 h e não cabe. O contorno do próprio Secullum
+aparece no dado: escalas em pares `Par`/`Ímpar` com `HorarioDia` **inteiramente
+vazio**, e nenhum horário alternativo preenchido.
+
+**Mas o alcance é pequeno, e isso muda a conclusão:**
+
+- **66 de 79 ativos (83,5%)** estão em semana fixa, e ela é confiável — 4 de 546
+  dias trabalhados (0,7%) caíram em dia declarado como folga.
+- **7 pessoas em 2 unidades** (U-040 Cotia e U-042 Alphaville) estão em 12x36 de
+  verdade e precisam de uma fonte de rotação que o espelho não traz.
+- **6 pessoas na administração** têm horário em branco **por desenho** — os
+  horários irmãos se chamam "Ponto por exceção" e "Marcação Supervisor". Elas não
+  precisam de escala manual; precisam ficar **fora** do motor.
+
+Então **não** entra o sub-sprint grande de cadastro manual de escala que o plano
+previa. Entra um pequeno, de 7 pessoas — e ele **não é opcional**: G4 é taxa de
+erro, não cobertura. Sobre 14 dias de dado, um motor ingênuo emitiria ~140
+eventos dos quais **≥50 seriam certamente errados (≥36%)**, contra um portão de
+≤5%. Dezesseis por cento do efetivo são trinta e seis por cento dos eventos.
+
+### Reconciliação da nuvem — trabalho real que este plano não previa
+
+O projeto de produção (`Kastro Park Ponto`) é **este repositório parado na
+migration 11**, com os mesmos arquivos guardados na grafia em português. Alinhá-lo
+virou um plano próprio, em `docs/PLANO-RECONCILIACAO-NUVEM.md`:
+
+| Fase | Estado |
+|---|---|
+| 0 · destravar o acesso | ✅ 22/08 — Management API com o token de conta, sem senha de banco |
+| 1 · fotografar sem tocar | ✅ 22/08 |
+| 2 · provar a fusão, duas vezes | ✅ 24/08 — Postgres descartável **e** projeto Supabase real |
+| 3 · janela de aplicação | **pendente de decisão do dono** — teto de 48 h imposto pelo `sync-batidas` |
+
+A aplicação em si deixou de ser o risco: a Management API é transacional, então a
+migration de rename aplica inteira ou não aplica. O que sobra é escrita
+concorrente das Edge Functions durante o DDL.
+
+**Os riscos de ingestão declarados na §4b daquele plano** — ausência de transação,
+janela de 48 h sem autocura, saída HTTP 200 com ingestão zero e ausência de
+alarme — seguem sem sprint aqui, e por decisão: são a trilha de ingestão, que o
+dono está documentando à parte. Registrado para não parecer esquecimento (achado
+A9 da auditoria de 24/08).
+
+---
+
 ## Gates — pontos onde a sprint seguinte não começa
 
 Não são recomendações. Cada um existe porque violá-lo custa mais caro do que
 esperar.
 
-| Gate | Condição | Bloqueia | Por quê |
-|---|---|---|---|
-| **G1** | Diagnóstico rodado e convenção PascalCase confirmada | S0 | As migrations 00 e 03 selecionam por essa convenção |
-| **G2** | Suíte de isolamento verde | S3 | Motor grava dado real; RLS errada vira vazamento |
-| **G3** | Jornada esperada com ≥80% de confiança | S4 | Sem escala correta, o motor é gerador de falso positivo |
-| **G4** | Falso positivo ≤5% em duas execuções de sombra | S6 | Primeiro relatório errado mata a credibilidade e não se recupera |
-| **G5** | Regras homologadas com cliente + jurídico/RH | envio real | Alerta nominal indevido é risco trabalhista |
-| **G6** | Cláusula de IP assinada | comercializar | Sem ela é projeto sob encomenda, não produto |
+| Gate | Condição | Bloqueia | Por quê | Estado em 24/08 |
+|---|---|---|---|---|
+| **G1** | Diagnóstico rodado e convenção PascalCase confirmada | S0 | As migrations 00 e 03 selecionam por essa convenção | ✅ |
+| **G2** | Suíte de isolamento verde | S3 | Motor grava dado real; RLS errada vira vazamento | ✅ e agora provado também por HTTP |
+| **G3** | Jornada esperada com ≥80% de confiança | S4 | Sem escala correta, o motor é gerador de falso positivo | número medido em **83,5%** contra o espelho de produção; falta o motor produzi-lo, o que depende da promoção `secullum → app` |
+| **G4** | Falso positivo ≤5% em duas execuções de sombra | S6 | Primeiro relatório errado mata a credibilidade e não se recupera | inalcançável até o S4 existir; a medição de 24/08 projeta **≥36%** enquanto as 7 escalas 12x36 não tiverem fonte |
+| **G5** | Regras homologadas com cliente + jurídico/RH | envio real | Alerta nominal indevido é risco trabalhista | fora da engenharia |
+| **G6** | Cláusula de IP assinada | comercializar | Sem ela é projeto sob encomenda, não produto | fora da engenharia |
 
 ---
 
-## S0 — Diagnóstico e blindagem · 2–3 dias
+## S0 — Diagnóstico e blindagem · 2–3 dias ✅
 
 **Objetivo:** fechar a exposição de dado pessoal e montar a fundação, sem quebrar
 nada que já roda.
@@ -53,7 +145,7 @@ migrations `00` e `03` antes de aplicar.
 
 ---
 
-## S1 — Isolamento e ajuste do worker · 3–5 dias
+## S1 — Isolamento e ajuste do worker · 3–5 dias ✅
 
 **Objetivo:** mover o espelho para schema privado e apontar o worker para lá.
 
@@ -76,7 +168,7 @@ onde os ~26% de divergência entre empresa e departamento são resolvidos de uma
 
 ---
 
-## S2 — Modelo completo e superfície de API · 3–5 dias
+## S2 — Modelo completo e superfície de API · 3–5 dias ✅
 
 **Objetivo:** o resto do modelo e a API pronta para o frontend consumir.
 
@@ -88,15 +180,16 @@ onde os ~26% de divergência entre empresa e departamento são resolvidos de uma
 
 **Aceite**
 
-- 14 migrations aplicam limpas em banco descartável.
-- 23 asserções funcionais e 11 estruturais passando.
+- ~~14 migrations~~ **17** aplicam limpas em banco descartável.
+- ~~23 asserções funcionais e 11 estruturais~~ **69 asserções em quatro suítes**
+  (jornada 24, alerta e cadência 24, isolamento 21, estruturais 13) passando.
 - Views e RPCs respondendo com um usuário de teste autenticado.
 
 **⚠️ G2** — a suíte verde é pré-requisito para qualquer gravação de dado real.
 
 ---
 
-## S3 — Jornada esperada · 5 dias
+## S3 — Jornada esperada · 5 dias · em andamento
 
 **Objetivo:** materializar o que era esperado de cada colaborador em cada dia.
 Sem isso, o motor não tem contra o que comparar.
@@ -120,6 +213,28 @@ absorvido em silêncio.
 - `app.expected_workday` preenchida para os últimos 90 dias.
 - Percentual de confiança medido e reportado.
 - Precedência verificada: afastamento > folga > jornada.
+
+**Andamento em 24/08/2026.** O motor existe: `backend/operax/motor/jornada.py`
+materializa a tabela num `insert … select` idempotente, com a precedência
+provada. A confiança é escada de três — 100 quando o dia da semana está
+declarado ou há afastamento, 50 quando há turno sem hora de entrada, 0 quando o
+horário nada diz — e não uma curva, porque a fonte ou está certa ou está ausente.
+`make jornada` roda e imprime a cobertura, agrupada **por descrição de horário**,
+que é o que separa os dois problemas achados na medição.
+
+`scripts/96_teste_jornada.py` entrou no `make db-test` com 24 asserções e
+**extrai o SQL do próprio módulo** em vez de repeti-lo. Pegou um bug na primeira
+execução: `translate` rodava antes de `upper`, o "é" minúsculo de "Férias"
+escapava da lista de acentos e **toda férias era arquivada como atestado**.
+
+Para escrever isto foi preciso consertar antes o baseline: o `secullum` do banco
+de teste era um stub simulado, com colunas que produção não tem e sem sete das
+vinte tabelas. `scripts/gerar_baseline_nuvem.py` passou a montá-lo do catálogo
+real — o gancho `scripts/_baseline.sql`, que a suíte procurava desde sempre,
+nunca tinha sido preenchido.
+
+**O que falta:** rodar contra produção. `app.employee` está com zero linha lá, e
+a promoção `secullum → app` não existe em nenhum lugar do repositório.
 
 **⚠️ G3**
 
@@ -149,7 +264,7 @@ Uma semana de dados por rodada.
 
 ---
 
-## S5 — Dashboard · 7–10 dias
+## S5 — Dashboard · 7–10 dias ✅
 
 **Objetivo:** a tela. Pode começar em paralelo ao S4 usando dados de sombra.
 
@@ -170,6 +285,16 @@ Uma semana de dados por rodada.
 - Supervisor de unidade não enxerga outra unidade nem dado sensível — verificado
   na tela, não só no banco.
 - Nenhum nome de colaborador na tela de TV.
+
+**Fechada em 24/08/2026 — os quatro com teste.** Três se provam na tela e viviam
+no Playwright desde 22/08. O quarto era um número que ninguém media: o orçamento
+de 3 s não podia ser aferido contra `next dev`, que compila a rota na primeira
+requisição. `E2E_PROD=1` (ou `make e2e-prod`) troca o servidor por build de
+produção; medido cinco vezes, **979 a 1516 ms**. A suíte inteira passa nos dois
+modos, 16 de 16.
+
+O número é piso, não teto: aqui o Next e o Supabase dividem máquina e o seed é
+sintético. O teto continua sendo medido no S8.
 
 ---
 
@@ -283,6 +408,11 @@ cadastro manual de escala.
 Se o S3 revelar que a escala precisa ser cadastrada à mão, isso é escopo adicional
 e precisa ser conversado com o cliente **no momento em que for descoberto**, não
 no fechamento.
+
+**Revelou, em 24/08/2026 — e o alcance é pequeno.** Sete pessoas em duas unidades,
+não a base inteira: o resto está em semana fixa e ela é confiável. É escopo
+adicional de qualquer forma, e está sendo dito agora, que é o ponto desta regra.
+Outras seis pessoas não precisam de escala nenhuma — precisam sair do motor.
 
 ---
 

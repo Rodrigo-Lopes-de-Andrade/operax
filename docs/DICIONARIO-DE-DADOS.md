@@ -783,6 +783,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `status` | text | não | `'active'::text` |  |  |
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
 | `updated_at` | timestamp with time zone | não | `now()` |  |  |
+| `hr_code` | text | sim |  |  | ID RH do cliente. Chave ALTERNATIVA — nunca composta com a matrícula: cada uma identifica sozinha, e divergência entre elas é erro de linha no import. Anulável de propósito: fica vazia até o template de vínculo voltar preenchido. |
 
 **Restrições**
 
@@ -804,6 +805,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 - `employee_gestor_idx` — `app.employee USING btree (manager_employee_id)`
 - `employee_tenant_unidade_idx` — `app.employee USING btree (tenant_id, unit_id) WHERE (status <> 'desligado'::text)`
 - `employee_unit_id_fkidx` — `app.employee USING btree (unit_id)`
+- `UNIQUE employee_hr_code_unique` — `app.employee USING btree (tenant_id, hr_code) WHERE (hr_code IS NOT NULL)`
 - `UNIQUE employee_tenant_id_secullum_employee_id_key` — `app.employee USING btree (tenant_id, secullum_employee_id)`
 
 </details>
@@ -1017,7 +1019,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 **Restrições**
 
 - `CHECK ((status = ANY (ARRAY['received'::text, 'validating'::text, 'validation_error'::text, 'processed'::text, 'discarded'::text])))`
-- `CHECK ((type = ANY (ARRAY['folha'::text, 'payroll_charge'::text, 'employee'::text, 'cost_center'::text, 'roster'::text, 'benefit'::text, 'other'::text])))`
+- `CHECK ((type = ANY (ARRAY['benefit'::text, 'cost_center'::text, 'employee'::text, 'folha'::text, 'hr_agreement'::text, 'hr_compensation'::text, 'hr_document'::text, 'hr_employee'::text, 'hr_leave'::text, 'hr_link'::text, 'hr_movement'::text, 'other'::text, 'payroll_charge'::text, 'roster'::text])))`
 
 **Policies**
 
