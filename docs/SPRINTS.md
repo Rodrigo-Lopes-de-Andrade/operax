@@ -457,7 +457,7 @@ G4 impõe de qualquer forma.
 
 ---
 
-## S7 — Assistente de IA · 3–5 dias
+## S7 — Assistente de IA · 3–5 dias · fronteira entregue, ⚠️ agente não escrito
 
 | Trilha | Entrega |
 |---|---|
@@ -472,6 +472,52 @@ G4 impõe de qualquer forma.
 - Usuário sem o domínio sensível é recusado antes da consulta.
 - Resposta informa período e filtros usados.
 - Custo de tokens visível.
+
+---
+
+### Andamento em 24/08/2026 — a metade que decide a segurança
+
+**O que foi entregue.** `catalogo.py` e `executor.py` — a fronteira inteira da
+regra 9. O que **não** foi: `agente.py`, o `create_agent` do LangChain, e o
+endpoint SSE. A razão está no fim desta seção.
+
+**Por que catálogo em vez de prompt esperto.** Um modelo convidado a escrever SQL
+contra um schema que ele viu vai, uma hora, escrever uma consulta sintaticamente
+perfeita e semanticamente errada — juntando departamento a empresa, por exemplo,
+que é o erro de 26% em torno do qual o modelo de dados inteiro foi desenhado. Um
+modelo convidado a escolher entre nove métricas nomeadas só consegue errar de uma
+forma: escolhendo a errada entre nove, que uma pessoa lê na tela e corrige. Essa é
+a troca, e é por isso que **recusa é resposta válida**.
+
+**Quatro recusas, e todas nomeiam o problema.** Fora do catálogo (com a lista do
+que existe), domínio fora de alcance, parâmetro desconhecido (pelo nome) e
+período ausente. "Não consigo responder isso" não ensina nada a ninguém; dizer
+*qual* parâmetro não foi reconhecido acerta a próxima pergunta.
+
+**O domínio filtra antes de o modelo ver.** Métrica que a pessoa não alcança não
+entra no catálogo oferecido. Oferecer e recusar depois confirmaria que existe
+dado de folha para quem não pode saber que ele existe — o mesmo raciocínio que
+tira a aba da tela em vez de desabilitá-la.
+
+**`BINDINGS` é código, e o `make db-test` é o contrato.** `app.metric` diz o que
+cada métrica aceita (dado); `BINDINGS` diz como cada parâmetro alcança o alvo —
+coluna e operador para view, nome de argumento para função — e é código porque é
+o único ponto em que um nome de coluna encosta em estrutura de SQL. Nenhum valor
+do modelo ou do usuário é interpolado: tudo viaja ligado.
+
+`scripts/91_teste_catalogo.py` confere as duas listas uma contra a outra e
+**achou três divergências na primeira execução**: `data_freshness` declarava a
+dimensão `entity` sem binding; `fn_ranking_by_unit` não tem `p_unit_id` — ela
+ordena unidades, e filtrar um ranking de unidades por uma unidade é pedir o
+ranking de um item só; e sobrava binding para uma view que nenhuma métrica ativa
+usa mais. As três eram invisíveis até alguém fazer a pergunta em produção.
+
+**Por que o agente não foi escrito.** Ele precisa do LangChain 1.x e de um
+provider real, e nenhum dos dois está no `pyproject.toml`. Escrever a fiação de
+`create_agent` sem conseguir exercitá-la produz exatamente o tipo de código que
+parece certo e falha na primeira pergunta — que é o oposto do que este sprint
+existe para evitar. A metade que carrega a garantia do produto está pronta e
+testada; a que falta é fiação, e ela liga a esta fronteira, não em volta dela.
 
 ---
 
