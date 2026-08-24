@@ -114,6 +114,7 @@ class EmployeeDocument(BaseModel):
     """Sensitive: `pii` domain. The file itself lives in Storage, not here."""
 
     type_name: str
+    issued_on: date | None = None
     valid_until: date | None = None
     status: str
 
@@ -271,3 +272,195 @@ class ImportResult(ImportPreview):
 
     applied: int
     partial: bool
+
+
+class HrDueDate(BaseModel):
+    """O prazo mais urgente de uma pessoa, seja ele qual for.
+
+    Um só, e não uma lista: a coluna da tela mostra o que vence primeiro, e uma
+    lista de cinco prazos numa célula deixa de ser lida. O que já venceu entra
+    com a data no passado — vencido é justamente o que a lista existe para
+    mostrar.
+    """
+
+    kind: Literal["aso", "documento", "experiencia"]
+    label: str
+    due_on: date
+
+
+class HrEmployeeRow(BaseModel):
+    """Uma linha da aba Colaboradores."""
+
+    employee_id: UUID
+    name: str
+    registration_number: str | None = None
+    hr_code: str | None = None
+    cargo: str | None = None
+    status: str
+    hired_on: date | None = None
+    unit_id: UUID | None = None
+    unit_name: str | None = None
+    due: HrDueDate | None = None
+
+
+class HrEmployeeList(BaseModel):
+    """A lista, e o que quem pediu pode fazer com ela.
+
+    `can_write` vem do banco (`util.is_admin`), não do papel que o navegador
+    acha que tem: é o que decide se a tela mostra botão de editar. Esconder o
+    botão não é a segurança — a segurança é o backend recusar —, é não oferecer
+    o que não vai funcionar.
+    """
+
+    rows: list[HrEmployeeRow]
+    truncated: bool = False
+    can_write: bool = False
+
+
+class HrSyncField(BaseModel):
+    """Um campo que o Secullum governa, com a coluna de onde ele vem.
+
+    `mirror` é o que a tela cita ao dizer de onde o valor veio. `pending` marca
+    os três campos que ninguém confirmou ainda — tratados como sync porque
+    congelar é o lado seguro do erro, e rotulados como pendentes para a tela não
+    afirmar uma origem que não foi checada.
+    """
+
+    column: str
+    value: str | None = None
+    mirror: str | None = None
+    pending: bool = False
+
+
+class HrIdentity(BaseModel):
+    """O cabeçalho da pessoa na aba de RH."""
+
+    employee_id: UUID
+    name: str
+    registration_number: str | None = None
+    hr_code: str | None = None
+    cargo: str | None = None
+    status: str
+    hired_on: date | None = None
+    terminated_on: date | None = None
+    employment_type: str | None = None
+    unit_id: UUID | None = None
+    unit_name: str | None = None
+    company_name: str | None = None
+    department_name: str | None = None
+    manager_name: str | None = None
+
+
+class PositionBand(BaseModel):
+    """Uma vigência de posição. Corrigir é revogar e criar outra."""
+
+    effective_from: date
+    effective_to: date | None = None
+    cargo: str
+    unit_name: str | None = None
+
+
+class HrPii(BaseModel):
+    """Sensível: domínio `pii`. Quase tudo aqui é leitura — vem do espelho."""
+
+    cpf: str | None = None
+    rg: str | None = None
+    pis: str | None = None
+    ctps: str | None = None
+    birth_date: date | None = None
+    mother_name: str | None = None
+    father_name: str | None = None
+    phone: str | None = None
+    personal_email: str | None = None
+
+
+class HrLeave(BaseModel):
+    """Rótulo neutro por decisão de produto: o motivo é dado de saúde e não é
+    capturado em lugar nenhum."""
+
+    category: str
+    start_date: date
+    end_date: date | None = None
+    source: str
+
+
+class HrMovement(BaseModel):
+    type: str
+    event_date: date
+    notes: str | None = None
+    unit_name: str | None = None
+
+
+class HrAgreement(BaseModel):
+    """Sensível: domínio `compensation`."""
+
+    id: UUID
+    type: str
+    description: str | None = None
+    total_amount: Decimal
+    installment_count: int
+    agreement_date: date
+    status: str
+    pending_installments: int = 0
+
+
+class HrEmployeeDetail(BaseModel):
+    """Uma pessoa em abas por domínio.
+
+    Os cinco blocos sensíveis chegam `null` — ausentes, não vazios — quando o
+    papel de quem pergunta não alcança o domínio. É essa distinção que faz a aba
+    **não existir no DOM** em vez de aparecer desabilitada: quem não pode ver
+    salário não fica sabendo que existe salário.
+    """
+
+    employee: HrIdentity
+    sync_fields: list[HrSyncField]
+    editable_fields: list[str]
+    #: Os valores que cada campo editável aceita, do `check` do próprio banco.
+    #: Viajam com a resposta para que a tela não mantenha uma segunda cópia do
+    #: catálogo — uma cópia que envelheceria oferecendo o que o banco recusa.
+    enums: dict[str, list[str]] = {}
+    can_write: bool
+    positions: list[PositionBand]
+    leaves: list[HrLeave]
+    movements: list[HrMovement]
+    pii: HrPii | None = None
+    documents: list[EmployeeDocument] | None = None
+    exams: list[OccupationalExamRow] | None = None
+    compensation: list[CompensationBand] | None = None
+    agreements: list[HrAgreement] | None = None
+
+
+class EmployeePatch(BaseModel):
+    """O que o formulário de cadastro pode mudar.
+
+    `extra="forbid"` de propósito: um campo que a matriz diz ser do sync chegando
+    aqui é um cliente pedindo para sobrescrever a origem, e a resposta certa é
+    recusar o pedido inteiro em vez de ignorar a chave em silêncio.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    hr_code: str | None = None
+    employment_type: str | None = None
+    ctps: str | None = None
+
+
+class NewCompensation(BaseModel):
+    """Uma vigência nova de salário. Não existe editar a faixa vigente."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    effective_from: date
+    salary: Decimal
+    reason: str | None = None
+
+
+class NewPosition(BaseModel):
+    """Uma vigência nova de cargo."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    effective_from: date
+    cargo: str
+    unit_id: UUID | None = None

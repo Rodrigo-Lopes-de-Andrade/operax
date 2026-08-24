@@ -83,7 +83,12 @@ from (values
   ('dede0000-0000-0000-0000-0000000000f1'::uuid, 'owner@fastpark.dev',      'Dev Owner'),
   ('dede0000-0000-0000-0000-0000000000f2'::uuid, 'dp@fastpark.dev',         'Dev Departamento Pessoal'),
   ('dede0000-0000-0000-0000-0000000000f3'::uuid, 'supervisor@fastpark.dev', 'Dev Supervisor Norte'),
-  ('dede0000-0000-0000-0000-0000000000f4'::uuid, 'consulta@fastpark.dev',   'Dev Consulta')
+  ('dede0000-0000-0000-0000-0000000000f4'::uuid, 'consulta@fastpark.dev',   'Dev Consulta'),
+  -- Le a area de RH e nao escreve nela. Existe porque "leitura sem escrita" e um
+  -- estado real do produto (executive alcanca remuneracao e nao e is_admin) e,
+  -- sem um usuario assim, o gate do R3 nao teria como provar que o botao de
+  -- editar some.
+  ('dede0000-0000-0000-0000-0000000000f5'::uuid, 'diretoria@fastpark.dev',  'Dev Diretoria')
 ) as u(id, email, nome)
 on conflict (id) do nothing;
 
@@ -102,7 +107,8 @@ insert into app.tenant_member (tenant_id, user_id, role) values
   ('dede0000-0000-0000-0000-000000000001', 'dede0000-0000-0000-0000-0000000000f1', 'owner'),
   ('dede0000-0000-0000-0000-000000000001', 'dede0000-0000-0000-0000-0000000000f2', 'personnel'),
   ('dede0000-0000-0000-0000-000000000001', 'dede0000-0000-0000-0000-0000000000f3', 'unit_supervisor'),
-  ('dede0000-0000-0000-0000-000000000001', 'dede0000-0000-0000-0000-0000000000f4', 'viewer')
+  ('dede0000-0000-0000-0000-000000000001', 'dede0000-0000-0000-0000-0000000000f4', 'viewer'),
+  ('dede0000-0000-0000-0000-000000000001', 'dede0000-0000-0000-0000-0000000000f5', 'executive')
 on conflict (tenant_id, user_id) do nothing;
 
 -- ---------------------------------------------------------------------------
@@ -492,13 +498,19 @@ on conflict (id) do nothing;
 
 -- Admissão e um reajuste. `effective_to` da primeira faixa fecha na véspera da
 -- segunda, que é o que faz "salário vigente" ser uma consulta e não um palpite.
+--
+-- O reajuste só existe se a data dele já chegou. Sem essa condição, quem foi
+-- admitido há menos de um ano ficava com a faixa "em vigor" começando no mês que
+-- vem — um salário vigente que ainda não vigora, e um beco sem saída: a tela
+-- recusa vigência nova anterior à vigente e recusa vigência no futuro, então
+-- essas pessoas nunca poderiam receber um reajuste.
 insert into app.employee_compensation (
   id, tenant_id, employee_id, effective_from, effective_to, salary, reason, recorded_by
 )
 select md5('operax-dev-compensation-' || c.id::text || '-' || f.n)::uuid,
        c.tenant_id, c.id,
        case f.n when 1 then c.hired_on else c.hired_on + 365 end,
-       case f.n when 1 then c.hired_on + 364 else null end,
+       case when f.n = 1 and c.hired_on + 365 <= current_date then c.hired_on + 364 end,
        case f.n when 1 then base else round(base * 1.08, 2) end,
        case f.n when 1 then 'Admissão' else 'Reajuste anual' end,
        'dede0000-0000-0000-0000-0000000000f2'
@@ -509,6 +521,7 @@ cross join lateral (
 cross join generate_series(1, 2) f(n)
 where c.tenant_id = 'dede0000-0000-0000-0000-000000000001'
   and c.hired_on is not null
+  and (f.n = 1 or c.hired_on + 365 <= current_date)
 on conflict (id) do nothing;
 
 -- Justificativa só onde o evento já foi tratado como justificado. Justificativa

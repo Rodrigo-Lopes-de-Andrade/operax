@@ -74,6 +74,13 @@ export default defineConfig({
       cwd: "../backend",
       url: `${apiURL}/health`,
       reuseExistingServer: !process.env.CI,
+      env: {
+        // A tela de RH escreve do navegador (Caminho 2 com PATCH e POST), e aí
+        // a origem do servidor de teste tem de estar na allowlist. Sem isto o
+        // `fetch` morre no preflight e a interface mostra a mensagem genérica —
+        // que é indistinguível de um bug de produto.
+        CORS_ORIGINS: baseURL,
+      },
     },
   ],
 });

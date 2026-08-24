@@ -122,6 +122,12 @@ LITERAIS = {
     "employee_compensation.effective_from",
     "employee_compensation.effective_to",
     "employee_compensation.recorded_by",
+    "employee_position.tenant_id",
+    "employee_position.employee_id",
+    "employee_position.effective_from",
+    "employee_position.effective_to",
+    "employee_position.cargo",
+    "employee_position.unit_id",
     "payroll_period.tenant_id",
     "payroll_period.year",
     "payroll_period.month",
@@ -165,15 +171,18 @@ for tipo, template in sorted(TEMPLATES.items()):
             f"template {tipo}: o select de pré-preenchimento não compila: {r.stderr.strip()}"
         )
 
-# Toda instrução fixa do repositório de RH, compilada contra o schema. A fonte é
-# lida do arquivo em vez de importada porque `repository` puxa o driver e este
-# teste roda fora do venv — e SQL copiado para cá à mão divergiria na primeira
-# alteração. Os dois `update`/`insert` montados coluna a coluna ficam de fora: o
-# que varia neles é nome de coluna, e isso é o que LITERAIS e a matriz conferem.
-fonte_repo = (RAIZ / "backend" / "operax" / "rh" / "repository.py").read_text()
-instrucoes = re.findall(r'^(_[A-Z_]+_SQL) = """(.*?)"""', fonte_repo, re.S | re.M)
-if len(instrucoes) < 8:
-    problemas.append(f"esperava ao menos 8 instruções em repository.py, achei {len(instrucoes)}")
+# Toda instrução fixa do RH — import e aba Colaboradores —, compilada contra o
+# schema. A fonte é lida do arquivo em vez de importada porque os dois módulos
+# puxam o driver e este teste roda fora do venv; e SQL copiado para cá à mão
+# divergiria na primeira alteração. Os `update`/`insert` montados coluna a coluna
+# ficam de fora: o que varia neles é nome de coluna, e isso é o que LITERAIS e a
+# matriz conferem.
+instrucoes: list[tuple[str, str]] = []
+for modulo in ("repository.py", "employees.py"):
+    fonte = (RAIZ / "backend" / "operax" / "rh" / modulo).read_text()
+    instrucoes += re.findall(r'^(_?[A-Z][A-Z_]*_SQL) = """(.*?)"""', fonte, re.S | re.M)
+if len(instrucoes) < 20:
+    problemas.append(f"esperava ao menos 20 instruções fixas de RH, achei {len(instrucoes)}")
 
 
 def posicionar(sql: str) -> str:
@@ -223,7 +232,7 @@ print(f"  matriz: {len(MATRIX)} campos ({sync} do sync, {len(MATRIX) - sync} do 
 print(f"  enums conferidos: {len(ENUMS)}")
 print(f"  lacunas declaradas: {len(SEM_COLUNA)}")
 print(f"  templates: {len(TEMPLATES)} com caminho de volta, {len(SEM_TEMPLATE)} sem")
-print(f"  instruções do repositório compiladas: {len(instrucoes)}")
+print(f"  instruções fixas de RH compiladas: {len(instrucoes)}")
 
 if problemas:
     print("\n❌ " + f"{len(problemas)} problema(s):")

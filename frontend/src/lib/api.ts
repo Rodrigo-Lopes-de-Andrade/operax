@@ -97,3 +97,69 @@ async function readDetail(response: Response): Promise<string | null> {
 
   return null;
 }
+
+/**
+ * Um envio de arquivo, com a mesma sessão das demais chamadas.
+ *
+ * `Content-Type` fica de fora de propósito: quem monta o boundary do multipart é
+ * o navegador, e declará-lo à mão produz um corpo que o servidor não consegue
+ * separar.
+ */
+export async function uploadApiAsUser<T>(
+  path: string,
+  form: FormData,
+): Promise<T> {
+  const supabase = createBrowserSupabaseClient();
+  const { data } = await supabase.auth.getSession();
+  const accessToken = data.session?.access_token;
+
+  if (!accessToken) {
+    throw new ApiError(401, null);
+  }
+
+  const response = await fetch(`${publicEnv().NEXT_PUBLIC_API_URL}${path}`, {
+    method: "POST",
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: form,
+  });
+
+  if (!response.ok) {
+    throw new ApiError(response.status, await readDetail(response));
+  }
+
+  return (await response.json()) as T;
+}
+
+/**
+ * Um download autenticado. O `.xlsx` do template é dado individual, então não
+ * pode sair por um link direto: ele viaja pelo mesmo `Authorization` das outras
+ * chamadas, e o arquivo chega como blob para o navegador salvar.
+ */
+export async function downloadApiAsUser(
+  path: string,
+  fallbackName: string,
+): Promise<{ blob: Blob; filename: string }> {
+  const supabase = createBrowserSupabaseClient();
+  const { data } = await supabase.auth.getSession();
+  const accessToken = data.session?.access_token;
+
+  if (!accessToken) {
+    throw new ApiError(401, null);
+  }
+
+  const response = await fetch(`${publicEnv().NEXT_PUBLIC_API_URL}${path}`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    throw new ApiError(response.status, await readDetail(response));
+  }
+
+  const disposition = response.headers.get("content-disposition") ?? "";
+  const match = /filename="?([^";]+)"?/.exec(disposition);
+
+  return { blob: await response.blob(), filename: match?.[1] ?? fallbackName };
+}

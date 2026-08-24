@@ -93,7 +93,7 @@ _AUDIT_SQL = """
        %(antes)s, %(depois)s)
 """
 
-_CLOSE_BAND_SQL = """
+CLOSE_BAND_SQL = """
     update app.employee_compensation
        set effective_to = (%(effective_from)s::date - 1)
      where employee_id = %(employee_id)s
@@ -101,7 +101,7 @@ _CLOSE_BAND_SQL = """
        and effective_to is null
 """
 
-_NEW_BAND_SQL = """
+NEW_BAND_SQL = """
     insert into app.employee_compensation
       (tenant_id, employee_id, effective_from, salary, reason, recorded_by)
     values
@@ -302,7 +302,7 @@ async def _apply_employee_update(
                 f"returning employee_id",
                 {**valores, "employee_id": outcome.employee_id},
             )
-        await _audit(
+        await audit(
             scope,
             tenant,
             action="update",
@@ -310,8 +310,7 @@ async def _apply_employee_update(
             entity_id=outcome.employee_id,
             antes={coluna: outcome.previous.get(coluna) for coluna in colunas},
             depois=valores,
-            import_id=import_id,
-            line=outcome.line,
+            origem={"file_import_id": str(import_id), "line": outcome.line},
         )
 
 
@@ -325,10 +324,10 @@ async def _apply_new_band(
         "reason": outcome.values.get("reason"),
         "user_id": tenant.user_id,
     }
-    await scope.execute(_CLOSE_BAND_SQL, valores)
-    await scope.execute(_NEW_BAND_SQL, valores)
+    await scope.execute(CLOSE_BAND_SQL, valores)
+    await scope.execute(NEW_BAND_SQL, valores)
     criada = await scope.fetchone()
-    await _audit(
+    await audit(
         scope,
         tenant,
         action="insert",
@@ -336,22 +335,20 @@ async def _apply_new_band(
         entity_id=criada["id"] if criada else outcome.employee_id,
         antes=outcome.previous,
         depois={k: v for k, v in valores.items() if k != "user_id"},
-        import_id=import_id,
-        line=outcome.line,
+        origem={"file_import_id": str(import_id), "line": outcome.line},
     )
 
 
-async def _audit(
+async def audit(
     scope: Any,
     tenant: TenantContext,
     *,
     action: str,
     entity: str,
-    entity_id: UUID,
-    antes: dict[str, Any],
+    entity_id: UUID | str,
+    antes: Any,
     depois: dict[str, Any],
-    import_id: UUID,
-    line: int,
+    origem: dict[str, Any],
 ) -> None:
     """A origem viaja em `_origem`, dentro de `depois`.
 
@@ -359,6 +356,9 @@ async def _audit(
     tabela que já cresce rápido. A chave começa com sublinhado para não colidir
     com nome de coluna do domínio, e responde a consulta direta:
     `depois->'_origem'->>'file_import_id'`.
+
+    Uma função só para o import e para o formulário: as duas portas escrevem a
+    mesma trilha, e uma trilha com dois formatos não se consulta.
     """
     await scope.execute(
         _AUDIT_SQL,
@@ -368,9 +368,7 @@ async def _audit(
             "entity": entity,
             "entity_id": str(entity_id),
             "antes": _jsonb(antes),
-            "depois": _jsonb(
-                {**depois, "_origem": {"file_import_id": str(import_id), "line": line}}
-            ),
+            "depois": _jsonb({**depois, "_origem": origem}),
         },
     )
 

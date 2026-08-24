@@ -8,6 +8,7 @@ import { SignOutButton } from "@/components/sign-out-button";
 import { UserBadge } from "@/components/user-badge";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
+import { COLABORADORES_PATH, IMPORTACAO_PATH } from "@/lib/rh/url";
 import { TV_PATH } from "@/lib/tv/url";
 
 /**
@@ -16,11 +17,23 @@ import { TV_PATH } from "@/lib/tv/url";
  *
  * The navigation lists only what exists. The individual consultation is reached
  * from a row, not from here, because it is always about somebody you were
- * already looking at. Payroll, alert rules, the assistant and administration
- * arrive with their own screens — a nav item that leads nowhere reads as a
- * defect, and a disabled one without a reason reads worse.
+ * already looking at. Payroll, alert rules and the assistant arrive with their
+ * own screens — a nav item that leads nowhere reads as a defect, and a disabled
+ * one without a reason reads worse.
+ *
+ * The administration section follows the same rule one step further: it is
+ * absent, not disabled, for a role that does not reach it. The role comes from
+ * the backend (`/me`), and hiding the link is not the boundary — the pages fail
+ * closed on a typed URL and the API refuses every write. It is about not
+ * offering a door that will not open.
  */
-export function AppShell({ children }: { children: ReactNode }) {
+export function AppShell({
+  children,
+  showAdmin = false,
+}: {
+  children: ReactNode;
+  showAdmin?: boolean;
+}) {
   return (
     <div className="bg-canvas flex min-h-dvh">
       <aside className="bg-chrome hidden w-[var(--sidebar-width)] shrink-0 flex-col lg:flex">
@@ -38,6 +51,19 @@ export function AppShell({ children }: { children: ReactNode }) {
           <NavLink href={MONITOR_PATH} label="Monitor diário" />
           <NavLink href={TV_PATH} label="Painel de TV" />
         </nav>
+
+        {showAdmin ? (
+          <nav
+            aria-label="Administração"
+            className="flex flex-col gap-1 px-4 py-2"
+          >
+            <p className="text-2xs px-3 py-2 font-bold tracking-[0.08em] text-white/80 uppercase">
+              Administração
+            </p>
+            <NavLink href={COLABORADORES_PATH} label="Colaboradores" />
+            <NavLink href={IMPORTACAO_PATH} label="Importação" />
+          </nav>
+        ) : null}
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">

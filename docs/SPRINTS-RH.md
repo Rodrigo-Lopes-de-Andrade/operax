@@ -211,7 +211,7 @@ O bucket do Storage (`IMPORT_BUCKET`, default `imports`) **precisa existir e ser
 privado** no projeto Supabase. Não é migration: `storage.*` é gerenciado pelo
 Supabase. Se faltar, o upload responde 503 dizendo qual bucket falta.
 
-## R3 — Telas: aba Colaboradores
+## R3 — Telas: aba Colaboradores ✅
 
 **Pré-requisito:** handoff da rodada 7 do Claude Design. Se atrasar, a versão
 funcional nasce com os componentes existentes (Table, Tabs, Drawer, EmptyState)
@@ -230,6 +230,88 @@ seguindo `COMPONENTES.md`, e o refinamento visual entra quando o handoff chegar
 **Gate:** Playwright: DP edita cadastro e cria vigência · supervisor não vê a
 aba de remuneração (**ausente do DOM**, não desabilitada) · quem tem leitura
 sem escrita não vê botão de editar · fluxo de import completo pela tela.
+
+### Andamento em 24/08/2026 — fechado
+
+**O R3 precisou de backend antes de tela.** A SPEC §5 lista as rotas de `/rh`, e
+o R2 entregou só as do arquivo. Entraram agora `GET /rh/employees` (lista com
+filtro, busca e próximo vencimento), `GET /rh/employees/{id}` (detalhe por
+domínio) e as três escritas do formulário: `PATCH /rh/employees/{id}`,
+`POST .../compensation` e `POST .../position`.
+
+As escritas param nas mesmas três porque o schema é o que decide: `leave_period`
+e `workforce_movement` não concedem escrita ao painel, `document` exige arquivo e
+`financial_agreement` exige documento de autorização — os mesmos quatro que o R2
+já tinha nomeado em `SEM_TEMPLATE`. A superfície gravável do RH é coerente entre
+planilha e formulário porque é a mesma restrição de banco nos dois.
+
+**A regra da aba mora numa função pura.** `frontend/src/lib/rh/tabs.ts` decide
+quais abas existem, e a regra inteira é uma só: bloco que chegou `null` — e não
+`[]` — não vira aba. `null` é "você não alcança este domínio" e `[]` é "não há
+nada registrado". Está separada da página de propósito: trocar `!== null` por
+`?.length` continua compilando, continua passando em qualquer teste de "a tela
+renderiza", e vaza a existência de salário para quem não pode vê-lo.
+
+**O formulário e a planilha recusam a mesma coisa.** `PATCH` chama
+`check_enums`, `check_unique` e `check_owned_fields` — as funções que o import já
+usava. E `EDITABLE_FIELDS` é **derivado** de `ownership.MATRIX` (dono RH, sem
+vigência, nas duas tabelas que a aba edita), não listado à mão: dá `hr_code`,
+`employment_type` e `ctps`, e muda sozinho no dia em que a matriz mudar de ideia.
+
+**Os valores aceitos viajam com a resposta.** O detalhe devolve `enums` lido do
+`check` do próprio banco, e o `select` da tela é montado com ele. Uma cópia dos
+enums no frontend envelheceria oferecendo o que o banco recusa — que é a falha
+que o `95_teste_matriz_rh.py` já pega no Python e que aqui não teria como pegar.
+
+**A vigência não tem edição.** Corrigir é revogar e criar, e isso é do banco
+antes de ser da tela: `check_new_band` recusa vigência que comece na data da
+faixa aberta ou antes dela, com a frase "revogue-a" em vez de um erro de
+constraint. O SQL que fecha a faixa e abre a próxima é **o mesmo** do import
+(`repository.CLOSE_BAND_SQL` / `NEW_BAND_SQL`).
+
+**Duas coisas que a execução expôs no dado, não no código:**
+
+1. **O contrato de experiência entupia a lista.** Todo colaborador tem dia 30 e
+   dia 60 de admissão, e quem foi admitido há mais de dois meses carregava dois
+   prazos vencidos para sempre — a lista inteira ordenada por gente admitida em
+   2024. Documento vencido é problema de hoje; dia 30 que ficou para trás é
+   história. A experiência agora só conta enquanto não passou.
+2. **O seed criava faixa "vigente" começando no futuro.** `hired_on + 365` para
+   quem entrou há menos de um ano produzia um salário em vigor que ainda não
+   vigorava — e um beco sem saída, porque vigência nova não pode ser anterior à
+   vigente nem estar no futuro. O reajuste do seed passou a existir só quando a
+   data dele já chegou.
+
+**Gate do R3: cumprido.** `frontend/e2e/colaboradores.spec.ts`, **7 testes
+verdes** contra o Supabase local com o seed:
+
+| Asserção do gate | Como ficou |
+|---|---|
+| DP edita cadastro e cria vigência | grava (`PATCH` 204, conferido **depois de recarregar**) e abre faixa nova lendo a data da vigente na própria linha do tempo |
+| aba de domínio ausente do DOM | o DP não tem domínio de saúde: a aba ASO tem `count() === 0`, e o owner, que tem, vê a mesma tela com ela |
+| leitura sem escrita não vê botão | `diretoria@fastpark.dev` (`executive`) alcança remuneração e não é `is_admin`: sem "Salvar cadastro" e sem "Nova vigência" |
+| import completo pela tela | modelo → download → upload do arquivo intocado → preview com "já estava assim" e zero recusas |
+| (além do gate) supervisor não alcança a área | nem pelo menu nem digitando a URL — a página decide de novo, no servidor |
+
+O gate pedia "supervisor não vê a aba de remuneração". Com os papéis do seed o
+supervisor não alcança a área inteira, que é uma ausência maior; a regra da aba
+ficou provada com o par DP/owner sobre o domínio de saúde, que é o mesmo
+mecanismo.
+
+**324 testes** no Vitest (eram 297) e **154** no pytest (eram 132).
+
+### Três coisas que o R3 mexeu fora dele, e por quê
+
+- **`supabase/seed.sql` ganhou `diretoria@fastpark.dev` (`executive`).** "Leitura
+  sem escrita" é um estado real do produto e não havia usuário assim: sem ele o
+  gate não teria como provar que o botão some.
+- **`supabase/config.toml` declara o bucket `imports`, privado.** Em produção ele
+  é criado no painel — `storage.*` é gerenciado pelo Supabase e não entra em
+  migration. Sem o bucket, `POST /rh/imports` responde 503 dizendo qual falta.
+- **`playwright.config.ts` passa `CORS_ORIGINS` para a API.** A tela de RH é a
+  primeira que **escreve do navegador**; sem a origem do servidor de teste na
+  allowlist o `fetch` morre no preflight e a interface mostra a mensagem
+  genérica — indistinguível de um bug de produto.
 
 ## R4 — Carga inicial e homologação
 
