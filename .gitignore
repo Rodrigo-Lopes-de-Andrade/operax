@@ -29,9 +29,9 @@ coverage/
 *.log
 .claude/settings.local.json
 .claude/settings.json.bak
-scripts/_baseline.sql
-# Snapshot do schema da nuvem, gerado por scripts/introspeccao_nuvem.py.
-# Nao entra no repo: e o schema do banco de um cliente, e e regeneravel em
-# segundos com o token do `supabase login`.
-scripts/_producao.sql
-scripts/_producao.json
+# Artefatos gerados por scripts/introspeccao_nuvem.py e pelo ensaio do rename.
+# Nao entram no repo: sao o schema do banco de um cliente e catalogos derivados,
+# todos regeneraveis em segundos. `_test_stub_supabase.sql` e a excecao — ele e
+# escrito a mao e versionado.
+scripts/_*
+!scripts/_test_stub_supabase.sql

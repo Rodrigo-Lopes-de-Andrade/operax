@@ -19,6 +19,7 @@ O que reconstrói: schemas, enums, tabelas com colunas e defaults, constraints,
 reconstrói: grants por role, owners, sequences soltas e extensões — o baseline
 não é backup, é o mapa contra o qual a migration de rename é escrita.
 """
+
 from __future__ import annotations
 
 import argparse
@@ -33,10 +34,24 @@ SB_SQL = pathlib.Path(__file__).with_name("sb_sql.sh")
 SCHEMAS = ("app", "secullum", "util", "public")
 
 
+# Com --psql o alvo é um Postgres alcançável por libpq (o descartável do ensaio,
+# ou o stack local). Mesmas consultas, mesmo JSON: é o que torna possível
+# comparar o catálogo da nuvem com o que as migrations deste repositório
+# produzem, sem que a diferença venha da ferramenta.
+USE_PSQL = False
+
+
 def q(ref: str, sql: str, opcional: bool = False) -> list[dict]:
-    out = subprocess.run(
-        [str(SB_SQL), ref, sql], capture_output=True, text=True, check=False
-    )
+    if USE_PSQL:
+        envelope = f"select coalesce(json_agg(t), '[]'::json) from ({sql}) t"
+        out = subprocess.run(
+            ["psql", "-tAX", "-v", "ON_ERROR_STOP=1", "-d", ref, "-c", envelope],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    else:
+        out = subprocess.run([str(SB_SQL), ref, sql], capture_output=True, text=True, check=False)
     if out.returncode != 0:
         # Um projeto que nunca recebeu `db push` não tem
         # `supabase_migrations.schema_migrations`, e o endpoint responde 400.
@@ -63,7 +78,7 @@ IN_SCHEMAS = "'" + "','".join(SCHEMAS) + "'"
 QUERIES: dict[str, str] = {
     "enums": f"""
         select n.nspname as schema, t.typname as name,
-               array_agg(e.enumlabel order by e.enumsortorder) as labels
+               to_json(array_agg(e.enumlabel order by e.enumsortorder)) as labels
         from pg_type t
         join pg_namespace n on n.oid = t.typnamespace
         join pg_enum e on e.enumtypid = t.oid
@@ -75,12 +90,12 @@ QUERIES: dict[str, str] = {
                c.relrowsecurity as rls, c.relforcerowsecurity as rls_forced,
                obj_description(c.oid) as comment
         from pg_class c join pg_namespace n on n.oid = c.relnamespace
-        where n.nspname in ({IN_SCHEMAS}) and c.relkind in ('r','p','m')
+        where n.nspname in ({IN_SCHEMAS}) and c.relkind in ('r','p')
         order by 1, 2
     """,
     "columns": f"""
         select table_schema as schema, table_name as name, column_name as column,
-               ordinal_position as pos, data_type, udt_name,
+               ordinal_position as pos, data_type, udt_name, udt_schema,
                character_maximum_length as maxlen, numeric_precision as prec,
                numeric_scale as scale, is_nullable, column_default, is_identity
         from information_schema.columns
@@ -105,8 +120,8 @@ QUERIES: dict[str, str] = {
     "policies": f"""
         select n.nspname as schema, c.relname as name, p.polname as policy,
                p.polcmd as command,
-               (select array_agg(r.rolname) from pg_roles r
-                 where r.oid = any(p.polroles)) as roles,
+               (select to_json(array_agg(r.rolname order by r.rolname))
+                  from pg_roles r where r.oid = any(p.polroles)) as roles,
                pg_get_expr(p.polqual, p.polrelid) as using_expr,
                pg_get_expr(p.polwithcheck, p.polrelid) as check_expr
         from pg_policy p
@@ -123,6 +138,12 @@ QUERIES: dict[str, str] = {
         from pg_proc p join pg_namespace n on n.oid = p.pronamespace
         where n.nspname in ({IN_SCHEMAS}) and p.prokind in ('f','p')
         order by 1, 2, 3
+    """,
+    "kinds": f"""
+        select n.nspname as schema, c.relname as name, c.relkind as kind
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname in ({IN_SCHEMAS}) and c.relkind in ('v','m')
+        order by 1, 2
     """,
     "views": f"""
         select n.nspname as schema, c.relname as name,
@@ -151,6 +172,34 @@ QUERIES: dict[str, str] = {
           and col_description(c.oid, a.attnum) is not null
         order by 1, 2, 3
     """,
+    # O USAGE de schema e a primeira porta: `secullum` nao concede a `anon` nem
+    # a `authenticated`, so a `service_role`. Sem esta consulta o ensaio herda o
+    # que o stub deixou e a suite de isolamento acusa o que nao existe.
+    "schema_grants": f"""
+        select n.nspname as name,
+               coalesce(to_json(n.nspacl::text[]), '[]'::json) as acl
+        from pg_namespace n where n.nspname in ({IN_SCHEMAS})
+        order by 1
+    """,
+    # Grants sao metade da fronteira de seguranca deste produto: `anon` nao pode
+    # ler nada, e as views de `public` so vao para `authenticated`. Sem eles o
+    # ensaio herda os grants permissivos do stub e a suite de isolamento acusa
+    # um vazamento que so existe no ensaio.
+    "grants": f"""
+        select n.nspname as schema, c.relname as name, c.relkind as kind,
+               coalesce(to_json(c.relacl::text[]), '[]'::json) as acl
+        from pg_class c join pg_namespace n on n.oid = c.relnamespace
+        where n.nspname in ({IN_SCHEMAS}) and c.relkind in ('r','p','v','m')
+        order by 1, 2
+    """,
+    "function_grants": f"""
+        select n.nspname as schema, p.proname as name,
+               pg_get_function_identity_arguments(p.oid) as args,
+               coalesce(to_json(p.proacl::text[]), '[]'::json) as acl
+        from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname in ({IN_SCHEMAS}) and p.prokind in ('f','p')
+        order by 1, 2, 3
+    """,
     "migrations": """
         select version, name from supabase_migrations.schema_migrations
         order by version
@@ -164,15 +213,18 @@ OPCIONAIS = frozenset({"migrations"})
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("ref", help="project ref do Supabase")
+    parser.add_argument("ref", help="project ref do Supabase, ou dbname com --psql")
     parser.add_argument("--out", default=None, help="arquivo .sql de saída")
     parser.add_argument("--json", default=None, help="também grava o catálogo cru")
+    parser.add_argument(
+        "--psql", action="store_true", help="alvo é um Postgres local; `ref` vira o dbname"
+    )
     args = parser.parse_args()
 
-    catalog = {
-        name: q(args.ref, sql, opcional=name in OPCIONAIS)
-        for name, sql in QUERIES.items()
-    }
+    global USE_PSQL
+    USE_PSQL = args.psql
+
+    catalog = {name: q(args.ref, sql, opcional=name in OPCIONAIS) for name, sql in QUERIES.items()}
 
     if args.json:
         pathlib.Path(args.json).write_text(
@@ -200,6 +252,7 @@ COMMAND = {"r": "select", "a": "insert", "w": "update", "d": "delete", "*": "all
 
 
 def render(ref: str, cat: dict) -> str:
+    q_kinds = cat.get("kinds", [])
     out: list[str] = [
         "-- " + "=" * 74,
         f"-- Schema do projeto Supabase {ref}, reconstruído do catálogo.",
@@ -215,8 +268,9 @@ def render(ref: str, cat: dict) -> str:
         out.append(f"--   {row['version']}  {row.get('name') or ''}")
     out.append("")
 
-    schemas = {r["schema"] for r in cat["tables"]} | {r["schema"] for r in cat["views"]}
-    for schema in sorted(schemas):
+    # `util` só tem função: derivar os schemas das tabelas deixaria ele de fora
+    # e as 78 funções seguintes falhariam todas.
+    for schema in SCHEMAS:
         out.append(f"create schema if not exists {schema};")
     out.append("")
 
@@ -241,7 +295,7 @@ def render(ref: str, cat: dict) -> str:
             if col["data_type"] == "ARRAY":
                 t = t.lstrip("_") + "[]"
             elif col["data_type"] == "USER-DEFINED":
-                t = col["udt_name"]
+                t = f"{col['udt_schema']}.{ident(col['udt_name'])}"
             elif col["maxlen"]:
                 t = f"{col['data_type']}({col['maxlen']})"
             elif col["data_type"] == "numeric" and col["prec"]:
@@ -265,21 +319,24 @@ def render(ref: str, cat: dict) -> str:
             out.append(f"comment on table {alvo} is '{c}';")
         out.append("")
 
-    out.append("-- constraints")
-    for row in cat["constraints"]:
-        if row["type"] == "p" and "PRIMARY KEY" in (row["definition"] or ""):
-            pass  # a PK vem junto do create table em pg_dump; aqui vai como alter
-        out.append(
-            f"alter table {row['schema']}.{ident(row['name'])} "
-            f"add constraint {ident(row['constraint'])} {row['definition']};"
-        )
+    # Ordem obrigatória: a FK exige que a chave referenciada já exista, e
+    # ordenar por nome punha `acordo_..._fkey` antes de `tenant_pkey`.
+    out.append("-- constraints (pk e unique primeiro, depois check, fk por último)")
+    for grupo in ("p", "u", "c", "x", "t", "f"):
+        for row in cat["constraints"]:
+            if row["type"] != grupo:
+                continue
+            out.append(
+                f"alter table {row['schema']}.{ident(row['name'])} "
+                f"add constraint {ident(row['constraint'])} {row['definition']};"
+            )
     out.append("")
 
-    out.append("-- índices")
-    for row in cat["indexes"]:
-        out.append(row["definition"] + ";")
-    out.append("")
-
+    # Estas funções chamam umas às outras (`pode_ver_colaborador` chama
+    # `pode_ver_unidade`) e o Postgres valida o corpo de função SQL na criação.
+    # Ordenar por dependência exigiria um grafo; desligar a validação é o que o
+    # próprio pg_dump faz, e o schema é reconferido pelo uso logo em seguida.
+    out.append("set check_function_bodies = off;")
     out.append("-- funções")
     for row in cat["functions"]:
         out.append(row["definition"].rstrip().rstrip(";") + ";")
@@ -289,15 +346,30 @@ def render(ref: str, cat: dict) -> str:
             out.append(f"comment on function {alvo} is '{c}';")
     out.append("")
 
+    out.append("reset check_function_bodies;")
+    out.append("")
     out.append("-- views")
+    matviews = {(r["schema"], r["name"]) for r in q_kinds if r["kind"] == "m"}
     for row in cat["views"]:
+        corpo = row["definition"].rstrip().rstrip(";")
+        alvo = f"{row['schema']}.{ident(row['name'])}"
+        if (row["schema"], row["name"]) in matviews:
+            out.append(f"create materialized view if not exists {alvo} as\n{corpo};")
+            continue
         opts = ""
         if row["options"]:
             opts = " with (" + ", ".join(row["options"]) + ")"
-        out.append(
-            f"create or replace view {row['schema']}.{ident(row['name'])}{opts} as\n"
-            + row["definition"].rstrip().rstrip(";") + ";"
-        )
+        out.append(f"create or replace view {alvo}{opts} as\n{corpo};")
+    out.append("")
+
+    # `pg_indexes` lista também o índice que a própria constraint criou
+    # (pkey, unique): recriá-lo é `relation already exists`.
+    de_constraint = {(r["schema"], r["constraint"]) for r in cat["constraints"]}
+    out.append("-- índices (os que sustentam constraint já vieram acima)")
+    for row in cat["indexes"]:
+        if (row["schema"], row["index"]) in de_constraint:
+            continue
+        out.append(row["definition"] + ";")
     out.append("")
 
     out.append("-- policies")
@@ -318,6 +390,54 @@ def render(ref: str, cat: dict) -> str:
     out.append("-- triggers")
     for row in cat["triggers"]:
         out.append(row["definition"] + ";")
+    out.append("")
+
+    # ACL vem como 'role=privs/grantor'. Revoga-se tudo antes de conceder, para
+    # que o alvo não herde o que já estivesse lá.
+    PRIV = {
+        "r": "select",
+        "a": "insert",
+        "w": "update",
+        "d": "delete",
+        "D": "truncate",
+        "x": "references",
+        "t": "trigger",
+        "X": "execute",
+    }
+    PAPEIS = "public, anon, authenticated, service_role"
+
+    def concessoes(acl, alvo, verbo):
+        linhas = [f"revoke all on {verbo} {alvo} from {PAPEIS};"]
+        for entrada in acl or []:
+            papel, _, resto = entrada.partition("=")
+            privs = resto.split("/")[0]
+            nomes = sorted({PRIV[p] for p in privs if p in PRIV})
+            if not nomes:
+                continue
+            quem = papel or "public"
+            linhas.append(f"grant {', '.join(nomes)} on {verbo} {alvo} to {quem};")
+        return linhas
+
+    out.append("-- grants de schema")
+    for row in cat.get("schema_grants", []):
+        out.append(f"revoke all on schema {row['name']} from {PAPEIS};")
+        for entrada in row["acl"] or []:
+            papel, _, resto = entrada.partition("=")
+            privs = resto.split("/")[0]
+            nomes = sorted({"usage" if p == "U" else "create" for p in privs if p in "UC"})
+            quem = papel or "public"
+            if nomes and quem in ("anon", "authenticated", "service_role", "public"):
+                out.append(f"grant {', '.join(nomes)} on schema {row['name']} to {quem};")
+    out.append("")
+
+    out.append("-- grants")
+    for row in cat.get("grants", []):
+        alvo = f"{row['schema']}.{ident(row['name'])}"
+        verbo = "table" if row["kind"] in ("r", "p", "v") else "table"
+        out.extend(concessoes(row["acl"], alvo, verbo))
+    for row in cat.get("function_grants", []):
+        alvo = f"{row['schema']}.{ident(row['name'])}({row['args']})"
+        out.extend(concessoes(row["acl"], alvo, "function"))
     out.append("")
 
     out.append("-- comentários de coluna")
