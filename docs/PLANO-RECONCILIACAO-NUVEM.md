@@ -1,5 +1,7 @@
 # OperaX — plano de reconciliação do projeto na nuvem
 
+<!-- verificar-docs: inexistentes-de-proposito public.fn_kpi_periodo -->
+
 **Decisão de 22/08/2026:** reconciliar o projeto Supabase do cliente com este
 repositório, em vez de tratá-lo como sistema legado.
 
@@ -262,7 +264,7 @@ token de conta válido, e a Management API aceita SQL com ele.
   então o estado pré-migration não existe mais em lugar nenhum para ser
   fotografado. A suíte segue no stub simulado, e isso é honesto.
 
-### Fase 2 — provar a fusão, duas vezes
+### Fase 2 — provar a fusão, duas vezes ✅ fechada em 24/08/2026
 
 **Primeiro ensaio: fechado em 22/08/2026.** Num Postgres descartável, contra uma
 cópia fiel de produção. Reproduzível por `scripts/ensaiar_rename_nuvem.sh <ref>`.
@@ -318,18 +320,111 @@ Cada bloco da migration existe por uma armadilha que só apareceu ao rodar:
   `null` — a guarda por aridade nunca casava com função sem parâmetro, e quatro
   helpers escapavam em silêncio.
 
-#### Segundo ensaio: em staging, e ainda não feito
+#### Segundo ensaio: fechado em 24/08/2026, no projeto `db-test`
 
-O que um Postgres descartável não prova: PostgREST, Auth, os grants como o
-Supabase os aplica, e o `security_invoker` valendo de verdade contra a anon key.
-Isso só o projeto `db-test` prova, e exige DDL nele.
+Reproduzível por `scripts/ensaiar_rename_staging.sh wbzaqjlfpqteesehapnn`. Ele
+esvazia o staging, monta lá o schema de produção, confere que a cópia é a origem
+campo a campo, carrega as linhas de configuração, aplica 11b e as migrations 12
+a 15, roda as suítes e compara o catálogo com o que as 17 migrations produzem.
+
+| | |
+|---|---|
+| a cópia é fiel à origem | **campo a campo**, em 14 espécies |
+| 11b e 12 a 15 aplicam | sem erro |
+| 97, 98, 99 | OK |
+| 98 na forma de claim do PostgREST | OK |
+| catálogo renomeado × alvo | **idêntico** |
+| corpo de view × alvo | **9 de 9 byte a byte** |
+| corpo de função × alvo | 20 de 24; as 4 divergências são as declaradas |
+| RLS e FORCE por tabela | batem em 45 de 45 |
+
+**O ensaio em projeto real encontrou cinco coisas que o descartável não tinha
+como encontrar — e quatro delas eram buraco na ferramenta de leitura, não na
+migration.** Quer dizer que o primeiro ensaio rodou contra uma cópia mais fraca
+que produção e nunca soube.
+
+1. **`force row level security` nas 20 tabelas de `secullum` não era emitido.**
+   `scripts/introspeccao_nuvem.py` lia `relforcerowsecurity` para o JSON e nunca
+   o escrevia no SQL. Com RLS ligada e **zero policy**, é o FORCE que fecha a
+   porta: sem ele o próprio dono lê a PII inteira. A cópia do primeiro ensaio
+   tinha 0 tabelas forçadas onde produção tem 20.
+2. **`MAINTAIN` (PG17) sumia dos grants.** A leitura usava o nome do privilégio
+   pelo `information_schema`, que é padrão SQL e não conhece MAINTAIN; a cópia
+   nascia com `arwdDxt` onde produção tem `arwdDxtm`.
+3. **`generated always as identity` sumia.** `app.audit_log.id` virava `bigint
+   not null` sem gerador — todo insert sem `id` quebraria.
+4. **`pg_default_acl` não era lido.** É onde a migration 00 revoga `anon` dos
+   privilégios default de `public`. Sem ele a cópia nasce com o default aberto, e
+   a próxima view criada em `public` já nasce legível por `anon`.
+5. **A guarda de coexistência do bloco 0 só olhava tabela.** Num banco misto o
+   rename de função é pulado (ele é guardado por "o nome novo não existe") e o
+   bloco de corpos recria o nome novo assim mesmo — sobravam
+   `public.fn_kpi_periodo` e `public.fn_kpi_period`, lado a lado, sem uma linha
+   de aviso. Exatamente a "fusão pela
+   metade" que o bloco 0 existe para recusar, só que em função em vez de tabela.
+   A guarda agora cobre tabela, função e tipo.
+
+Os quatro primeiros estão corrigidos em `scripts/introspeccao_nuvem.py`; o
+quinto, em `scripts/gerar_rename_nuvem.py`, que regera a migration. Dois
+comparadores novos passaram a existir para que isso não volte calado:
+`scripts/conferir_copia.py` confronta origem e cópia campo a campo em todo
+schema, e `scripts/comparar_catalogos.py` deixou de comparar só nome — agora
+compara também RLS/FORCE por tabela e o **corpo** de cada função e view.
+
+#### Um fato operacional que muda o risco da Fase 3
+
+**A Management API é transacional.** Um corpo de SQL enviado a
+`POST /v1/projects/{ref}/database/query` roda numa transação só: testado com um
+DDL bem-sucedido seguido de `select 1/0`, e o DDL não sobreviveu. Aplicar 11b por
+`scripts/sb_sql.sh` é tudo-ou-nada — **não existe produção meio renomeada** por
+esse caminho.
+
+#### O que continua sem prova, e por quê
+
+O PostgREST **por HTTP** não foi exercitado: revelar a anon key do projeto foi
+bloqueado, e não foi contornado. O que deu para provar sem ela:
+
+- `db_schema` do PostgREST é `public,graphql_public` **nos dois projetos** — lido
+  pela Management API. É a exigência do CLAUDE.md, verificada e não presumida.
+- A suíte 98 roda com `set local role authenticated`, que é o mesmo role que o
+  PostgREST assume.
+- E roda **também** na forma em que o PostgREST entrega o claim. `auth.uid()` é
+  um `coalesce` de dois braços: `request.jwt.claim.sub` (achatado) e
+  `request.jwt.claims ->> 'sub'` (JSON). As suítes usam o primeiro; o PostgREST
+  real usa o segundo. O ensaio converte as cinco claims e roda as duas formas —
+  antes disso, o braço que produção usa nunca tinha sido testado.
+
+Falta, e só a anon key destrava: um `GET` de verdade contra `/rest/v1/`, com e
+sem sessão.
 
 ### Fase 3 — janela
 
+O que a Fase 2 mudou aqui: **a aplicação em si deixou de ser o risco.** A
+Management API roda o corpo inteiro numa transação — 11b aplica por completo ou
+não aplica nada. O risco que sobra é o que acontece *em volta* dela: escrita
+concorrente das Edge Functions durante o DDL, e o tempo entre parar a
+sincronização e religá-la com os nomes novos.
+
 - Backup completo e ponto de restauração.
-- **Pausar as Edge Functions** — elas escrevem durante o DDL.
-- Aplicar.
-- Atualizar as funções para os nomes novos e religar.
+- **Pausar as Edge Functions** — elas escrevem durante o DDL, e nenhuma delas usa
+  transação (§4b).
+- Aplicar, uma migration por chamada, na ordem:
+
+      scripts/sb_sql.sh <ref> -f supabase/migrations/20260815101150_11b_rename_pt_en.sql
+      scripts/sb_sql.sh <ref> -f supabase/migrations/20260815101200_12_data_freshness.sql
+      scripts/sb_sql.sh <ref> -f supabase/migrations/20260815101300_13_detection_cadence_alert_contract.sql
+      scripts/sb_sql.sh <ref> -f supabase/migrations/20260815101400_14_whatsapp_provedores.sql
+      scripts/sb_sql.sh <ref> -f supabase/migrations/20260822160000_15_rebrand_fastpark.sql
+
+  Cada chamada é atômica em si. Entre elas não há atomicidade: se a 13 falhar, a
+  11b e a 12 já estão aplicadas — e é por isso que o ponto de restauração vem
+  antes, não porque o rename possa ficar pela metade.
+- Registrar as cinco em `supabase_migrations.schema_migrations`, ou o próximo
+  `supabase db push` tentará aplicá-las de novo.
+- Atualizar as Edge Functions para os nomes novos e religar.
+- **A janela tem teto de 48 h**, e não é escolha: `sync-batidas` lê uma janela
+  fixa de 2 dias e não sabe buscar o que perdeu (§4b, risco 2). Parada mais longa
+  que isso deixa buraco permanente na série de marcações.
 - **Verificar:** um ciclo de sync completo sem erro; o dashboard deste
   repositório abre contra o projeto.
 
