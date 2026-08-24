@@ -61,6 +61,66 @@ for nome, chave, campos in (
     for x in so_a[:10]:
         print(f"     só alvo:   {'.'.join(map(str, x))}")
 
+# RLS por tabela. O rename nao pode desligar RLS nem soltar o FORCE de nenhuma
+# tabela — e comparar so nomes nao veria isso, porque `alter table rename` mantem
+# a tabela e muda so o rotulo. `secullum` fica de fora com o resto: DOM nao o inclui.
+print("\nRLS por tabela:")
+def _rls(cat):
+    return {
+        (r["schema"], r["name"]): (r["rls"], r["rls_forced"])
+        for r in cat["tables"]
+        if r["schema"] in DOM and r["name"] not in IGN_TAB
+    }
+
+
+re_, ra_ = _rls(ens), _rls(alv)
+div = [k for k in sorted(set(re_) & set(ra_)) if re_[k] != ra_[k]]
+if div:
+    ok = False
+    for k in div[:10]:
+        print(
+            f"  \u2717 {'.'.join(k)}: ensaio rls={re_[k][0]}/force={re_[k][1]}"
+            f"  alvo rls={ra_[k][0]}/force={ra_[k][1]}"
+        )
+else:
+    n_rls = sum(1 for v in re_.values() if v[0])
+    print(f"  \u2713 {n_rls} de {len(re_)} com RLS ligada, e o FORCE bate em todas")
+
+# Nome igual nao e corpo igual. Uma view pode ter sido renomeada e continuar
+# filtrando por 'ativo'; uma funcao pode ter o nome novo e o corpo velho citando
+# `app.unidade`. Comparar a definicao inteira e o que fecha essa porta.
+#
+# As quatro `util.can_see_*` divergem DE PROPOSITO: 57 policies as citam, o
+# Postgres recusa derruba-las, e `create or replace` nao troca nome de parametro.
+# O corpo entra em ingles com o parametro no nome antigo. Fica nomeado aqui em
+# vez de silencioso — ver docs/PLANO-RECONCILIACAO-NUVEM.md.
+PARAM_PRESO = {
+    ("util", "can_see_employee"),
+    ("util", "can_see_company"),
+    ("util", "can_see_unit"),
+    ("util", "can_see_domain"),
+}
+print("\ncorpos (definição, não só nome):")
+for especie, rotulo in (("functions", "função"), ("views", "view")):
+    de = {(r["schema"], r["name"]): r["definition"] for r in ens[especie]
+          if r["schema"] in DOM and r["name"] not in IGN_TAB
+          and (r["schema"], r["name"]) not in IGN_FN}
+    da = {(r["schema"], r["name"]): r["definition"] for r in alv[especie]
+          if r["schema"] in DOM and r["name"] not in IGN_TAB
+          and (r["schema"], r["name"]) not in IGN_FN}
+    comuns = sorted(set(de) & set(da))
+    difere = [k for k in comuns if de[k] != da[k]]
+    esperado = [k for k in difere if k in PARAM_PRESO]
+    inesperado = [k for k in difere if k not in PARAM_PRESO]
+    if inesperado:
+        ok = False
+        for k in inesperado[:6]:
+            print(f"  \u2717 {rotulo} {'.'.join(k)}: corpo diverge do alvo")
+    resumo = f"  \u2713 {len(comuns) - len(difere)} de {len(comuns)} {rotulo}(s) com corpo idêntico"
+    print(resumo + (f", {len(esperado)} divergindo de propósito" if esperado else ""))
+    for k in esperado:
+        print(f"      (deliberado) {'.'.join(k)} — parâmetro preso por 57 policies")
+
 pe = {(r["schema"], r["name"]): r["labels"] for r in ens["enums"] if r["schema"] in DOM}
 pa = {(r["schema"], r["name"]): r["labels"] for r in alv["enums"] if r["schema"] in DOM}
 print("\nrótulos de enum:")

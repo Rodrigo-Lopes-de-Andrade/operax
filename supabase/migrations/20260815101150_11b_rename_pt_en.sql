@@ -94,7 +94,52 @@ begin
   loop
     if to_regclass(format('%I.%I', r.sch, r.velho)) is not null
        and to_regclass(format('%I.%I', r.sch, r.novo)) is not null then
-      v_colisao := v_colisao || format('%s.%s ↔ %s.%s', r.sch, r.velho, r.sch, r.novo);
+      v_colisao := v_colisao || format('tabela %s.%s ↔ %s.%s', r.sch, r.velho, r.sch, r.novo);
+    end if;
+  end loop;
+  -- Função também. Sem esta volta a coexistência de `fn_kpi_periodo` e
+  -- `fn_kpi_period` passava batida: o rename de função é guardado por "o
+  -- nome novo não existe", então ele é PULADO, e o bloco de corpos recria o
+  -- nome novo assim mesmo. Sobravam as duas, sem uma linha de aviso.
+  for r in
+    select * from (values
+  ('app', 'revogar_desvio', 'revoke_deviation'),
+  ('public', 'fn_kpi_periodo', 'fn_kpi_period'),
+  ('public', 'fn_ranking_colaborador', 'fn_ranking_by_employee'),
+  ('public', 'fn_ranking_unidade', 'fn_ranking_by_unit'),
+  ('public', 'fn_recorrencia', 'fn_recurrence'),
+  ('util', 'bloqueia_tabela_em_public', 'block_table_in_public'),
+  ('util', 'eh_admin', 'is_admin'),
+  ('util', 'papeis_no_tenant', 'roles_in_tenant'),
+  ('util', 'pode_ver_colaborador', 'can_see_employee'),
+  ('util', 'pode_ver_dominio', 'can_see_domain'),
+  ('util', 'pode_ver_empresa', 'can_see_company'),
+  ('util', 'pode_ver_unidade', 'can_see_unit'),
+  ('util', 'tem_tenant', 'has_tenant'),
+  ('util', 'tenants_do_usuario', 'user_tenants'),
+  ('util', 'toca_atualizado_em', 'touch_updated_at'),
+  ('util', 'valida_destino_alerta', 'validate_alert_target')
+) as t(sch, velho, novo)
+  loop
+    if exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                where n.nspname = r.sch and p.proname = r.velho)
+       and exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                    where n.nspname = r.sch and p.proname = r.novo) then
+      v_colisao := v_colisao || format('função %s.%s ↔ %s.%s', r.sch, r.velho, r.sch, r.novo);
+    end if;
+  end loop;
+  -- E tipo, pelo mesmo motivo.
+  for r in
+    select * from (values
+  ('app', 'dominio_sensivel', 'sensitive_domain'),
+  ('app', 'papel', 'user_role')
+) as t(sch, velho, novo)
+  loop
+    if exists (select 1 from pg_type ty join pg_namespace n on n.oid = ty.typnamespace
+                where n.nspname = r.sch and ty.typname = r.velho)
+       and exists (select 1 from pg_type ty join pg_namespace n on n.oid = ty.typnamespace
+                    where n.nspname = r.sch and ty.typname = r.novo) then
+      v_colisao := v_colisao || format('tipo %s.%s ↔ %s.%s', r.sch, r.velho, r.sch, r.novo);
     end if;
   end loop;
   if array_length(v_colisao, 1) > 0 then
@@ -1154,32 +1199,32 @@ do $$
 begin
   if to_regclass('public.vw_deviation_event') is not null then
     execute $vw$create or replace view public.vw_deviation_event with (security_invoker=on) as
- SELECT d.id AS evento_id,
-d.tenant_id,
-d.reference_date,
-d.company_id,
-d.unit_id,
-u.name AS unit_name,
-d.employee_id,
-c.name AS employee_name,
-d.type,
-t.description AS type_description,
-t.direction,
-t.category,
-d.minutes,
-abs(d.minutes) AS minutes_abs,
-d.expected_time,
-d.actual_time,
-d.status,
-d.report_cycle_id,
-d.report_cycle_id IS NULL AS pendente_de_ciclo,
-d.detected_at,
-cfg.counts_as_deviation
+     SELECT d.id AS evento_id,
+    d.tenant_id,
+    d.reference_date,
+    d.company_id,
+    d.unit_id,
+    u.name AS unit_name,
+    d.employee_id,
+    c.name AS employee_name,
+    d.type,
+    t.description AS type_description,
+    t.direction,
+    t.category,
+    d.minutes,
+    abs(d.minutes) AS minutes_abs,
+    d.expected_time,
+    d.actual_time,
+    d.status,
+    d.report_cycle_id,
+    d.report_cycle_id IS NULL AS pendente_de_ciclo,
+    d.detected_at,
+    cfg.counts_as_deviation
    FROM app.deviation_event d
- JOIN app.deviation_type t ON t.code = d.type
- JOIN app.employee c ON c.id = d.employee_id
- LEFT JOIN app.unit u ON u.id = d.unit_id
- LEFT JOIN app.deviation_type_config cfg ON cfg.tenant_id = d.tenant_id AND cfg.code = d.type
+     JOIN app.deviation_type t ON t.code = d.type
+     JOIN app.employee c ON c.id = d.employee_id
+     LEFT JOIN app.unit u ON u.id = d.unit_id
+     LEFT JOIN app.deviation_type_config cfg ON cfg.tenant_id = d.tenant_id AND cfg.code = d.type
   WHERE d.status = 'active'::text AND d.mode = 'production'::text$vw$;
   end if;
 end $$;
@@ -1187,18 +1232,18 @@ do $$
 begin
   if to_regclass('public.vw_deviation_by_employee_day') is not null then
     execute $vw$create or replace view public.vw_deviation_by_employee_day with (security_invoker=on) as
- SELECT d.tenant_id,
-d.reference_date,
-d.employee_id,
-c.name AS employee_name,
-d.unit_id,
-u.name AS unit_name,
-count(*) AS eventos,
-sum(abs(d.minutes)) AS minutes_abs
+     SELECT d.tenant_id,
+    d.reference_date,
+    d.employee_id,
+    c.name AS employee_name,
+    d.unit_id,
+    u.name AS unit_name,
+    count(*) AS eventos,
+    sum(abs(d.minutes)) AS minutes_abs
    FROM app.deviation_event d
- JOIN app.employee c ON c.id = d.employee_id
- JOIN app.deviation_type_config cfg ON cfg.tenant_id = d.tenant_id AND cfg.code = d.type AND cfg.counts_as_deviation AND cfg.active
- LEFT JOIN app.unit u ON u.id = d.unit_id
+     JOIN app.employee c ON c.id = d.employee_id
+     JOIN app.deviation_type_config cfg ON cfg.tenant_id = d.tenant_id AND cfg.code = d.type AND cfg.counts_as_deviation AND cfg.active
+     LEFT JOIN app.unit u ON u.id = d.unit_id
   WHERE d.status = 'active'::text AND d.mode = 'production'::text
   GROUP BY d.tenant_id, d.reference_date, d.employee_id, c.name, d.unit_id, u.name$vw$;
   end if;
@@ -1207,19 +1252,19 @@ do $$
 begin
   if to_regclass('public.vw_deviation_summary_by_unit') is not null then
     execute $vw$create or replace view public.vw_deviation_summary_by_unit with (security_invoker=on) as
- SELECT d.tenant_id,
-d.reference_date,
-d.unit_id,
-u.name AS unit_name,
-d.company_id,
-count(*) AS eventos,
-count(DISTINCT d.employee_id) AS colaboradores,
-sum(d.minutes) FILTER (WHERE d.minutes > 0) AS minutes_excedente,
-- sum(d.minutes) FILTER (WHERE d.minutes < 0) AS minutes_faltante,
-sum(abs(d.minutes)) AS minutes_abs
+     SELECT d.tenant_id,
+    d.reference_date,
+    d.unit_id,
+    u.name AS unit_name,
+    d.company_id,
+    count(*) AS eventos,
+    count(DISTINCT d.employee_id) AS colaboradores,
+    sum(d.minutes) FILTER (WHERE d.minutes > 0) AS minutes_excedente,
+    - sum(d.minutes) FILTER (WHERE d.minutes < 0) AS minutes_faltante,
+    sum(abs(d.minutes)) AS minutes_abs
    FROM app.deviation_event d
- JOIN app.deviation_type_config cfg ON cfg.tenant_id = d.tenant_id AND cfg.code = d.type AND cfg.counts_as_deviation AND cfg.active
- LEFT JOIN app.unit u ON u.id = d.unit_id
+     JOIN app.deviation_type_config cfg ON cfg.tenant_id = d.tenant_id AND cfg.code = d.type AND cfg.counts_as_deviation AND cfg.active
+     LEFT JOIN app.unit u ON u.id = d.unit_id
   WHERE d.status = 'active'::text AND d.mode = 'production'::text
   GROUP BY d.tenant_id, d.reference_date, d.unit_id, u.name, d.company_id$vw$;
   end if;
@@ -1228,15 +1273,15 @@ do $$
 begin
   if to_regclass('public.vw_deviation_daily_trend') is not null then
     execute $vw$create or replace view public.vw_deviation_daily_trend with (security_invoker=on) as
- SELECT d.tenant_id,
-d.reference_date,
-d.unit_id,
-t.direction,
-count(*) AS eventos,
-sum(abs(d.minutes)) AS minutes_abs
+     SELECT d.tenant_id,
+    d.reference_date,
+    d.unit_id,
+    t.direction,
+    count(*) AS eventos,
+    sum(abs(d.minutes)) AS minutes_abs
    FROM app.deviation_event d
- JOIN app.deviation_type t ON t.code = d.type
- JOIN app.deviation_type_config cfg ON cfg.tenant_id = d.tenant_id AND cfg.code = d.type AND cfg.counts_as_deviation AND cfg.active
+     JOIN app.deviation_type t ON t.code = d.type
+     JOIN app.deviation_type_config cfg ON cfg.tenant_id = d.tenant_id AND cfg.code = d.type AND cfg.counts_as_deviation AND cfg.active
   WHERE d.status = 'active'::text AND d.mode = 'production'::text
   GROUP BY d.tenant_id, d.reference_date, d.unit_id, t.direction$vw$;
   end if;
@@ -1245,19 +1290,19 @@ do $$
 begin
   if to_regclass('public.vw_document_expiry') is not null then
     execute $vw$create or replace view public.vw_document_expiry with (security_invoker=on) as
- SELECT doc.id AS document_id,
-doc.tenant_id,
-doc.employee_id,
-c.name AS employee_name,
-c.unit_id,
-dt.name AS type_name,
-doc.valid_until,
-doc.valid_until - CURRENT_DATE AS dias_para_vencer,
-dt.expiry_alert_days,
-(doc.valid_until - CURRENT_DATE) <= dt.expiry_alert_days AS em_alerta
+     SELECT doc.id AS document_id,
+    doc.tenant_id,
+    doc.employee_id,
+    c.name AS employee_name,
+    c.unit_id,
+    dt.name AS type_name,
+    doc.valid_until,
+    doc.valid_until - CURRENT_DATE AS dias_para_vencer,
+    dt.expiry_alert_days,
+    (doc.valid_until - CURRENT_DATE) <= dt.expiry_alert_days AS em_alerta
    FROM app.document doc
- JOIN app.document_type dt ON dt.id = doc.type_id
- JOIN app.employee c ON c.id = doc.employee_id
+     JOIN app.document_type dt ON dt.id = doc.type_id
+     JOIN app.employee c ON c.id = doc.employee_id
   WHERE doc.status = 'active'::text AND doc.valid_until IS NOT NULL$vw$;
   end if;
 end $$;
@@ -1265,17 +1310,17 @@ do $$
 begin
   if to_regclass('public.vw_payroll_summary') is not null then
     execute $vw$create or replace view public.vw_payroll_summary with (security_invoker=on) as
- SELECT f.tenant_id,
-comp.year,
-comp.month,
-f.company_id,
-f.unit_id,
-sum(f.amount) FILTER (WHERE f.nature = 'earning'::text) AS total_proventos,
-sum(f.amount) FILTER (WHERE f.nature = 'deduction'::text) AS total_descontos,
-sum(f.amount) FILTER (WHERE f.nature = 'payroll_charge'::text) AS total_encargos,
-count(DISTINCT f.employee_id) AS colaboradores
+     SELECT f.tenant_id,
+    comp.year,
+    comp.month,
+    f.company_id,
+    f.unit_id,
+    sum(f.amount) FILTER (WHERE f.nature = 'earning'::text) AS total_proventos,
+    sum(f.amount) FILTER (WHERE f.nature = 'deduction'::text) AS total_descontos,
+    sum(f.amount) FILTER (WHERE f.nature = 'payroll_charge'::text) AS total_encargos,
+    count(DISTINCT f.employee_id) AS colaboradores
    FROM app.payroll_entry f
- JOIN app.payroll_period comp ON comp.id = f.payroll_period_id
+     JOIN app.payroll_period comp ON comp.id = f.payroll_period_id
   GROUP BY f.tenant_id, comp.year, comp.month, f.company_id, f.unit_id$vw$;
   end if;
 end $$;
@@ -1517,7 +1562,7 @@ where c.id = p_colaborador_id
   )
   );
 $function$
-$fn$;
+    $fn$;
   else
     execute $fn$CREATE OR REPLACE FUNCTION util.can_see_employee(p_employee_id uuid)
  RETURNS boolean
@@ -1535,7 +1580,7 @@ where c.id = p_employee_id
   )
   );
 $function$
-$fn$;
+    $fn$;
   end if;
 end $$;
 do $$
@@ -1562,7 +1607,7 @@ where tm.tenant_id = p_tenant_id
   and tm.active
   );
 $function$
-$fn$;
+    $fn$;
   else
     execute $fn$CREATE OR REPLACE FUNCTION util.can_see_domain(p_tenant_id uuid, p_domain app.sensitive_domain)
  RETURNS boolean
@@ -1583,7 +1628,7 @@ where tm.tenant_id = p_tenant_id
   and tm.active
   );
 $function$
-$fn$;
+    $fn$;
   end if;
 end $$;
 do $$
@@ -1616,7 +1661,7 @@ where emp.id = p_empresa_id
   )
   );
 $function$
-$fn$;
+    $fn$;
   else
     execute $fn$CREATE OR REPLACE FUNCTION util.can_see_company(p_company_id uuid)
  RETURNS boolean
@@ -1643,7 +1688,7 @@ where emp.id = p_company_id
   )
   );
 $function$
-$fn$;
+    $fn$;
   end if;
 end $$;
 do $$
@@ -1677,7 +1722,7 @@ where u.id = p_unidade_id
   )
   );
 $function$
-$fn$;
+    $fn$;
   else
     execute $fn$CREATE OR REPLACE FUNCTION util.can_see_unit(p_unit_id uuid)
  RETURNS boolean
@@ -1705,7 +1750,7 @@ where u.id = p_unit_id
   )
   );
 $function$
-$fn$;
+    $fn$;
   end if;
 end $$;
 CREATE OR REPLACE FUNCTION util.has_tenant(p_tenant_id uuid)
@@ -2157,17 +2202,17 @@ begin
   end if;
   if to_regclass('app.mv_deviation_day') is null then
     execute $mv$create materialized view app.mv_deviation_day as
- SELECT d.tenant_id,
-d.reference_date,
-d.company_id,
-d.unit_id,
-d.type,
-count(*) AS eventos,
-count(DISTINCT d.employee_id) AS colaboradores,
-COALESCE(sum(d.minutes) FILTER (WHERE d.minutes > 0), 0::bigint) AS minutes_excedente,
-COALESCE(- sum(d.minutes) FILTER (WHERE d.minutes < 0), 0::bigint) AS minutes_faltante
+     SELECT d.tenant_id,
+    d.reference_date,
+    d.company_id,
+    d.unit_id,
+    d.type,
+    count(*) AS eventos,
+    count(DISTINCT d.employee_id) AS colaboradores,
+    COALESCE(sum(d.minutes) FILTER (WHERE d.minutes > 0), 0::bigint) AS minutes_excedente,
+    COALESCE(- sum(d.minutes) FILTER (WHERE d.minutes < 0), 0::bigint) AS minutes_faltante
    FROM app.deviation_event d
- JOIN app.deviation_type_config cfg ON cfg.tenant_id = d.tenant_id AND cfg.code = d.type AND cfg.counts_as_deviation AND cfg.active
+     JOIN app.deviation_type_config cfg ON cfg.tenant_id = d.tenant_id AND cfg.code = d.type AND cfg.counts_as_deviation AND cfg.active
   WHERE d.status = 'active'::text AND d.mode = 'production'::text
   GROUP BY d.tenant_id, d.reference_date, d.company_id, d.unit_id, d.type$mv$;
 execute $ix$CREATE INDEX mv_deviation_day_periodo_idx ON app.mv_deviation_day USING btree (tenant_id, reference_date)$ix$;

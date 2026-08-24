@@ -97,7 +97,8 @@ QUERIES: dict[str, str] = {
         select table_schema as schema, table_name as name, column_name as column,
                ordinal_position as pos, data_type, udt_name, udt_schema,
                character_maximum_length as maxlen, numeric_precision as prec,
-               numeric_scale as scale, is_nullable, column_default, is_identity
+               numeric_scale as scale, is_nullable, column_default, is_identity,
+               identity_generation
         from information_schema.columns
         where table_schema in ({IN_SCHEMAS})
         order by table_schema, table_name, ordinal_position
@@ -191,6 +192,18 @@ QUERIES: dict[str, str] = {
         from pg_class c join pg_namespace n on n.oid = c.relnamespace
         where n.nspname in ({IN_SCHEMAS}) and c.relkind in ('r','p','v','m')
         order by 1, 2
+    """,
+    # Privilegio default decide o que uma tabela NOVA em `public` ja nasce
+    # podendo. A migration 00 revoga `anon` daqui; sem esta consulta a copia
+    # nasce com o default aberto e o proximo `create view` vaza para anon.
+    "default_acl": """
+        select defaclrole::regrole::text as owner,
+               coalesce(defaclnamespace::regnamespace::text, '') as schema,
+               defaclobjtype as objtype,
+               coalesce(to_json(defaclacl::text[]), '[]'::json) as acl
+        from pg_default_acl
+        where defaclrole::regrole::text = 'postgres'
+        order by 2, 3
     """,
     "function_grants": f"""
         select n.nspname as schema, p.proname as name,
@@ -303,7 +316,11 @@ def render(ref: str, cat: dict) -> str:
             else:
                 t = col["data_type"]
             piece = f"  {ident(col['column'])} {t}"
-            if col["column_default"]:
+            # Identity carrega uma sequence implícita. Sem esta linha a coluna
+            # nasce `bigint not null` sem gerador e todo insert sem `id` quebra.
+            if col["is_identity"] == "YES":
+                piece += f" generated {col['identity_generation'].lower()} as identity"
+            elif col["column_default"]:
                 piece += f" default {col['column_default']}"
             if col["is_nullable"] == "NO":
                 piece += " not null"
@@ -313,6 +330,10 @@ def render(ref: str, cat: dict) -> str:
         if tbl["rls"]:
             alvo = f"{tbl['schema']}.{ident(tbl['name'])}"
             out.append(f"alter table {alvo} enable row level security;")
+            # FORCE sujeita o próprio dono à RLS. As 20 tabelas de `secullum` têm
+            # RLS ligada e ZERO policy: sem FORCE, `postgres` lê a PII inteira.
+            if tbl["rls_forced"]:
+                out.append(f"alter table {alvo} force row level security;")
         if tbl["comment"]:
             c = tbl["comment"].replace("'", "''")
             alvo = f"{tbl['schema']}.{ident(tbl['name'])}"
@@ -403,6 +424,12 @@ def render(ref: str, cat: dict) -> str:
         "x": "references",
         "t": "trigger",
         "X": "execute",
+        # PG17. `grant all` na nuvem concede MAINTAIN; sem esta linha a cópia
+        # nasce com um privilégio a menos e o catálogo diverge sem dizer por quê.
+        "m": "maintain",
+        # só aparecem em sequence e schema, e é o default_acl que precisa deles.
+        "U": "usage",
+        "C": "create",
     }
     PAPEIS = "public, anon, authenticated, service_role"
 
@@ -438,6 +465,27 @@ def render(ref: str, cat: dict) -> str:
     for row in cat.get("function_grants", []):
         alvo = f"{row['schema']}.{ident(row['name'])}({row['args']})"
         out.extend(concessoes(row["acl"], alvo, "function"))
+    out.append("")
+
+    # `alter default privileges` so vale para objetos criados dali em diante e
+    # so o proprio dono pode mexer no dele — por isso a consulta filtra postgres.
+    OBJ = {"r": "tables", "S": "sequences", "f": "functions", "T": "types", "n": "schemas"}
+    out.append("-- privilégios default (o que uma tabela nova já nasce podendo)")
+    for row in cat.get("default_acl", []):
+        alvo = OBJ.get(row["objtype"])
+        if not alvo:
+            continue
+        onde = f" in schema {row['schema']}" if row["schema"] else ""
+        cab = f"alter default privileges for role {row['owner']}{onde}"
+        out.append(f"{cab} revoke all on {alvo} from {PAPEIS};")
+        for entrada in row["acl"] or []:
+            papel, _, resto = entrada.partition("=")
+            quem = papel or "public"
+            if quem not in ("anon", "authenticated", "service_role", "public"):
+                continue
+            nomes = sorted({PRIV[p] for p in resto.split("/")[0] if p in PRIV})
+            if nomes:
+                out.append(f"{cab} grant {', '.join(nomes)} on {alvo} to {quem};")
     out.append("")
 
     out.append("-- comentários de coluna")

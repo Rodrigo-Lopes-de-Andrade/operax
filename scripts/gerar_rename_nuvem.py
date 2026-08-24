@@ -569,7 +569,36 @@ def emitir(P, ALVO, PROD, CFG, VALORES, MAPA, PRESAS, ALVO_FN):
       loop
         if to_regclass(format('%I.%I', r.sch, r.velho)) is not null
            and to_regclass(format('%I.%I', r.sch, r.novo)) is not null then
-          v_colisao := v_colisao || format('%s.%s ↔ %s.%s', r.sch, r.velho, r.sch, r.novo);
+          v_colisao := v_colisao || format('tabela %s.%s ↔ %s.%s', r.sch, r.velho, r.sch, r.novo);
+        end if;
+      end loop;
+      -- Função também. Sem esta volta a coexistência de `fn_kpi_periodo` e
+      -- `fn_kpi_period` passava batida: o rename de função é guardado por "o
+      -- nome novo não existe", então ele é PULADO, e o bloco de corpos recria o
+      -- nome novo assim mesmo. Sobravam as duas, sem uma linha de aviso.
+      for r in
+        select * from (values""")
+    w(valores(P["funcoes"], (0, 1, 3)))
+    w("""    ) as t(sch, velho, novo)
+      loop
+        if exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                    where n.nspname = r.sch and p.proname = r.velho)
+           and exists (select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+                        where n.nspname = r.sch and p.proname = r.novo) then
+          v_colisao := v_colisao || format('função %s.%s ↔ %s.%s', r.sch, r.velho, r.sch, r.novo);
+        end if;
+      end loop;
+      -- E tipo, pelo mesmo motivo.
+      for r in
+        select * from (values""")
+    w(valores(P["tipos"], (0, 1, 2)))
+    w("""    ) as t(sch, velho, novo)
+      loop
+        if exists (select 1 from pg_type ty join pg_namespace n on n.oid = ty.typnamespace
+                    where n.nspname = r.sch and ty.typname = r.velho)
+           and exists (select 1 from pg_type ty join pg_namespace n on n.oid = ty.typnamespace
+                        where n.nspname = r.sch and ty.typname = r.novo) then
+          v_colisao := v_colisao || format('tipo %s.%s ↔ %s.%s', r.sch, r.velho, r.sch, r.novo);
         end if;
       end loop;
       if array_length(v_colisao, 1) > 0 then
@@ -1179,10 +1208,24 @@ def emitir(P, ALVO, PROD, CFG, VALORES, MAPA, PRESAS, ALVO_FN):
     # embrulhá-lo numa função indentou também o CONTEÚDO das strings — todo
     # comentário e todo SQL ganhou quatro espaços. Em SQL isso não muda nada, mas
     # o arquivo é lido por gente. Tira-se aqui, uma vez, no fim.
+    #
+    # Menos dentro de dollar-quote NOMEADO. `$function$`, `$mv$` e `$ix$` embrulham
+    # texto que veio do catálogo, e ali quatro espaços não são indentação minha:
+    # são o corpo como o Postgres vai guardá-lo. Os blocos `do $$` do próprio
+    # gerador usam a marca anônima e continuam sendo desindentados.
     sql = "\n".join(out) + "\n"
-    return "\n".join(
-        linha[4:] if linha.startswith("    ") else linha for linha in sql.split("\n")
-    )
+    saida, tag = [], None
+    for linha in sql.split("\n"):
+        transportada = tag is not None
+        for m in re.finditer(r"\$[A-Za-z_]+\$", linha):
+            if tag is None:
+                tag = m.group(0)
+            elif m.group(0) == tag:
+                tag = None
+        saida.append(
+            linha if transportada else (linha[4:] if linha.startswith("    ") else linha)
+        )
+    return "\n".join(saida)
 
 
 def linhas_de_catalogo(ref: str, alvo_db: str) -> dict:
