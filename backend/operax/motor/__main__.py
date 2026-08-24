@@ -1,6 +1,6 @@
 """`python -m operax.motor` — o que o `make motor` chama.
 
-O pacote tem três passos e eles rodam em ordem: `jornada` materializa o que era
+O pacote tem quatro passos e eles rodam em ordem: `jornada` materializa o que era
 esperado e `deteccao` compara as batidas contra isso. Detectar contra uma tabela
 vazia não dá zero desvio, dá zero informação — então o entrypoint faz os dois, e
 `--so-deteccao` existe para quem já rodou a jornada e está iterando na regra.
@@ -12,7 +12,7 @@ import argparse
 import asyncio
 import sys
 
-from operax.motor import deteccao, jornada, revogacao
+from operax.motor import cadastro, deteccao, jornada, revogacao
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -31,7 +31,7 @@ def main(argv: list[str] | None = None) -> int:
         help=f"janela da jornada esperada (padrão {jornada.DEFAULT_WINDOW_DAYS})",
     )
     parser.add_argument(
-        "--so-deteccao", action="store_true", help="pula a materialização da jornada"
+        "--so-deteccao", action="store_true", help="pula a promoção do cadastro e a jornada"
     )
     parser.add_argument(
         "--sem-revogacao", action="store_true", help="pula a reconciliação retroativa"
@@ -44,6 +44,11 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     if not args.so_deteccao:
+        # Passo zero: sem quadro no domínio, a jornada materializa zero linha e a
+        # detecção acha zero desvio — que não é "está tudo certo", é "não há o
+        # que comparar". Foi o estado de produção até 24/08/2026.
+        print(cadastro.relatorio(asyncio.run(cadastro.run())))
+        print()
         print(jornada.relatorio(asyncio.run(jornada.run(days=args.dias_jornada))))
         print()
     print(deteccao.relatorio(asyncio.run(deteccao.run(days=args.dias, mode=mode))))

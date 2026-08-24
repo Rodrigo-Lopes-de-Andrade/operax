@@ -1,5 +1,5 @@
 .PHONY: help dev dev-backend dev-frontend test lint db-test e2e build \
-        sync motor revogacao ciclo sender dicionario carga-inicial
+        sync cadastro motor revogacao ciclo sender dicionario carga-inicial
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -42,6 +42,9 @@ dicionario:     ## regenera docs/DICIONARIO-DE-DADOS.md a partir do banco
 # ---------------------------------------------------------------------------
 sync:           ## espelha a origem em `secullum`
 	cd backend && uv run python -m operax.sync
+
+cadastro:       ## promove empresa, departamento e colaborador do espelho para o domínio
+	cd backend && uv run python -m operax.motor.cadastro
 
 jornada:        ## materializa app.expected_workday e reporta a cobertura (S3)
 	cd backend && uv run python -m operax.motor.jornada --dias $(or $(DIAS),90)

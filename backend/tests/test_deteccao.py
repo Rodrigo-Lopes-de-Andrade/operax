@@ -12,7 +12,7 @@ from __future__ import annotations
 from datetime import date
 from uuid import UUID
 
-from operax.motor import deteccao, revogacao
+from operax.motor import cadastro, deteccao, revogacao
 from operax.motor.regras import DETECT_SQL, EVENTS_SQL, SUPERSEDED_SQL, VANISHED_SQL
 
 TENANT = UUID("dddddddd-0000-0000-0000-000000000001")
@@ -218,3 +218,74 @@ def test_o_escopo_da_execucao_sai_da_janela_e_nao_de_uma_flag():
     assert "%(scope)s" in deteccao._OPEN_RUN_SQL
     assert "scope" in deteccao._OPEN_RUN_SQL.replace("%(scope)s", "")
     assert "%(scope)s" in revogacao._OPEN_RUN_SQL
+
+
+# ---------------------------------------------------------------------------
+# Promoção do espelho
+# ---------------------------------------------------------------------------
+def test_a_empresa_do_colaborador_nunca_vem_do_departamento():
+    """Regra 5, conferida no texto do statement.
+
+    Cerca de 26% do quadro está num departamento de outra empresa. O join que
+    resolve `company_id` tem de partir de `Funcionario.empresa_id`; partir de
+    `Departamento.empresa_id` põe um quarto da folha na empresa errada de forma
+    consistente e invisível — e nenhuma tela mostraria isso.
+    """
+    sql = cadastro._EMPLOYEES_SQL
+
+    assert 'join secullum."Empresa" e on e.id = f.empresa_id' in sql
+    assert "d.empresa_id" not in sql
+
+
+def test_a_promocao_nao_inventa_unidade():
+    """`app.unit` é dimensão nossa; o espelho não tem esse conceito.
+
+    A ponte é `app.unit_secullum_map`, curada com o cliente. Criar unidade aqui
+    transformaria trabalho de curadoria em dado silencioso.
+    """
+    assert "insert into app.unit " not in cadastro._EMPLOYEES_SQL
+    assert "app.unit_secullum_map" in cadastro._EMPLOYEES_SQL
+
+
+def test_a_promocao_nao_desfaz_curadoria_humana():
+    """Mapa removido não pode apagar a lotação de quem já estava alocado."""
+    assert "coalesce(excluded.unit_id, app.employee.unit_id)" in cadastro._EMPLOYEES_SQL
+
+
+def test_a_fila_de_pendencia_ignora_quem_ja_saiu():
+    """Mapear departamento por causa de desligado é trabalho por nada."""
+    assert "status <> 'desligado'" in cadastro._PENDING_SQL
+
+
+def test_a_promocao_liga_o_tenant_em_todo_statement():
+    for nome, sql in vars(cadastro).items():
+        if not nome.endswith("_SQL") or not isinstance(sql, str):
+            continue
+        assert "%(tenant_id)s" in sql, nome
+        assert "tenant_id" in sql.replace("%(tenant_id)s", ""), nome
+
+
+def test_o_relatorio_mostra_a_fila_de_curadoria():
+    """É o aceite do S1: ou zero ativo sem unidade, ou a fila visível."""
+    texto = cadastro.relatorio(
+        [
+            cadastro.Promotion(
+                tenant_id=TENANT,
+                employees=172,
+                active=160,
+                without_unit=13,
+                pending=(cadastro.PendingUnit("Pátio Norte", 7102, 13),),
+            )
+        ]
+    )
+
+    assert "160 ativo(s) · 91.9% com unidade" in texto
+    assert "sem unidade: 13 em «Pátio Norte» (Departamento 7102)" in texto
+
+
+def test_sem_pendencia_o_relatorio_diz_isso():
+    texto = cadastro.relatorio(
+        [cadastro.Promotion(tenant_id=TENANT, employees=5, active=5, without_unit=0, pending=())]
+    )
+
+    assert "nenhuma pendência: todo ativo tem unidade" in texto

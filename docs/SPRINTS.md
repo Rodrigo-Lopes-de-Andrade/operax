@@ -51,6 +51,27 @@ motor de jornada roda sobre uma base vazia e o dashboard abre sem dado.
 O S1 já previa essa curadoria ("cadastrar unidades reais; preencher o mapeamento
 Departamento → unidade"). Ela não foi feita, e é ela que destrava S3 e S4.
 
+**Atualização de 24/08/2026 — o elo existe agora.**
+`backend/operax/motor/cadastro.py` promove `Empresa`, `Departamento` e
+`Funcionario` para `app.company`, `app.department` e `app.employee`, e roda como
+passo zero de `python -m operax.motor`. Duas decisões que o `make db-test` prova:
+
+- **A empresa vem da pessoa, nunca do departamento.** É a regra 5, e o cenário do
+  teste tem exatamente o caso: alguém da Empresa B lotado num departamento da
+  Empresa A. Derivar pelo departamento poria cerca de um quarto da folha na
+  empresa errada, de forma consistente e invisível.
+- **A promoção não inventa unidade.** `app.unit` é dimensão nossa e o espelho não
+  tem o conceito; a ponte é `app.unit_secullum_map`, curada com o cliente. Quem
+  não tem mapa é promovido com `unit_id` nulo e entra na **fila de pendência**,
+  nomeada por departamento e ordenada por quanta gente depende dela — que é o
+  segundo lado do aceite do S1 ("zero ativo sem unidade, **ou fila visível**").
+  E o `on conflict` preserva a lotação feita à mão: mapa removido não desfaz
+  trabalho humano.
+
+O que continua dependendo do cliente é a curadoria em si — decidir qual
+departamento é qual pátio. A diferença é que agora ela tem uma fila para
+trabalhar em cima, em vez de uma tabela vazia.
+
 ### O S3 tinha uma pergunta que decidia o cronograma. Ela foi respondida
 
 O plano avisava: *"se `HorarioDia` descreve semana fixa, a escala não cabe e a
