@@ -101,7 +101,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 - Ruff (Python), Prettier + TS strict (frontend). Sentry para erros da aplicação.
 - Observabilidade do agente: **LangSmith é o default** (traces de LLM, tools, latência e tokens). Não introduzir outro vendor sem decisão explícita.
 - Testes: pytest (backend), Vitest (frontend), Playwright (E2E).
-- **Suíte de banco** (`make db-test`): sobe Postgres descartável, aplica as 19 migrations, roda 23 asserções funcionais de isolamento (dois tenants, quatro papéis), 24 asserções de regra de alerta, cadência e provedor, e 13 verificações estruturais, regenera o dicionário de dados e valida que toda referência a objeto de banco na documentação existe. Obrigatória em qualquer PR que toque policy, view, grant ou migration.
+- **Suíte de banco** (`make db-test`): sobe Postgres descartável, aplica as 20 migrations, roda 23 asserções funcionais de isolamento (dois tenants, quatro papéis), 24 asserções de regra de alerta, cadência e provedor, e 13 verificações estruturais, regenera o dicionário de dados e valida que toda referência a objeto de banco na documentação existe. Obrigatória em qualquer PR que toque policy, view, grant ou migration.
 
 ### Deploy
 
@@ -118,13 +118,13 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 ## Mapa de Arquitetura
 
 - **Espelhamento da origem** — fora deste repositório, em Edge Functions do Supabase (`sync-cadastro`, `sync-batidas`, `secullum-test-auth`). Trocar de sistema de ponto acontece só ali. ⚠️ O código dessas funções **não está versionado aqui** — `supabase functions download` resolveria, e até lá o que sustenta o produto inteiro existe só no projeto na nuvem.
-- **`backend/operax/motor/`** — `jornada.py` materializa `app.expected_workday` com grau de confiança (é onde o 12x36 é tratado); `deteccao.py` gera `app.deviation_event`; `revogacao.py` trata correção retroativa.
+- **`backend/operax/motor/`** — `regras.py` = o SQL do que é desvio num dia, sem driver e sem cópia, lido pelos três statements e pelo `make db-test`; `jornada.py` materializa `app.expected_workday` com grau de confiança (é onde o 12x36 é tratado); `deteccao.py` grava `app.deviation_event` com `on conflict` por (colaborador, dia, tipo, modo); `revogacao.py` revoga o que sumiu e substitui o que já saiu em relatório. `python -m operax.motor` roda os três em ordem.
 - **`backend/operax/alertas/`** — `ciclo.py` monta `app.report_cycle` com reserva transacional; `outbox.py` enfileira; `sender.py` consome. `provedores/` = WhatsApp e e-mail atrás de uma interface **template-first**: `enviar(template, variaveis, destino)`, nunca string pronta — ver `docs/DECISAO-WHATSAPP.md`.
 - **`backend/operax/agente/`** — `agente.py` = `create_agent`; `catalogo.py` = carrega `app.metric` e valida a escolha do modelo; `executor.py` = roda a métrica **como o usuário**.
 - **`backend/operax/rh/`** — `ownership.py` = a matriz dono-do-campo (sync x RH), lida por template, tela e import; `validators.py` = um funil só para formulário e planilha; `templates.py` = o que cada modelo `.xlsx` carrega; `workbook.py` = gera e lê o arquivo; `importer.py` = o veredito por linha, sem escrever; `repository.py` = o SQL, com leitura como o usuário e gravação junto da auditoria; `employees.py` = a lista e o detalhe da aba Colaboradores; `carga_inicial.py` = o conversor de implantação, que preenche os modelos baixados e **não abre conexão com o banco**.
 - **`backend/operax/core/`** — `db.py` = pools por schema; `tenant.py` = contexto de tenant (todo acesso com `service_role` passa por aqui); `config.py`; `vault.py` = leitura de credencial por tenant.
 - **`backend/server/`** — `main.py` = entrypoint; `deps.py` = valida o JWT do Supabase e resolve tenant e papel; `models.py` = **fonte da verdade dos schemas**; `routers/` = endpoints por área.
-- **`supabase/migrations/`** — 19 migrations aplicadas em ordem (numeradas 00–17, com a 11b). Ver `docs/PLANO-BANCO-OPERAX.md`.
+- **`supabase/migrations/`** — 20 migrations aplicadas em ordem (numeradas 00–18, com a 11b). Ver `docs/PLANO-BANCO-OPERAX.md`.
 - **`scripts/`** — diagnóstico, testes de isolamento, gerador do dicionário, verificador de documentação.
 - **`frontend/src/`** — `app/` roteamento; `components/` (`ui/` = design system); `lib/supabase.ts` = cliente com anon key; `lib/api.ts` = cliente do FastAPI; `state/` = sessão + streaming do assistente.
 
@@ -292,7 +292,7 @@ cp frontend/.env.local.example frontend/.env.local
 
 # 3. Banco local + migrações
 supabase start                                    # Postgres + Auth + Storage locais
-supabase db reset                                 # aplica as 19 migrations do zero
+supabase db reset                                 # aplica as 20 migrations do zero
 
 # 4. Rodar / verificar
 make dev                    # backend + frontend

@@ -605,6 +605,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 - `deviation_periodo_idx` — `app.deviation_event USING btree (tenant_id, unit_id, reference_date) WHERE ((status = 'active'::text) AND (mode = 'production'::text))`
 - `deviation_tipo_periodo_idx` — `app.deviation_event USING btree (tenant_id, type, reference_date) WHERE ((status = 'active'::text) AND (mode = 'production'::text))`
 - `UNIQUE deviation_event_unico_active` — `app.deviation_event USING btree (employee_id, reference_date, type) WHERE ((status = 'active'::text) AND (mode = 'production'::text))`
+- `UNIQUE deviation_event_unico_active_modo` — `app.deviation_event USING btree (employee_id, reference_date, type, mode) WHERE (status = 'active'::text)`
 
 </details>
 

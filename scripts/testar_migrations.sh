@@ -27,6 +27,9 @@ echo "--- matriz dono-do-campo do RH"
 python3 scripts/95_teste_matriz_rh.py || exit 1
 echo "--- motor de jornada esperada"
 python3 scripts/96_teste_jornada.py || exit 1
+
+echo "--- motor de detecção"
+python3 scripts/94_teste_deteccao.py || exit 1
 echo "--- teste de regras de alerta e cadência"
 psql -q -v ON_ERROR_STOP=1 -f scripts/97_teste_regras_alerta.sql 2>&1 | grep -Ev "^(INSERT|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- teste funcional multi-tenant"

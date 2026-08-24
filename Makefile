@@ -1,5 +1,5 @@
 .PHONY: help dev dev-backend dev-frontend test lint db-test e2e build \
-        sync motor sender dicionario carga-inicial
+        sync motor revogacao sender dicionario carga-inicial
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -46,8 +46,11 @@ sync:           ## espelha a origem em `secullum`
 jornada:        ## materializa app.expected_workday e reporta a cobertura (S3)
 	cd backend && uv run python -m operax.motor.jornada --dias $(or $(DIAS),90)
 
-motor:          ## detecção — MODO=sombra (padrão) | producao
+motor:          ## jornada + detecção — MODO=sombra (padrão) | producao
 	cd backend && uv run python -m operax.motor --modo=$(or $(MODO),sombra)
+
+revogacao:      ## reconcilia indícios com batidas corrigidas na origem (retroativo)
+	cd backend && uv run python -m operax.motor.revogacao --modo=$(or $(MODO),producao) --dias=$(or $(DIAS),7)
 
 sender:         ## consome app.alerta_fila
 	cd backend && uv run python -m operax.alertas.sender

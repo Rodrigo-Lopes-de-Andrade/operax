@@ -240,7 +240,7 @@ a promoção `secullum → app` não existe em nenhum lugar do repositório.
 
 ---
 
-## S4 — Motor em modo sombra · 5–10 dias
+## S4 — Motor em modo sombra · 5–10 dias · motor entregue, ⚠️ G4 aberto
 
 **Objetivo:** detectar desvio sem publicar nada, e medir o erro.
 
@@ -261,6 +261,70 @@ Uma semana de dados por rodada.
 - Falso positivo ≤5% em duas execuções seguidas.
 
 **⚠️ G4** — nenhum alerta ou relatório sai antes disso.
+
+### Andamento em 24/08/2026 — o motor existe; o gate não fechou
+
+**O que foi entregue.** `backend/operax/motor/regras.py` guarda o cálculo de "o
+que é desvio neste dia" como SQL puro, sem driver e sem cópia; `deteccao.py`
+grava `app.deviation_event` a partir dele; `revogacao.py` faz a correção
+retroativa. `python -m operax.motor` roda os três em ordem — jornada, detecção,
+reconciliação — porque detectar contra uma tabela de jornada vazia não dá zero
+desvio, dá zero informação.
+
+**Um cálculo, três statements.** O detector escreve a partir de uma definição e a
+revogação pergunta duas vezes contra ela. Uma segunda cópia de um `union all` de
+trezentas linhas divergiria na primeira mudança de tolerância, e a cópia que
+diverge nunca é a que alguém está lendo. Um teste do pytest afirma que os três
+começam com `EVENTS_SQL` — se um deixar de derivar dele, a suíte fica vermelha
+antes de o motor se contradizer.
+
+**Reprocessar não duplica — e isso precisou de migration.** A migration 05 tinha
+índice único só para `mode = 'production'`; a sombra ficou sem nenhum, e é
+justamente ela que reprocessa a mesma semana a cada correção de tolerância. Sem
+índice para o `on conflict`, a segunda execução inseria uma segunda cópia de cada
+evento, e o **falso positivo que decide este gate seria medido contra uma tabela
+que dobrava toda vez que alguém acertava uma tolerância**. A migration 18
+estende o grão declarado na 05 à sombra e prova o comportamento com um teste vivo
+dentro do próprio bloco.
+
+**O que já foi enviado não se reescreve.** O `on conflict do update` carrega um
+`where app.deviation_event.report_cycle_id is null`: um indício que saiu num
+relatório está na mão de um gestor, e reescrever o número em silêncio é como o
+produto perde a discussão que ele existe para ganhar. Esses passam pela
+supersessão — revoga e insere apontando para o anterior. E o `do update` copia
+`company_id` e `unit_id` de si mesmo: quem mudou de unidade depois não reescreve
+onde o fato aconteceu.
+
+**A guarda que segura o 12x36.** `no_punches` exige `workload_minutes` declarado.
+Sem ela, todo dia de descanso de quem está numa rotação que o espelho não
+descreve viraria um turno perdido — e a enxurrada de falso positivo apareceria
+justamente na medição que este gate depende. Não se pode afirmar que alguém
+faltou a um turno que ninguém conseguiu descrever. O relatório do motor imprime
+os dias cegos ao lado do total pelo mesmo motivo: uma taxa calculada sem esse
+denominador parece melhor do que é.
+
+**O que o motor deliberadamente ignora**, nomeado para ser a primeira suspeita
+quando um falso positivo aparecer: as bandeiras de dia do próprio espelho
+(`"Folga"`, `"Neutro"`, `"Compensado"`) e os campos de abono. A expectativa vem
+de `app.expected_workday` e só dela — duas fontes para "este dia era de trabalho"
+é uma a mais, e escolher entre elas é decisão de produto. Um teste afirma que
+nenhuma delas aparece no `where`.
+
+**Prova.** `scripts/94_teste_deteccao.py` entrou no `make db-test` com 15 pessoas,
+uma por caso, e **importa o SQL do motor** em vez de repeti-lo. A asserção que
+mais vale não é a contagem: é que o **sinal** de cada indício concorde com a
+`direction` declarada em `app.deviation_type` — contar eventos à mão envelhece a
+cada tipo novo, e essa pega um sinal invertido em qualquer um dos doze. Dois
+achados do cenário: quem sai para o intervalo e não volta tem número **par** de
+batidas (a coluna sem hora não é batida), então a regra de paridade da SPEC §3.2
+não o pega — quem pega é `break_no_return`; e uma batida `desconsiderada` que
+contasse transformaria um dia correto em jornada excedida e par ímpar de uma vez.
+
+**O que falta para o G4 fechar:** dados reais. O gate é "falso positivo ≤5% em
+duas execuções seguidas" contra a apuração do próprio Secullum, e isso depende de
+`app.employee` estar populado em produção — que é a pendência do S3 e o assunto
+de `docs/PLANO-RECONCILIACAO-NUVEM.md`. O motor está pronto para rodar em sombra
+no dia em que houver contra o que comparar.
 
 ---
 
