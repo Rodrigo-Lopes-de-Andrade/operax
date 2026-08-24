@@ -7,10 +7,17 @@ description = "OperaX backend — management, automation and intelligence over t
 requires-python = ">=3.12,<3.14"
 dependencies = [
     "fastapi>=0.115",
+    # O template de RH e o arquivo que volta preenchido. Sem compilacao, e a
+    # unica biblioteca que faz as tres coisas que o template precisa: proteger a
+    # planilha, esconder a aba de controle e alimentar dropdown de enum.
+    "openpyxl>=3.1",
+    # O arquivo importado vive no Storage do Supabase, que so tem API HTTP.
+    "httpx>=0.28",
     "psycopg[binary,pool]>=3.2",
     "pydantic>=2.9",
     "pydantic-settings>=2.6",
     "pyjwt[crypto]>=2.10",
+    "python-multipart>=0.0.20",
     "uvicorn[standard]>=0.34",
 ]
 

@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     # Exact origins of the dashboard. With allow_credentials, "*" is forbidden.
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ("http://localhost:3000",)
 
+    # Bucket privado do Storage onde o arquivo importado fica guardado. Privado
+    # não é opinião: o arquivo carrega nome, matrícula e, conforme o template,
+    # salário.
+    import_bucket: str = "imports"
+
     sentry_dsn: SecretStr | None = None
     langsmith_tracing: bool = False
     langsmith_api_key: SecretStr | None = None

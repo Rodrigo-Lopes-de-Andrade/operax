@@ -84,6 +84,15 @@ Confirmação grava **só as linhas válidas**; o import fica `partial` até as
 demais entrarem (mesma semântica da folha). Toda gravação: upsert pela chave,
 `audit_log` com `file_import.id` como origem, nunca delete físico.
 
+> **Resolvido em 24/08/2026 (R2).** `app.file_import.status` não tem o valor
+> `partial` — o check aceita `received`, `validating`, `validation_error`,
+> `processed` e `discarded`. A semântica da folha é `processed` com
+> `rows_error > 0`, e é essa que vale: o banco guarda os fatos, e "parcial" é
+> rótulo derivado, devolvido pela API no campo `partial`. Cada envio é um
+> `file_import` próprio — o registro de **um arquivo**, que não muda quando outro
+> arquivo entra depois. "Fechar o import" é o conjunto de pessoas ficar completo,
+> não um contador antigo ser reescrito.
+
 ## 4. Matriz dono-do-campo (proposta — confirmar antes do template congelar)
 
 | Campo | Dono | Na tela e no template |
@@ -101,6 +110,17 @@ Três campos ficam **marcados para confirmação com o cliente** antes de entrar
 em template: *supervisor* (existe no Secullum? se sim, vira sync), *unidade de
 atuação* quando difere da lotação, e *data de demissão* quando o RH souber
 antes do Secullum. Até lá, esses três não são editáveis — aparecem como sync.
+
+> **Resolvido em 24/08/2026 (R1/R2).** A conferência contra o schema real mostrou
+> que sete campos desta tabela não têm coluna em lugar nenhum: CBO, uniforme,
+> nível, os quatro benefícios (VR, planos, cesta, VT), periculosidade, cargo de
+> confiança e unidade de atuação. Eles ficam **fora do escopo v1**, nomeados em
+> `ownership.SEM_COLUNA` para não sumirem, e nenhum template os cita. Criar as
+> colunas é uma migration 17 e uma decisão de produto — não uma consequência de
+> template.
+>
+> A matriz que vale está em `backend/operax/rh/ownership.py`, conferida contra o
+> schema por `scripts/95_teste_matriz_rh.py` a cada `make db-test`.
 
 ## 5. Backend (FastAPI — caminho 2)
 

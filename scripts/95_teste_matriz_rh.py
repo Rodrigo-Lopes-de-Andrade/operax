@@ -25,6 +25,7 @@ RAIZ = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(RAIZ / "backend"))
 
 from operax.rh.ownership import ENUMS, MATRIX, SEM_COLUNA, Owner  # noqa: E402
+from operax.rh.templates import SEM_TEMPLATE, TEMPLATES, select_sql  # noqa: E402
 
 ENV = {
     **os.environ,
@@ -100,10 +101,129 @@ for (tabela, coluna), esperados in sorted(ENUMS.items()):
             f"e o código aceita {sobram or '—'} que o banco não"
         )
 
+# ---------------------------------------------------------------------------
+# Os templates — as colunas que o repositório cita e a matriz não governa
+# ---------------------------------------------------------------------------
+# Toda coluna de template passa pela matriz (`templates._check_registry` recusa o
+# contrário no import). O que sobra são as colunas que o SQL do repositório nomeia
+# por conta própria: chave, carimbo de tempo, o fecho da faixa de vigência. Um
+# nome errado aqui só apareceria em produção, no primeiro import.
+LITERAIS = {
+    "employee.id",
+    "employee.name",
+    "employee.status",
+    "employee.tenant_id",
+    "employee.updated_at",
+    "employee_pii.employee_id",
+    "employee_pii.tenant_id",
+    "employee_pii.updated_at",
+    "employee_compensation.employee_id",
+    "employee_compensation.tenant_id",
+    "employee_compensation.effective_from",
+    "employee_compensation.effective_to",
+    "employee_compensation.recorded_by",
+    "payroll_period.tenant_id",
+    "payroll_period.year",
+    "payroll_period.month",
+    "payroll_period.status",
+    "file_import.id",
+    "file_import.tenant_id",
+    "file_import.type",
+    "file_import.storage_path",
+    "file_import.file_name",
+    "file_import.layout_version",
+    "file_import.uploaded_by",
+    "file_import.status",
+    "file_import.rows_total",
+    "file_import.rows_ok",
+    "file_import.rows_error",
+    "file_import.report",
+    "audit_log.tenant_id",
+    "audit_log.user_id",
+    "audit_log.action",
+    "audit_log.entity",
+    "audit_log.entity_id",
+    "audit_log.antes",
+    "audit_log.depois",
+}
+for nome in sorted(LITERAIS):
+    if nome not in colunas_app:
+        problemas.append(f"app.{nome} é citada pelo repositório de RH e não existe")
+
+# O `select` de pré-preenchimento é montado a partir do template. `prepare` o
+# analisa e o planeja sem executar — é o que pega alias errado e join inválido,
+# que a conferência coluna a coluna não vê.
+for tipo, template in sorted(TEMPLATES.items()):
+    r = subprocess.run(
+        ["psql", "-q", "-v", "ON_ERROR_STOP=1", "-c", f"prepare p as {select_sql(template)}"],
+        capture_output=True,
+        text=True,
+        env=ENV,
+    )
+    if r.returncode != 0:
+        problemas.append(
+            f"template {tipo}: o select de pré-preenchimento não compila: {r.stderr.strip()}"
+        )
+
+# Toda instrução fixa do repositório de RH, compilada contra o schema. A fonte é
+# lida do arquivo em vez de importada porque `repository` puxa o driver e este
+# teste roda fora do venv — e SQL copiado para cá à mão divergiria na primeira
+# alteração. Os dois `update`/`insert` montados coluna a coluna ficam de fora: o
+# que varia neles é nome de coluna, e isso é o que LITERAIS e a matriz conferem.
+fonte_repo = (RAIZ / "backend" / "operax" / "rh" / "repository.py").read_text()
+instrucoes = re.findall(r'^(_[A-Z_]+_SQL) = """(.*?)"""', fonte_repo, re.S | re.M)
+if len(instrucoes) < 8:
+    problemas.append(f"esperava ao menos 8 instruções em repository.py, achei {len(instrucoes)}")
+
+
+def posicionar(sql: str) -> str:
+    """`%(nome)s` do psycopg vira `$n` do Postgres, na ordem de aparição."""
+    ordem: list[str] = []
+
+    def trocar(m: re.Match) -> str:
+        if m.group(1) not in ordem:
+            ordem.append(m.group(1))
+        return f"${ordem.index(m.group(1)) + 1}"
+
+    return re.sub(r"%\((\w+)\)s", trocar, sql)
+
+
+for nome, sql in instrucoes:
+    preparavel = posicionar(sql)
+    r = subprocess.run(
+        ["psql", "-q", "-v", "ON_ERROR_STOP=1", "-c", f"prepare p as {preparavel}"],
+        capture_output=True,
+        text=True,
+        env=ENV,
+    )
+    if r.returncode != 0:
+        problemas.append(f"{nome} não compila: {r.stderr.strip().splitlines()[0]}")
+
+# Um template cujo tipo o `check` de `app.file_import` recusa é um template que
+# não consegue nem registrar a própria importação.
+tipos_aceitos = q("""
+    select pg_get_constraintdef(oid) from pg_constraint
+    where conrelid = 'app.file_import'::regclass and conname = 'file_import_type_check'
+""")
+aceitos = (
+    set(re.findall(r"'([a-z_]+)'::text", next(iter(tipos_aceitos)))) if tipos_aceitos else set()
+)
+declarados = set(TEMPLATES) | set(SEM_TEMPLATE)
+if declarados - aceitos:
+    problemas.append(f"app.file_import não aceita os tipos {sorted(declarados - aceitos)}")
+faltando_declarar = {t for t in aceitos if t.startswith("hr_")} - declarados
+if faltando_declarar:
+    problemas.append(
+        f"tipos hr_* aceitos pelo banco e não declarados: {sorted(faltando_declarar)} — "
+        "cada um precisa de template ou de um motivo em SEM_TEMPLATE"
+    )
+
 sync = sum(1 for f in MATRIX if f.owner is Owner.SYNC)
 print(f"  matriz: {len(MATRIX)} campos ({sync} do sync, {len(MATRIX) - sync} do RH)")
 print(f"  enums conferidos: {len(ENUMS)}")
 print(f"  lacunas declaradas: {len(SEM_COLUNA)}")
+print(f"  templates: {len(TEMPLATES)} com caminho de volta, {len(SEM_TEMPLATE)} sem")
+print(f"  instruções do repositório compiladas: {len(instrucoes)}")
 
 if problemas:
     print("\n❌ " + f"{len(problemas)} problema(s):")

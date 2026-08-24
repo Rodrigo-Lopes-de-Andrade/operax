@@ -215,3 +215,59 @@ class DailyMonitor(BaseModel):
     units: list[MonitorUnitRow]
     rows: list[MonitorRow]
     truncated: bool = False
+
+
+class ImportLineError(BaseModel):
+    """Por que uma linha não entra. Texto em pt-BR, chega ao usuário como está."""
+
+    code: str
+    message: str
+    column: str | None = None
+
+
+class ImportLineReport(BaseModel):
+    """O veredito de uma linha da planilha, pelo número que o Excel mostra."""
+
+    line: int
+    status: Literal["ok", "unchanged", "error"]
+    errors: list[ImportLineError] = []
+
+
+class ImportCounts(BaseModel):
+    """`unchanged` é contado à parte de propósito.
+
+    Somado a `ok` ele é `rows_ok` do banco, mas na tela as duas coisas são
+    diferentes: "77 linhas já estavam assim" é uma informação, e escondê-la
+    dentro de "80 linhas ok" faz o usuário procurar 80 alterações que não
+    aconteceram.
+    """
+
+    total: int
+    ok: int
+    unchanged: int
+    error: int
+
+
+class ImportPreview(BaseModel):
+    """O que o preview devolve. Nada foi gravado."""
+
+    import_id: UUID
+    type: str
+    layout_version: str
+    status: str
+    counts: ImportCounts
+    lines: list[ImportLineReport]
+
+
+class ImportResult(ImportPreview):
+    """Depois de confirmar.
+
+    `partial` é derivado, não é estado guardado: `app.file_import.status` aceita
+    `received`, `validating`, `validation_error`, `processed` e `discarded`, e o
+    import confirmado com linha recusada é `processed` com `rows_error > 0` — a
+    mesma semântica da folha. O rótulo "parcial" que a SPEC §3 descreve é leitura
+    desses dois campos, e não um sexto valor no check.
+    """
+
+    applied: int
+    partial: bool

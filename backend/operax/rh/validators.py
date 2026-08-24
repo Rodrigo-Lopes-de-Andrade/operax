@@ -197,6 +197,31 @@ def check_effective_from(
     return []
 
 
+def check_new_band(
+    valor: Any, *, current_from: date | None, column: str = "effective_from"
+) -> list[LineError]:
+    """Vigência nova começa depois da vigente. Sobrepor não é corrigir.
+
+    A faixa aberta é fechada em `desde - 1` quando a próxima entra. Com a mesma
+    data nas duas, esse fechamento produziria um período que termina antes de
+    começar — o banco recusaria, e a mensagem seria sobre `check` de data em vez
+    de sobre o que a pessoa fez. Corrigir a faixa vigente é revogá-la, e revogar
+    é outro caminho.
+    """
+    if not isinstance(valor, date) or current_from is None:
+        return []
+    if valor <= current_from:
+        return [
+            LineError(
+                "vigencia_sobreposta",
+                f"já existe vigência a partir de {current_from}; para mudar aquela faixa, "
+                f"revogue-a — vigência nova começa depois dela",
+                column,
+            )
+        ]
+    return []
+
+
 # ---------------------------------------------------------------------------
 # 5. Parcelas que não fecham com o acordo
 # ---------------------------------------------------------------------------
@@ -307,6 +332,54 @@ def check_leave_overlap(
 
 
 # ---------------------------------------------------------------------------
+# 7. Duplicidade — dentro do arquivo e contra o banco
+# ---------------------------------------------------------------------------
+def check_unique(
+    valor: Any,
+    *,
+    column: str,
+    label: str,
+    seen: Mapping[str, int],
+    taken: Mapping[str, UUID],
+    employee_id: UUID | None,
+) -> list[LineError]:
+    """Um valor que identifica sozinho não pode aparecer duas vezes.
+
+    As duas metades da checagem existem porque as duas acontecem: a planilha
+    volta com a mesma linha copiada, e o ID RH que o cliente digitou já está no
+    cadastro de outra pessoa. A segunda é a que importa — sem ela o `unique`
+    parcial de `hr_code` recusaria o lote inteiro no `insert`, sem dizer qual
+    linha causou.
+
+    `taken` apontando para a própria pessoa não é duplicidade: é a linha que já
+    estava certa e foi reenviada.
+    """
+    texto = _texto(valor)
+    if not texto:
+        return []
+    erros: list[LineError] = []
+    anterior = seen.get(texto)
+    if anterior is not None:
+        erros.append(
+            LineError(
+                "duplicado_no_arquivo",
+                f"{label} {texto!r} já aparece na linha {anterior} deste mesmo arquivo",
+                column,
+            )
+        )
+    dono = taken.get(texto)
+    if dono is not None and dono != employee_id:
+        erros.append(
+            LineError(
+                "duplicado_no_cadastro",
+                f"{label} {texto!r} já pertence a outro colaborador",
+                column,
+            )
+        )
+    return erros
+
+
+# ---------------------------------------------------------------------------
 # Os quatro domínios — é o que import e formulário chamam
 # ---------------------------------------------------------------------------
 def validate_registration(
@@ -333,10 +406,17 @@ def validate_leave(
 
 
 def validate_compensation(
-    row: Mapping[str, Any], *, hoje: date, limite_dias: int
+    row: Mapping[str, Any], *, hoje: date, limite_dias: int, current_from: date | None = None
 ) -> list[LineError]:
-    """Domínio 4a — remuneração, sempre por vigência."""
-    return check_effective_from(row.get("effective_from"), hoje=hoje, limite_dias=limite_dias)
+    """Domínio 4a — remuneração, sempre por vigência.
+
+    `current_from` é o início da faixa aberta hoje, quando existe. O padrão
+    `None` é o caso real de quem ainda não tem salário registrado, não uma
+    conveniência: sem faixa vigente não há o que sobrepor.
+    """
+    return check_effective_from(
+        row.get("effective_from"), hoje=hoje, limite_dias=limite_dias
+    ) + check_new_band(row.get("effective_from"), current_from=current_from)
 
 
 def validate_agreement(
@@ -356,8 +436,10 @@ __all__ = [
     "check_enums",
     "check_installments",
     "check_keys",
+    "check_new_band",
     "check_leave_overlap",
     "check_owned_fields",
+    "check_unique",
     "validate_agreement",
     "validate_compensation",
     "validate_documents",

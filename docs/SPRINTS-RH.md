@@ -104,7 +104,7 @@ atual aceita `received`, `validating`, `validation_error`, `processed` e
 usa "partial" como descrição, ou falta um valor. É pergunta do R2, registrada
 aqui para não virar descoberta no meio dele.
 
-## R2 — Template e pipeline de importação
+## R2 — Template e pipeline de importação ✅
 
 **Entrega:** baixar template pré-preenchido, subir, ver preview por linha,
 confirmar parcial — de ponta a ponta por API.
@@ -122,6 +122,94 @@ confirmar parcial — de ponta a ponta por API.
 **Gate:** E2E de API: template → edição → upload → preview com erro simulado em
 3 linhas → confirmação parcial → reimport das corrigidas fecha o import ·
 `audit_log` registra origem de cada linha gravada.
+
+### Andamento em 24/08/2026 — fechado
+
+**As duas decisões que o R1 deixou em aberto, resolvidas como declarado.** Os sete
+campos sem coluna ficam **fora do escopo v1** — continuam nomeados em
+`ownership.SEM_COLUNA`, e nenhum template os cita. E o parcial é `processed` com
+`rows_error > 0`, sem sexto valor no `check` de `app.file_import.status`: a API
+devolve `partial` como campo derivado, o banco guarda os fatos e a tela lê o
+rótulo. `app.sync_run` tem `partial` no check dela; `app.file_import` não tem, e
+inventar o valor mudaria a semântica que a folha já usa.
+
+**Três templates, não sete.** `hr_link`, `hr_employee` e `hr_compensation` têm o
+caminho de ida e volta inteiro. Os outros quatro estão declarados em
+`templates.SEM_TEMPLATE` com o motivo, e `GET /rh/template/{tipo}` responde
+**501 com o motivo** em vez de 404 — "ainda não" e "nunca" são respostas
+diferentes para quem está esperando o arquivo:
+
+| Tipo | Por que não fecha o ciclo |
+|---|---|
+| `hr_document` | `app.document.storage_path` é NOT NULL — documento chega com o arquivo, não com uma linha de planilha |
+| `hr_agreement` | `app.financial_agreement.document_id` é NOT NULL por decisão explícita: desconto sem autorização documentada não se registra |
+| `hr_leave` | `app.leave_period` não concede escrita ao painel e não tem policy de escrita |
+| `hr_movement` | `app.workforce_movement`, idem |
+
+Os dois últimos são **decisão de policy**, e policy para e pergunta.
+
+**O terceiro resultado de linha.** `ok`, `error` e **`unchanged`**. O template vem
+preenchido, então um arquivo intocado é um arquivo em que toda linha já diz o que
+o banco diz. Sem essa distinção, baixar e subir a planilha de remuneração abriria
+uma faixa de vigência nova por pessoa, e reimportar três linhas corrigidas
+reescreveria as outras setenta e sete. É o que faz o reimport ser seguro — e é
+exatamente o que o gate mede.
+
+**O teto de retroatividade saiu da folha, não de um número.** O R1 deixou
+`limite_dias` sem valor padrão de propósito. O import agora o calcula a partir de
+`app.payroll_period`: o primeiro dia aberto é o dia seguinte ao fim da última
+competência `fechada` (mês 13 termina em 31/12). Sem competência fechada não há
+teto — não porque tudo passa, mas porque não há nada a proteger; vigência ausente,
+futura ou ilegível continua caindo.
+
+**O arquivo fica guardado, inclusive o recusado.** `app.file_import.storage_path`
+é NOT NULL porque o arquivo é a prova: o relatório diz que três linhas caíram, e a
+única forma de conferir isso depois é abrir o arquivo que o produziu. O confirm
+**relê do storage e revalida** em vez de confiar no veredito do preview — entre
+ver o preview e clicar em confirmar, alguém pode ter tomado o ID RH e a folha pode
+ter fechado uma competência.
+
+**`_meta` é o que faz o arquivo ter identidade.** Aba oculta com versão de layout,
+tipo, tenant e hash do cabeçalho. Arquivo de outro cliente, de outro tipo, de
+layout antigo ou com coluna inserida no meio é recusado **inteiro, antes da
+primeira linha** — um arquivo errado não tem linha certa. A proteção da planilha é
+um empurrão, não a fronteira: a fronteira é `check_owned_fields` no servidor, que
+recusa a linha independentemente do que o Excel permitiu.
+
+**Escrita e leitura têm identidades diferentes, e é deliberado.** A leitura vai por
+`user_scope` — a RLS decide o que volta, e é isso que faz o escopo valer na
+escrita sem a escrita reimplementá-lo: linha que nomeia alguém fora do alcance de
+quem enviou o arquivo não resolve a chave. A gravação vai por `tenant_scope`
+porque `app.audit_log` não concede insert a ninguém além do `service_role` — o log
+é fora do alcance do painel de propósito — e a linha e o log que a descreve
+precisam entrar na mesma transação.
+
+**Gate do R2: cumprido.** `backend/tests/test_rh_api.py` faz o caminho inteiro num
+teste só: modelo → edição → upload → preview com **3 linhas erradas de três jeitos
+diferentes** (ID RH repetido, nome do ponto reescrito, matrícula colada errada) →
+confirmação parcial (`applied=2`, `partial=true`, `processed` com `rows_error=3`)
+→ reimport das corrigidas, em que as duas que já tinham entrado voltam como
+`unchanged` e **não são reescritas**. Cada linha gravada tem `audit_log` com
+`depois->'_origem'->>'file_import_id'`.
+
+**132 testes** no pytest (eram 93) e `make db-test` verde. O `95_teste_matriz_rh.py`
+ganhou três conferências novas: as colunas que o repositório cita fora da matriz,
+o `select` de pré-preenchimento de cada template compilado com `prepare` contra o
+schema real, e **as oito instruções fixas do repositório compiladas do mesmo
+jeito** — lidas do arquivo, não copiadas, para não divergirem na primeira
+alteração.
+
+### O que o R2 não cobre, e é bom saber antes do R3
+
+Os dois `update`/`insert` montados coluna a coluna (`app.employee` e o upsert de
+`app.employee_pii`) não passam pelo `prepare`: o que varia neles é nome de coluna,
+e isso é o que a matriz e a lista de literais conferem. O caminho completo contra
+um Postgres de verdade — endpoint, RLS e escrita — é assunto do R3, que traz o
+formulário e com ele a segunda metade do mesmo funil.
+
+O bucket do Storage (`IMPORT_BUCKET`, default `imports`) **precisa existir e ser
+privado** no projeto Supabase. Não é migration: `storage.*` é gerenciado pelo
+Supabase. Se faltar, o upload responde 503 dizendo qual bucket falta.
 
 ## R3 — Telas: aba Colaboradores
 
