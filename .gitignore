@@ -35,3 +35,9 @@ coverage/
 # escrito a mao e versionado.
 scripts/_*
 !scripts/_test_stub_supabase.sql
+# O baseline é versionado, ao contrário dos outros `_*`: `make db-test` tem de
+# significar a mesma coisa em toda máquina, e desde que o motor de jornada lê o
+# espelho real ele falharia contra o stub. É só catálogo — 25 tabelas, nenhuma
+# linha de dado — e o mesmo schema já está em docs/DICIONARIO-DE-DADOS.md.
+# Regerar: scripts/gerar_baseline_nuvem.py
+!scripts/_baseline.sql

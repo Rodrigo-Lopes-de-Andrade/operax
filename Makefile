@@ -43,6 +43,9 @@ dicionario:     ## regenera docs/DICIONARIO-DE-DADOS.md a partir do banco
 sync:           ## espelha a origem em `secullum`
 	cd backend && uv run python -m operax.sync
 
+jornada:        ## materializa app.expected_workday e reporta a cobertura (S3)
+	cd backend && uv run python -m operax.motor.jornada --dias $(or $(DIAS),90)
+
 motor:          ## detecção — MODO=sombra (padrão) | producao
 	cd backend && uv run python -m operax.motor --modo=$(or $(MODO),sombra)
 

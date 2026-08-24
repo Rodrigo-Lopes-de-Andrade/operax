@@ -97,6 +97,35 @@ class TenantContext:
             raise MissingTenantContextError("role must be a UserRole resolved from the membership")
 
 
+@dataclass(frozen=True, slots=True)
+class SystemContext:
+    """The tenant binding of a scheduled task. There is no person behind it.
+
+    Every other access to the data carries a `TenantContext` resolved from a
+    validated token. The engine has no token: it runs on a timer, for one tenant
+    at a time, and still must not be allowed to write a statement that forgot its
+    tenant. So it binds through the same chokepoint with a context that says out
+    loud what it is, instead of borrowing a user identity it does not have.
+
+    `task` is not decoration. It is what a query in `pg_stat_activity` and a line
+    in a log have to identify, and inventing a fake `user_id` would have made
+    both lie.
+    """
+
+    tenant_id: UUID
+    task: str
+
+    def __post_init__(self) -> None:
+        _require_uuid("tenant_id", self.tenant_id)
+        if not isinstance(self.task, str) or not self.task.strip():
+            raise MissingTenantContextError("task must name the scheduled task that is running")
+
+
+# What `bind_tenant` and `tenant_scope` accept. `UserScope` deliberately does
+# not: it sets a JWT claim, and a scheduled task has no `sub` to set.
+Bound = TenantContext | SystemContext
+
+
 def _require_uuid(field: str, value: object) -> None:
     if not isinstance(value, UUID) or value.int == 0:
         raise MissingTenantContextError(
@@ -107,7 +136,7 @@ def _require_uuid(field: str, value: object) -> None:
 def bind_tenant(
     statement: str,
     params: Mapping[str, Any] | None,
-    context: TenantContext,
+    context: Bound,
 ) -> dict[str, Any]:
     """Bind the context tenant to `statement`, or refuse to run it.
 
@@ -121,8 +150,8 @@ def bind_tenant(
     one side of a join or union is unfiltered: all three pass here and read every
     tenant. Reviewing the predicate is still the author's job.
     """
-    if not isinstance(context, TenantContext):
-        raise MissingTenantContextError("a TenantContext is required to run any statement")
+    if not isinstance(context, TenantContext | SystemContext):
+        raise MissingTenantContextError("a resolved context is required to run any statement")
     if TENANT_PLACEHOLDER not in statement:
         raise MissingTenantFilterError(
             f"statement does not bind {TENANT_PLACEHOLDER}: {_excerpt(statement)}"
@@ -157,12 +186,12 @@ class TenantScope:
     through `fetchone` and `fetchall`.
     """
 
-    def __init__(self, cursor: AsyncCursor[DictRow], context: TenantContext) -> None:
+    def __init__(self, cursor: AsyncCursor[DictRow], context: Bound) -> None:
         self._cursor = cursor
         self._context = context
 
     @property
-    def context(self) -> TenantContext:
+    def context(self) -> Bound:
         return self._context
 
     async def execute(
@@ -181,12 +210,12 @@ class TenantScope:
 
 @asynccontextmanager
 async def tenant_scope(
-    context: TenantContext,
+    context: Bound,
     schema: Schema = "app",
 ) -> AsyncIterator[TenantScope]:
     """Open a tenant-bound cursor. The only sanctioned way to reach the data."""
-    if not isinstance(context, TenantContext):
-        raise MissingTenantContextError("a TenantContext is required to open a scope")
+    if not isinstance(context, TenantContext | SystemContext):
+        raise MissingTenantContextError("a resolved context is required to open a scope")
     async with get_pools().pool(schema).connection() as connection:
         async with connection.cursor(row_factory=dict_row) as cursor:
             yield TenantScope(cursor, context)
@@ -309,3 +338,26 @@ async def resolve_membership(user_id: UUID) -> TenantContext:
         user_id=user_id,
         role=UserRole(membership["role"]),
     )
+
+
+# The second — and last — statement in the backend that runs without a tenant
+# filter. It is what a scheduled task uses to learn which tenants exist before
+# binding itself to one of them, and it reads nothing but ids of active tenants.
+# Keeping it in this file, beside `resolve_membership`, is deliberate: an auditor
+# looking for "what runs unfiltered?" should find every answer in one place.
+_ACTIVE_TENANTS_SQL = """
+    select t.id
+    from app.tenant t
+    where t.active
+    order by t.slug
+"""
+
+
+async def active_tenants(task: str) -> list[SystemContext]:
+    """One `SystemContext` per active tenant, for a task that runs on a timer."""
+    pool = get_pools().pool("app")
+    async with pool.connection() as connection:
+        async with connection.cursor(row_factory=dict_row) as cursor:
+            await cursor.execute(_ACTIVE_TENANTS_SQL)
+            rows = await cursor.fetchall()
+    return [SystemContext(tenant_id=row["id"], task=task) for row in rows]
