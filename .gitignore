@@ -41,3 +41,8 @@ scripts/_*
 # linha de dado — e o mesmo schema já está em docs/DICIONARIO-DE-DADOS.md.
 # Regerar: scripts/gerar_baseline_nuvem.py
 !scripts/_baseline.sql
+
+# Metadado do Windows: o Explorer cria um `<arquivo>:Zone.Identifier` ao lado de
+# tudo que veio da internet, e eles aparecem em bloco quando um documento é
+# copiado para cá pelo WSL. Não são do projeto.
+*:Zone.Identifier
