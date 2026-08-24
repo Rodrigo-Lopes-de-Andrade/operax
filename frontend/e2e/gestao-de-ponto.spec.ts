@@ -29,6 +29,28 @@ async function signIn(page: Page, email: string, next = "/dashboard") {
   ).toBeVisible({ timeout: 30_000 });
 }
 
+/**
+ * Abre a ficha do colaborador a partir da primeira ocorrência da lista.
+ *
+ * O `waitForURL` não é cautela: a gaveta é renderizada pelo servidor a partir de
+ * `?ev=`, e o App Router **pinta a rota nova antes de confirmar a transição**.
+ * Existe uma janela em que o link "Ver o colaborador" já está na tela e a URL
+ * ainda é `/dashboard` — clicar nela dispara a segunda navegação, a primeira
+ * confirma depois e ganha, e o navegador termina em `/dashboard?ev=…` com a
+ * ficha nunca aberta. Sob carga a janela cresce, e era o que fazia estes dois
+ * testes falharem só na suíte completa.
+ *
+ * Depois disso a âncora é o bloco de ponto, que existe para todo papel que
+ * alcança a pessoa: esperar por ele separa "a ficha ainda não chegou" de "este
+ * papel não vê remuneração", que é a distinção que estes dois testes provam.
+ */
+async function abrirFicha(page: Page) {
+  await page.getByRole("row").nth(1).click();
+  await page.waitForURL(/[?&]ev=/);
+  await page.getByRole("link", { name: "Ver o colaborador" }).click();
+  await expect(page.getByText("Dia a dia do período")).toBeVisible();
+}
+
 test("o owner vê o recorte inteiro e abre o indício pelo link", async ({
   page,
 }) => {
@@ -101,9 +123,7 @@ test("o link da ocorrência de outro escopo não vaza o colaborador", async ({
 
 test("o DP alcança os blocos sensíveis do colaborador", async ({ page }) => {
   await signIn(page, "dp@fastpark.dev");
-
-  await page.getByRole("row").nth(1).click();
-  await page.getByRole("link", { name: "Ver o colaborador" }).click();
+  await abrirFicha(page);
 
   await expect(
     page.getByRole("heading", { name: "Histórico de remuneração" }),
@@ -119,12 +139,9 @@ test("o supervisor não vê o bloco sensível — nem cadeado, nem cinza", async
   page,
 }) => {
   await signIn(page, "supervisor@fastpark.dev");
-
-  await page.getByRole("row").nth(1).click();
-  await page.getByRole("link", { name: "Ver o colaborador" }).click();
+  await abrirFicha(page);
 
   // O ponto do colaborador está lá; o domínio sensível simplesmente não existe.
-  await expect(page.getByText("Dia a dia do período")).toBeVisible();
   await expect(page.getByText("Histórico de remuneração")).toHaveCount(0);
   await expect(page.getByText("Domínio sensível")).toHaveCount(0);
   await expect(page.getByText(/cadeado|sem permissão|bloqueado/i)).toHaveCount(

@@ -71,7 +71,7 @@ with base as (
            or e.registration_number ilike %(busca)s
            or e.hr_code ilike %(busca)s)
 ),
-vencimentos as (
+todos_os_prazos as (
     select x.employee_id, 'aso' as kind, 'ASO' as label, x.valid_until as due_on
     from app.occupational_exam x
     join base b on b.employee_id = x.employee_id
@@ -92,6 +92,17 @@ vencimentos as (
     union all
     select b.employee_id, 'experiencia', 'Experiência 60 dias', b.hired_on + 60
     from base b where b.hired_on is not null and b.hired_on + 60 >= %(hoje)s::date
+),
+-- O filtro de pendência é aplicado aqui, e não só no `where` lá embaixo, porque
+-- ele decide **duas** coisas: quem aparece e qual prazo a coluna mostra. Filtrar
+-- só quem aparece devolvia a pessoa certa com a data errada — quem filtra por
+-- ASO e lê "CNH · vence em 3 dias" tem de abrir a ficha para saber do ASO, que é
+-- exatamente o trabalho que a coluna existe para poupar.
+vencimentos as (
+    select * from todos_os_prazos t
+    where %(pendencia)s::text is null
+       or %(pendencia)s::text = 'vinculo'
+       or t.kind = %(pendencia)s::text
 )
 select b.employee_id, b.name, b.registration_number, b.hr_code, b.cargo,
        b.status, b.hired_on, b.unit_id, b.unit_name,
@@ -106,12 +117,11 @@ left join lateral (
 ) v on true
 where %(pendencia)s::text is null
    or (%(pendencia)s::text = 'vinculo' and b.hr_code is null)
-   or exists (
-        select 1 from vencimentos k
-        where k.employee_id = b.employee_id
-          and k.kind = %(pendencia)s::text
-          and k.due_on <= %(ate)s::date
-      )
+   -- `vencimentos` já está recortado pela pendência: para um tipo de prazo, ter
+   -- prazo na janela é a mesma pergunta que ter prazo **daquele tipo**. O
+   -- `<> 'vinculo'` não é decoração: sem ele, filtrar por "Sem ID RH" devolveria
+   -- também todo mundo que tem qualquer vencimento.
+   or (%(pendencia)s::text <> 'vinculo' and v.due_on is not null)
 order by v.due_on nulls last, b.name
 limit %(limite)s
 """

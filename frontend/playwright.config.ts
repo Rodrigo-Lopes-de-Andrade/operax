@@ -17,19 +17,32 @@ const apiURL = `http://127.0.0.1:${API_PORT}`;
 export default defineConfig({
   testDir: "./e2e",
   fullyParallel: true,
-  // Two, and measured rather than picked. The whole suite renders against a
-  // single `next dev` process, which compiles and renders serially: at four
-  // workers the run took 1m12s and three navigations timed out waiting on the
-  // dev server, at two it takes 48s and passes. More workers here make the run
-  // slower, not faster — the parallelism is on the wrong side of the wire.
+  // One, and measured rather than picked — três vezes, com a suíte inteira.
   //
-  // FastAPI is not what gives: eight concurrent individual-consultation calls
-  // answer in 230ms. Raising this is worth revisiting only against a production
-  // build, which is also where the 3-second acceptance target is measured.
-  workers: 2,
+  // A suíte renderiza contra um único processo `next dev`, que compila e
+  // renderiza em série. A quatro workers a corrida levava 1m12s e três
+  // navegações estouravam; a dois levava 48s e passava — até a suíte crescer com
+  // as rotas de RH. Com elas, a dois workers **duas navegações não completam nem
+  // em 20 segundos**, sempre em teste diferente: quem perde é quem pediu a rota
+  // que o outro worker está fazendo o servidor compilar.
+  //
+  // E o worker a mais não estava comprando tempo: a um worker a suíte leva
+  // 2m02s, o mesmo que a dois. O paralelismo está do lado errado do fio — a fila
+  // é do servidor, não do navegador.
+  //
+  // FastAPI não é o que cede: oito consultas individuais simultâneas respondem
+  // em 230ms. Subir isto só faz sentido contra um build de produção, que é onde
+  // o orçamento de 3 segundos também é medido.
+  workers: 1,
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 2 : 0,
   reporter: "list",
+  // O 5s padrão é para uma página já compilada. Contra `next dev` a primeira
+  // visita a cada rota **compila**, e a asserção logo depois de uma navegação
+  // paga essa conta. Num build de produção a compilação não existe e o valor
+  // volta ao padrão — é lá que o orçamento de 3 segundos é medido, e afrouxá-lo
+  // ali esconderia justamente o que `e2e/desempenho.spec.ts` existe para pegar.
+  expect: { timeout: process.env.E2E_PROD ? 5_000 : 20_000 },
   use: {
     baseURL,
     trace: "on-first-retry",

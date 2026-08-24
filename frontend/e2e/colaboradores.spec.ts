@@ -213,3 +213,31 @@ test("a importação vai do modelo à confirmação pela tela", async ({ page })
   });
   await expect(page.getByText("Nenhuma linha recusada.")).toBeVisible();
 });
+
+test("o filtro de pendência mostra o prazo daquela pendência, não o mais urgente", async ({
+  page,
+}) => {
+  // Owner alcança saúde e PII: vê tanto o ASO (exame) quanto CNH (documento).
+  await signIn(page, "owner@fastpark.dev", COLABORADORES);
+  await expect(
+    page.getByRole("heading", { name: "Colaboradores" }),
+  ).toBeVisible({ timeout: 30_000 });
+
+  // Escopo na tabela: o seletor de pendência também tem uma opção "ASO", e ela
+  // não é uma linha.
+  const prazos = page.getByRole("table");
+
+  // Sem recorte, a coluna mostra o prazo mais urgente de cada pessoa, seja qual for.
+  await expect(prazos.getByText("CNH", { exact: true }).first()).toBeVisible();
+
+  await page.goto(`${COLABORADORES}?pd=aso`);
+  await expect(
+    page.getByRole("heading", { name: "Colaboradores" }),
+  ).toBeVisible();
+
+  // Recortado por ASO, nenhuma linha pode mostrar o prazo de outra coisa: quem
+  // persegue ASO e lê "CNH · vence em 3 dias" tem de abrir a ficha para saber do
+  // ASO — que é justamente o trabalho que esta coluna existe para poupar.
+  await expect(prazos.getByText("CNH", { exact: true })).toHaveCount(0);
+  await expect(prazos.getByText("ASO", { exact: true }).first()).toBeVisible();
+});
