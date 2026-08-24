@@ -23,6 +23,8 @@ for f in supabase/migrations/*.sql; do
   else echo "ok      $(basename "$f")"; fi
 done
 [ $FAIL -ne 0 ] && { echo "=== MIGRATIONS FALHARAM"; exit 1; }
+echo "--- matriz dono-do-campo do RH"
+python3 scripts/95_teste_matriz_rh.py || exit 1
 echo "--- motor de jornada esperada"
 python3 scripts/96_teste_jornada.py || exit 1
 echo "--- teste de regras de alerta e cadência"

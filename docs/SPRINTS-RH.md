@@ -7,7 +7,7 @@ Code: estes sprints entram na fila, não a substituem.
 
 ---
 
-## R1 — Fundação: banco, matriz e validadores
+## R1 — Fundação: banco, matriz e validadores ✅
 
 **Entrega:** migration 16 aplicada; matriz dono-do-campo em código; validadores
 de domínio prontos e testados **antes de existir tela ou endpoint**.
@@ -26,7 +26,7 @@ de domínio prontos e testados **antes de existir tela ou endpoint**.
 cobrindo os seis casos de erro por linha · asserção de que o painel não tem
 grant de escrita em tabela de RH.
 
-### Andamento em 24/08/2026 — em curso
+### Andamento em 24/08/2026 — fechado
 
 **Feito.** `supabase/migrations/20260824140000_16_hr_management.sql` aplica limpa
 e é idempotente (provado rodando duas vezes seguidas). Ela traz `hr_code` com
@@ -38,8 +38,37 @@ reescritos de memória, que é como se apaga em silêncio um valor já gravado. 
 bloco de prova já carrega a asserção do gate: `anon` não escreve em nenhuma das
 nove tabelas de RH.
 
-**Falta.** `operax/rh/ownership.py`, `operax/rh/validators.py` e a fixture
-sintética.
+**Feito também.** `operax/rh/ownership.py` traz os 55 campos da matriz — 19 do
+sync, 36 do RH — cada campo do sync citando **a coluna do espelho de onde vem**,
+que é o que a tela repete como "Secullum · leitura de HH:MM". A conferência
+contra o schema real pegou quatro dos dezessete nomes errados na primeira
+escrita: `Cadastro` em vez de `NumeroFolha`, `Departamento`/`Empresa` em vez das
+FKs uuid, e um `TipoContrato` que não existe. `scripts/95_teste_matriz_rh.py`
+entrou no `make db-test` para que isso não dependa de atenção: confere cada
+coluna, cada origem no espelho e os dez enums copiados para o Python contra o
+`check` do banco.
+
+Duas conclusões vieram do espelho, não de palpite: `secullum."Funcionario"`
+carrega `Cpf`, `Rg`, `NumeroPis`, `Nascimento`, `Mae`, `Pai`, `Telefone`,
+`Email` e `Endereco` — então **quase todo o bloco de PII é somente-leitura**, o
+que convém saber antes de alguém desenhar formulário para ele. `ctps` e
+`employment_type` são as exceções: nada no espelho os alimenta, e o dono é o RH.
+
+`operax/rh/validators.py` tem os seis casos como funções puras — nada ali abre
+conexão ou conhece tenant — e quatro compositores por domínio, que é como a
+regra 1 fica garantida por construção: não existe segundo lugar onde a regra
+pudesse ser escrita diferente. `backend/tests/test_rh_validators.py`: **30
+asserções**, cada recusa com o par que tem de passar ao lado — um validador que
+recusa tudo passa em qualquer teste de recusa e trava o DP.
+
+Duas decisões registradas no código, não escondidas: o limite de retroatividade
+de vigência **não tem valor padrão** (quanto retroagir é política de folha, e um
+padrão aqui viraria a política por omissão), e a soma de parcelas tolera **dois
+centavos**, porque a planilha carrega valor arredondado à mão.
+
+**Gate do R1: cumprido.** `make db-test` verde com a migration 16 · 30 asserções
+de validador cobrindo os seis casos · a asserção de que o painel não escreve em
+tabela de RH mora no bloco de prova da própria migration.
 
 ### Duas coisas que a execução expôs, e que decidem antes do R2
 
