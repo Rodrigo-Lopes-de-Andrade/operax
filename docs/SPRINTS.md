@@ -11,23 +11,137 @@ recebimento dos acessos.
 
 ---
 
+## Estado em 24/08/2026
+
+Conferido contra o repositório e contra o projeto de produção, não de memória.
+Este bloco registra **andamento**; o plano abaixo permanece como foi escrito.
+
+| Sprint | Estado |
+|---|---|
+| S0 · Diagnóstico e blindagem | ✅ fechada |
+| S1 · Isolamento e ajuste do worker | ✅ fechada — a sincronização virou Edge Function (22/08) |
+| S2 · Modelo completo e superfície de API | ✅ fechada |
+| **S3 · Jornada esperada** | **em andamento** — o motor existe e está testado; falta rodar contra produção |
+| S4 · Motor em modo sombra | não começou |
+| **S5 · Dashboard** | ✅ **fechada** — os quatro critérios de aceite com teste |
+| S6 · Alertas e relatório | não começou — travada em G4 |
+| S7 · Assistente de IA | ✅ fechada — 25/08 |
+| S8 · Homologação e produção | não começou |
+
+**Números que mudaram desde que este plano foi escrito.** São **22 migrations**
+(entraram a `11b`, que renomeia o schema da nuvem de pt para en, a `15` do
+rebrand FastPark, a `16` e a `17` de RH, a `18` da idempotência da sombra, e a
+`19` e a `20` do assistente). A suíte de banco tem **quatro** conjuntos:
+motor de jornada (24 asserções), regras de alerta e cadência (24), isolamento
+multi-tenant (21) e verificações estruturais (13).
+
+**A fronteira de segurança passou a ser provada também por HTTP**, contra o
+PostgREST do projeto de staging: `anon` toma 401 em toda view, `app`/`secullum`/
+`util` respondem 406 mesmo para a chave de serviço, e cada sessão vê só o seu
+recorte. `scripts/provar_postgrest.sh` reproduz.
+
+### O que trava o caminho crítico
+
+**Falta o elo entre o espelho e o domínio.** Produção tem 172 pessoas em
+`secullum."Funcionario"` e 3.211 marcações em `app.batida_marcacao`, e tem
+**zero** linha em `app.employee`, `app.unit` e `app.expected_workday` — e zero
+usuário em `auth.users`. Nada promove o espelho para o domínio: não há função de
+promoção, e `app.unit_secullum_map` está vazia. Enquanto isso não existir, o
+motor de jornada roda sobre uma base vazia e o dashboard abre sem dado.
+
+O S1 já previa essa curadoria ("cadastrar unidades reais; preencher o mapeamento
+Departamento → unidade"). Ela não foi feita, e é ela que destrava S3 e S4.
+
+**Atualização de 24/08/2026 — o elo existe agora.**
+`backend/operax/motor/cadastro.py` promove `Empresa`, `Departamento` e
+`Funcionario` para `app.company`, `app.department` e `app.employee`, e roda como
+passo zero de `python -m operax.motor`. Duas decisões que o `make db-test` prova:
+
+- **A empresa vem da pessoa, nunca do departamento.** É a regra 5, e o cenário do
+  teste tem exatamente o caso: alguém da Empresa B lotado num departamento da
+  Empresa A. Derivar pelo departamento poria cerca de um quarto da folha na
+  empresa errada, de forma consistente e invisível.
+- **A promoção não inventa unidade.** `app.unit` é dimensão nossa e o espelho não
+  tem o conceito; a ponte é `app.unit_secullum_map`, curada com o cliente. Quem
+  não tem mapa é promovido com `unit_id` nulo e entra na **fila de pendência**,
+  nomeada por departamento e ordenada por quanta gente depende dela — que é o
+  segundo lado do aceite do S1 ("zero ativo sem unidade, **ou fila visível**").
+  E o `on conflict` preserva a lotação feita à mão: mapa removido não desfaz
+  trabalho humano.
+
+O que continua dependendo do cliente é a curadoria em si — decidir qual
+departamento é qual pátio. A diferença é que agora ela tem uma fila para
+trabalhar em cima, em vez de uma tabela vazia.
+
+### O S3 tinha uma pergunta que decidia o cronograma. Ela foi respondida
+
+O plano avisava: *"se `HorarioDia` descreve semana fixa, a escala não cabe e a
+confiança despenca"*. Medido em 24/08 contra produção:
+
+`secullum."HorarioDia"` é **semana fixa de sete dias** — chave
+`(horario_id, "DiaSemana")`, `DiaSemana` de 0 a 6, sem índice de ciclo e sem data
+de início. Um 12x36 é ciclo de 48 h e não cabe. O contorno do próprio Secullum
+aparece no dado: escalas em pares `Par`/`Ímpar` com `HorarioDia` **inteiramente
+vazio**, e nenhum horário alternativo preenchido.
+
+**Mas o alcance é pequeno, e isso muda a conclusão:**
+
+- **66 de 79 ativos (83,5%)** estão em semana fixa, e ela é confiável — 4 de 546
+  dias trabalhados (0,7%) caíram em dia declarado como folga.
+- **7 pessoas em 2 unidades** (U-040 Cotia e U-042 Alphaville) estão em 12x36 de
+  verdade e precisam de uma fonte de rotação que o espelho não traz.
+- **6 pessoas na administração** têm horário em branco **por desenho** — os
+  horários irmãos se chamam "Ponto por exceção" e "Marcação Supervisor". Elas não
+  precisam de escala manual; precisam ficar **fora** do motor.
+
+Então **não** entra o sub-sprint grande de cadastro manual de escala que o plano
+previa. Entra um pequeno, de 7 pessoas — e ele **não é opcional**: G4 é taxa de
+erro, não cobertura. Sobre 14 dias de dado, um motor ingênuo emitiria ~140
+eventos dos quais **≥50 seriam certamente errados (≥36%)**, contra um portão de
+≤5%. Dezesseis por cento do efetivo são trinta e seis por cento dos eventos.
+
+### Reconciliação da nuvem — trabalho real que este plano não previa
+
+O projeto de produção (`Kastro Park Ponto`) é **este repositório parado na
+migration 11**, com os mesmos arquivos guardados na grafia em português. Alinhá-lo
+virou um plano próprio, em `docs/PLANO-RECONCILIACAO-NUVEM.md`:
+
+| Fase | Estado |
+|---|---|
+| 0 · destravar o acesso | ✅ 22/08 — Management API com o token de conta, sem senha de banco |
+| 1 · fotografar sem tocar | ✅ 22/08 |
+| 2 · provar a fusão, duas vezes | ✅ 24/08 — Postgres descartável **e** projeto Supabase real |
+| 3 · janela de aplicação | **pendente de decisão do dono** — teto de 48 h imposto pelo `sync-batidas` |
+
+A aplicação em si deixou de ser o risco: a Management API é transacional, então a
+migration de rename aplica inteira ou não aplica. O que sobra é escrita
+concorrente das Edge Functions durante o DDL.
+
+**Os riscos de ingestão declarados na §4b daquele plano** — ausência de transação,
+janela de 48 h sem autocura, saída HTTP 200 com ingestão zero e ausência de
+alarme — seguem sem sprint aqui, e por decisão: são a trilha de ingestão, que o
+dono está documentando à parte. Registrado para não parecer esquecimento (achado
+A9 da auditoria de 24/08).
+
+---
+
 ## Gates — pontos onde a sprint seguinte não começa
 
 Não são recomendações. Cada um existe porque violá-lo custa mais caro do que
 esperar.
 
-| Gate | Condição | Bloqueia | Por quê |
-|---|---|---|---|
-| **G1** | Diagnóstico rodado e convenção PascalCase confirmada | S0 | As migrations 00 e 03 selecionam por essa convenção |
-| **G2** | Suíte de isolamento verde | S3 | Motor grava dado real; RLS errada vira vazamento |
-| **G3** | Jornada esperada com ≥80% de confiança | S4 | Sem escala correta, o motor é gerador de falso positivo |
-| **G4** | Falso positivo ≤5% em duas execuções de sombra | S6 | Primeiro relatório errado mata a credibilidade e não se recupera |
-| **G5** | Regras homologadas com cliente + jurídico/RH | envio real | Alerta nominal indevido é risco trabalhista |
-| **G6** | Cláusula de IP assinada | comercializar | Sem ela é projeto sob encomenda, não produto |
+| Gate | Condição | Bloqueia | Por quê | Estado em 24/08 |
+|---|---|---|---|---|
+| **G1** | Diagnóstico rodado e convenção PascalCase confirmada | S0 | As migrations 00 e 03 selecionam por essa convenção | ✅ |
+| **G2** | Suíte de isolamento verde | S3 | Motor grava dado real; RLS errada vira vazamento | ✅ e agora provado também por HTTP |
+| **G3** | Jornada esperada com ≥80% de confiança | S4 | Sem escala correta, o motor é gerador de falso positivo | número medido em **83,5%** contra o espelho de produção; falta o motor produzi-lo, o que depende da promoção `secullum → app` |
+| **G4** | Falso positivo ≤5% em duas execuções de sombra | S6 | Primeiro relatório errado mata a credibilidade e não se recupera | inalcançável até o S4 existir; a medição de 24/08 projeta **≥36%** enquanto as 7 escalas 12x36 não tiverem fonte |
+| **G5** | Regras homologadas com cliente + jurídico/RH | envio real | Alerta nominal indevido é risco trabalhista | fora da engenharia |
+| **G6** | Cláusula de IP assinada | comercializar | Sem ela é projeto sob encomenda, não produto | fora da engenharia |
 
 ---
 
-## S0 — Diagnóstico e blindagem · 2–3 dias
+## S0 — Diagnóstico e blindagem · 2–3 dias ✅
 
 **Objetivo:** fechar a exposição de dado pessoal e montar a fundação, sem quebrar
 nada que já roda.
@@ -53,17 +167,17 @@ migrations `00` e `03` antes de aplicar.
 
 ---
 
-## S1 — Isolamento e ajuste do worker · 3–5 dias
+## S1 — Isolamento e ajuste do worker · 3–5 dias ✅
 
 **Objetivo:** mover o espelho para schema privado e apontar o worker para lá.
 
 | Trilha | Entrega |
 |---|---|
 | Banco | Migrations `03` e `04` |
-| Backend | `operax/sync/` aponta para o schema `secullum`; `core/tenant.py` injeta `tenant_id` em todo acesso |
+| Sincronização | Edge Functions (`sync-cadastro`, `sync-batidas`) apontam para o schema `secullum` — decisão de 22/08/2026, fora do backend Python; `core/tenant.py` injeta `tenant_id` em todo acesso do FastAPI |
 | Dados | Cadastrar unidades reais; preencher o mapeamento Departamento → unidade |
 
-**A migration `03` quebra o worker.** Banco e código no mesmo PR.
+**A migration `03` quebra a sincronização.** Ela move o espelho de `public` para `secullum`, e as Edge Functions precisam ser atualizadas junto — só que elas vivem noutro repositório, então "no mesmo PR" deixou de ser possível. É coordenação manual até o código delas ser versionado aqui.
 
 O mapeamento de unidades é trabalho de curadoria com o cliente, não de código. É
 onde os ~26% de divergência entre empresa e departamento são resolvidos de uma vez.
@@ -76,7 +190,7 @@ onde os ~26% de divergência entre empresa e departamento são resolvidos de uma
 
 ---
 
-## S2 — Modelo completo e superfície de API · 3–5 dias
+## S2 — Modelo completo e superfície de API · 3–5 dias ✅
 
 **Objetivo:** o resto do modelo e a API pronta para o frontend consumir.
 
@@ -88,15 +202,16 @@ onde os ~26% de divergência entre empresa e departamento são resolvidos de uma
 
 **Aceite**
 
-- 14 migrations aplicam limpas em banco descartável.
-- 23 asserções funcionais e 11 estruturais passando.
+- ~~14 migrations~~ **17** aplicam limpas em banco descartável.
+- ~~23 asserções funcionais e 11 estruturais~~ **69 asserções em quatro suítes**
+  (jornada 24, alerta e cadência 24, isolamento 21, estruturais 13) passando.
 - Views e RPCs respondendo com um usuário de teste autenticado.
 
 **⚠️ G2** — a suíte verde é pré-requisito para qualquer gravação de dado real.
 
 ---
 
-## S3 — Jornada esperada · 5 dias
+## S3 — Jornada esperada · 5 dias · em andamento
 
 **Objetivo:** materializar o que era esperado de cada colaborador em cada dia.
 Sem isso, o motor não tem contra o que comparar.
@@ -121,11 +236,33 @@ absorvido em silêncio.
 - Percentual de confiança medido e reportado.
 - Precedência verificada: afastamento > folga > jornada.
 
+**Andamento em 24/08/2026.** O motor existe: `backend/operax/motor/jornada.py`
+materializa a tabela num `insert … select` idempotente, com a precedência
+provada. A confiança é escada de três — 100 quando o dia da semana está
+declarado ou há afastamento, 50 quando há turno sem hora de entrada, 0 quando o
+horário nada diz — e não uma curva, porque a fonte ou está certa ou está ausente.
+`make jornada` roda e imprime a cobertura, agrupada **por descrição de horário**,
+que é o que separa os dois problemas achados na medição.
+
+`scripts/96_teste_jornada.py` entrou no `make db-test` com 24 asserções e
+**extrai o SQL do próprio módulo** em vez de repeti-lo. Pegou um bug na primeira
+execução: `translate` rodava antes de `upper`, o "é" minúsculo de "Férias"
+escapava da lista de acentos e **toda férias era arquivada como atestado**.
+
+Para escrever isto foi preciso consertar antes o baseline: o `secullum` do banco
+de teste era um stub simulado, com colunas que produção não tem e sem sete das
+vinte tabelas. `scripts/gerar_baseline_nuvem.py` passou a montá-lo do catálogo
+real — o gancho `scripts/_baseline.sql`, que a suíte procurava desde sempre,
+nunca tinha sido preenchido.
+
+**O que falta:** rodar contra produção. `app.employee` está com zero linha lá, e
+a promoção `secullum → app` não existe em nenhum lugar do repositório.
+
 **⚠️ G3**
 
 ---
 
-## S4 — Motor em modo sombra · 5–10 dias
+## S4 — Motor em modo sombra · 5–10 dias · motor entregue, ⚠️ G4 aberto
 
 **Objetivo:** detectar desvio sem publicar nada, e medir o erro.
 
@@ -147,9 +284,73 @@ Uma semana de dados por rodada.
 
 **⚠️ G4** — nenhum alerta ou relatório sai antes disso.
 
+### Andamento em 24/08/2026 — o motor existe; o gate não fechou
+
+**O que foi entregue.** `backend/operax/motor/regras.py` guarda o cálculo de "o
+que é desvio neste dia" como SQL puro, sem driver e sem cópia; `deteccao.py`
+grava `app.deviation_event` a partir dele; `revogacao.py` faz a correção
+retroativa. `python -m operax.motor` roda os três em ordem — jornada, detecção,
+reconciliação — porque detectar contra uma tabela de jornada vazia não dá zero
+desvio, dá zero informação.
+
+**Um cálculo, três statements.** O detector escreve a partir de uma definição e a
+revogação pergunta duas vezes contra ela. Uma segunda cópia de um `union all` de
+trezentas linhas divergiria na primeira mudança de tolerância, e a cópia que
+diverge nunca é a que alguém está lendo. Um teste do pytest afirma que os três
+começam com `EVENTS_SQL` — se um deixar de derivar dele, a suíte fica vermelha
+antes de o motor se contradizer.
+
+**Reprocessar não duplica — e isso precisou de migration.** A migration 05 tinha
+índice único só para `mode = 'production'`; a sombra ficou sem nenhum, e é
+justamente ela que reprocessa a mesma semana a cada correção de tolerância. Sem
+índice para o `on conflict`, a segunda execução inseria uma segunda cópia de cada
+evento, e o **falso positivo que decide este gate seria medido contra uma tabela
+que dobrava toda vez que alguém acertava uma tolerância**. A migration 18
+estende o grão declarado na 05 à sombra e prova o comportamento com um teste vivo
+dentro do próprio bloco.
+
+**O que já foi enviado não se reescreve.** O `on conflict do update` carrega um
+`where app.deviation_event.report_cycle_id is null`: um indício que saiu num
+relatório está na mão de um gestor, e reescrever o número em silêncio é como o
+produto perde a discussão que ele existe para ganhar. Esses passam pela
+supersessão — revoga e insere apontando para o anterior. E o `do update` copia
+`company_id` e `unit_id` de si mesmo: quem mudou de unidade depois não reescreve
+onde o fato aconteceu.
+
+**A guarda que segura o 12x36.** `no_punches` exige `workload_minutes` declarado.
+Sem ela, todo dia de descanso de quem está numa rotação que o espelho não
+descreve viraria um turno perdido — e a enxurrada de falso positivo apareceria
+justamente na medição que este gate depende. Não se pode afirmar que alguém
+faltou a um turno que ninguém conseguiu descrever. O relatório do motor imprime
+os dias cegos ao lado do total pelo mesmo motivo: uma taxa calculada sem esse
+denominador parece melhor do que é.
+
+**O que o motor deliberadamente ignora**, nomeado para ser a primeira suspeita
+quando um falso positivo aparecer: as bandeiras de dia do próprio espelho
+(`"Folga"`, `"Neutro"`, `"Compensado"`) e os campos de abono. A expectativa vem
+de `app.expected_workday` e só dela — duas fontes para "este dia era de trabalho"
+é uma a mais, e escolher entre elas é decisão de produto. Um teste afirma que
+nenhuma delas aparece no `where`.
+
+**Prova.** `scripts/94_teste_deteccao.py` entrou no `make db-test` com 15 pessoas,
+uma por caso, e **importa o SQL do motor** em vez de repeti-lo. A asserção que
+mais vale não é a contagem: é que o **sinal** de cada indício concorde com a
+`direction` declarada em `app.deviation_type` — contar eventos à mão envelhece a
+cada tipo novo, e essa pega um sinal invertido em qualquer um dos doze. Dois
+achados do cenário: quem sai para o intervalo e não volta tem número **par** de
+batidas (a coluna sem hora não é batida), então a regra de paridade da SPEC §3.2
+não o pega — quem pega é `break_no_return`; e uma batida `desconsiderada` que
+contasse transformaria um dia correto em jornada excedida e par ímpar de uma vez.
+
+**O que falta para o G4 fechar:** dados reais. O gate é "falso positivo ≤5% em
+duas execuções seguidas" contra a apuração do próprio Secullum, e isso depende de
+`app.employee` estar populado em produção — que é a pendência do S3 e o assunto
+de `docs/PLANO-RECONCILIACAO-NUVEM.md`. O motor está pronto para rodar em sombra
+no dia em que houver contra o que comparar.
+
 ---
 
-## S5 — Dashboard · 7–10 dias
+## S5 — Dashboard · 7–10 dias ✅
 
 **Objetivo:** a tela. Pode começar em paralelo ao S4 usando dados de sombra.
 
@@ -171,9 +372,19 @@ Uma semana de dados por rodada.
   na tela, não só no banco.
 - Nenhum nome de colaborador na tela de TV.
 
+**Fechada em 24/08/2026 — os quatro com teste.** Três se provam na tela e viviam
+no Playwright desde 22/08. O quarto era um número que ninguém media: o orçamento
+de 3 s não podia ser aferido contra `next dev`, que compila a rota na primeira
+requisição. `E2E_PROD=1` (ou `make e2e-prod`) troca o servidor por build de
+produção; medido cinco vezes, **979 a 1516 ms**. A suíte inteira passa nos dois
+modos, 16 de 16.
+
+O número é piso, não teto: aqui o Next e o Supabase dividem máquina e o seed é
+sintético. O teto continua sendo medido no S8.
+
 ---
 
-## S6 — Alertas e relatório consolidado · 5–7 dias
+## S6 — Alertas e relatório consolidado · 5–7 dias · esteira entregue, ⚠️ G4 na frente
 
 **Objetivo:** o produto começa a falar com o gestor.
 
@@ -201,7 +412,53 @@ próprio Owner.
 
 ---
 
-## S7 — Assistente de IA · 3–5 dias
+### Andamento em 24/08/2026 — a esteira existe e não entrega nada
+
+**O que foi entregue.** `ciclo.py` monta `app.report_cycle` por unidade e reserva
+os eventos numa transação; `outbox.py` enfileira em `app.alert_queue` com chave de
+idempotência; `sender.py` consome com `for update skip locked`, backoff e
+descarte; `provedores/base.py` é o contrato `(template, variáveis, destino)`.
+
+**"Um desvio em exatamente um ciclo" é uma cláusula, não uma convenção.** A
+reserva é `update ... where report_cycle_id is null` — quem já está num ciclo não
+entra em outro, e reservar duas vezes não move ninguém. E ela **não tem piso de
+data**: um desvio detectado tarde é de antes do início do ciclo e tem de entrar,
+porque bloqueá-lo derrubaria justamente as ocorrências que o gestor ainda não
+ouviu. Daí a frase obrigatória — *"Inclui 3 ocorrências de dias anteriores
+detectadas após o último envio"* — que existe porque o painel filtra por data do
+fato e o relatório agrupa por ciclo: **os dois números estão certos e são
+diferentes**, e sem a declaração o gestor conclui que o sistema está errado.
+
+**O gate G4 é perguntado, não lembrado.** A regra 8 diz que nenhum alerta sai
+antes de a sombra fechar. Isso virou uma pergunta ao banco: *este cliente já teve
+alguma execução do motor concluída em `mode = 'production'`?* Enquanto o motor só
+rodou em sombra, o remetente reserva o lote, registra a tentativa com o motivo em
+`app.alert_sent` e **não entrega nada**. Promover o motor é o que abre a porta — e
+promover o motor é exatamente o que "a sombra fechou" quer dizer. Um teste roda o
+remetente contra as duas respostas.
+
+**O destino em claro na fila, hasheado no log.** `alert_queue.destination` guarda
+o número porque o remetente precisa discar; `alert_sent.destination_hash` guarda
+só o hash, porque um log de entrega de longo prazo não precisa do telefone de
+ninguém para ser útil. E `cost_cents` entra desde o primeiro envio.
+
+**Prova.** `scripts/93_teste_ciclo.py` entrou no `make db-test` e faz duas coisas:
+compila **as 15 instruções fixas** dos três módulos contra o schema real — `prepare`
+pega coluna errada e join inválido antes de a primeira mensagem sair — e roda o
+cenário funcional da reserva, com sete desvios, cada um por um caso: o do período,
+o detectado tarde, o já reservado, o de sombra, o revogado e o de uma unidade sem
+regra. Mais 21 asserções no pytest.
+
+**O que falta:** as três integrações de WhatsApp e o SMTP. Elas recebem credencial
+**por tenant**, do Supabase Vault via `app.integration_secret`, e nenhum tenant
+tem uma configurada — montar um cliente HTTP contra uma API que não se consegue
+exercitar seria código que só falha na primeira mensagem real. Enquanto isso o
+`NullProvider` registra o que teria saído, que é o mesmo comportamento que o gate
+G4 impõe de qualquer forma.
+
+---
+
+## S7 — Assistente de IA · 3–5 dias · entregue
 
 | Trilha | Entrega |
 |---|---|
@@ -216,6 +473,151 @@ próprio Owner.
 - Usuário sem o domínio sensível é recusado antes da consulta.
 - Resposta informa período e filtros usados.
 - Custo de tokens visível.
+
+---
+
+### Andamento em 24/08/2026 — a metade que decide a segurança
+
+**O que foi entregue.** `catalogo.py` e `executor.py` — a fronteira inteira da
+regra 9. O que **não** foi: `agente.py`, o `create_agent` do LangChain, e o
+endpoint SSE. A razão está no fim desta seção.
+
+**Por que catálogo em vez de prompt esperto.** Um modelo convidado a escrever SQL
+contra um schema que ele viu vai, uma hora, escrever uma consulta sintaticamente
+perfeita e semanticamente errada — juntando departamento a empresa, por exemplo,
+que é o erro de 26% em torno do qual o modelo de dados inteiro foi desenhado. Um
+modelo convidado a escolher entre nove métricas nomeadas só consegue errar de uma
+forma: escolhendo a errada entre nove, que uma pessoa lê na tela e corrige. Essa é
+a troca, e é por isso que **recusa é resposta válida**.
+
+**Quatro recusas, e todas nomeiam o problema.** Fora do catálogo (com a lista do
+que existe), domínio fora de alcance, parâmetro desconhecido (pelo nome) e
+período ausente. "Não consigo responder isso" não ensina nada a ninguém; dizer
+*qual* parâmetro não foi reconhecido acerta a próxima pergunta.
+
+**O domínio filtra antes de o modelo ver.** Métrica que a pessoa não alcança não
+entra no catálogo oferecido. Oferecer e recusar depois confirmaria que existe
+dado de folha para quem não pode saber que ele existe — o mesmo raciocínio que
+tira a aba da tela em vez de desabilitá-la.
+
+**`BINDINGS` é código, e o `make db-test` é o contrato.** `app.metric` diz o que
+cada métrica aceita (dado); `BINDINGS` diz como cada parâmetro alcança o alvo —
+coluna e operador para view, nome de argumento para função — e é código porque é
+o único ponto em que um nome de coluna encosta em estrutura de SQL. Nenhum valor
+do modelo ou do usuário é interpolado: tudo viaja ligado.
+
+`scripts/91_teste_catalogo.py` confere as duas listas uma contra a outra e
+**achou três divergências na primeira execução**: `data_freshness` declarava a
+dimensão `entity` sem binding; `fn_ranking_by_unit` não tem `p_unit_id` — ela
+ordena unidades, e filtrar um ranking de unidades por uma unidade é pedir o
+ranking de um item só; e sobrava binding para uma view que nenhuma métrica ativa
+usa mais. As três eram invisíveis até alguém fazer a pergunta em produção.
+
+**Por que o agente não foi escrito naquele dia.** Ele precisava do LangChain 1.x
+e de um provider real, e nenhum dos dois estava no `pyproject.toml`. Escrever a
+fiação de `create_agent` sem conseguir exercitá-la produz exatamente o tipo de
+código que parece certo e falha na primeira pergunta.
+
+---
+
+### Andamento em 25/08/2026 — a fiação, e o que a primeira execução real mostrou
+
+**Entregue.** `agente.py` (o `create_agent`, a allowlist de modelo, o turno como
+eventos tipados), `POST /assistente/perguntar` com SSE, a tela de conversa, o
+registro em `app.ai_query`, o rate limiting por usuário e o provider falso do
+E2E. As dependências entraram: `langchain` 1.3, mais os três providers.
+
+**A decisão que valeu a espera foi exercitar antes de fechar.** Cinco perguntas
+reais contra um provider real acharam sete coisas que nenhum teste com fixture
+acharia. As quatro primeiras com as leituras de banco simuladas:
+
+1. **O modelo inventa valor, não só nome.** Para "quantos desvios tivemos este
+   mês?" ele mandou `unit="month"`. As quatro recusas do catálogo passam por
+   isso — `unit` é dimensão que a métrica aceita — e a string chegaria a uma
+   coluna `uuid`. Virou a **quinta recusa**, `valor_invalido`, e o mapa de tipos
+   que o `make db-test` já tinha saiu do script e virou `catalogo.TYPES`, com o
+   contrato conferido nos dois lados.
+
+2. **Quando o modelo acerta, o `event: recusa` não dispara.** Perguntado sobre
+   folha sem alcançar o domínio, ele recusou sozinho, em prosa, sem chamar
+   ferramenta nenhuma. A resposta é boa e a UI não sabe que foi recusa: o
+   `app.ai_query` conta a pergunta como respondida, e a lista de "métricas que
+   faltam" — que é o principal uso desse registro — nasce errada. O modelo
+   ganhou uma segunda ferramenta, `recusar`, e um sexto código, `sem_metrica`.
+   O texto que ele produz ali é o melhor insumo que existe para decidir qual
+   métrica criar: *"nenhuma métrica retorna média por colaborador"*.
+
+3. **Um filtro descartado virava uma frase falsa.** O modelo mandou `unit` para
+   `ranking_by_unit`; o `BINDINGS` descarta (a função **ordena** unidades e não
+   tem `p_unit_id`), a consulta rodou sem o filtro, e o modelo respondeu "com
+   filtro da unidade Shopping Norte". O número estava certo e a frase em cima
+   dele, não. O silêncio no SQL segue de pé — é limitação declarada do alvo —
+   mas agora a ferramenta devolve `filtros_aplicados` e `filtros_ignorados`, e
+   a tela mostra os dois.
+
+4. **A métrica de contagem não contava.** `deviations_total` apontava para
+   `vw_deviation_event`, uma linha por evento, e o assistente lê no máximo 200
+   linhas (elas são pagas por token). Contra o seed de desenvolvimento, com 508
+   eventos, "quantos desvios tivemos este mês?" responderia **200** — não erro,
+   não vazio: um número errado com uma frase confiante na frente. A migration 20
+   aponta `deviations_total` e `deviations_minutes` para `fn_kpi_period`, que já
+   existia desde a 10 e é o que o KPI do dashboard lê. Hoje a mesma pergunta
+   responde 217, que é a contagem. As dimensões `employee` e `type` saíram das
+   duas: a função não as aceita, e catálogo que promete o que o alvo não entrega
+   produz filtro descartado em silêncio.
+
+**E a primeira execução contra o banco de verdade achou mais duas.** Rodadas as
+mesmas perguntas contra o seed de desenvolvimento, com provider real, as cinco
+recusaram:
+
+5. **`null` não é valor inválido, é ausência de filtro.** Perguntado por um total
+   do mês, o modelo manda `{"unit": null}` — que é como ele escreve "sem filtro
+   de unidade". A recusa `valor_invalido` tratava isso como lixo e derrubava a
+   pergunta certa, cinco vezes em cinco. `null` e string vazia agora são
+   descartados antes de qualquer validação.
+
+6. **O modelo estreita o filtro por conta.** Sem poder filtrar por tipo, ele
+   trocava o recorte pedido por outro: "quantos atrasos em agosto?" virava o
+   total de uma unidade que ninguém citou — número certo para uma pergunta que
+   ninguém fez. Duas coisas seguraram isso: uma regra explícita no prompt e na
+   descrição da ferramenta ("só os parâmetros que a pergunta pediu"), e o evento
+   `metrica` passando a resolver **nome** de unidade em vez de mostrar o uuid.
+   A segunda é a que não depende de o modelo obedecer: `unidade: Shopping Norte`
+   numa pergunta que não citou unidade é visível; `unidade: dede0000-…-a1` não é.
+
+**E o E2E achou a sétima.** `expected_time` é `time`, o serializador não
+conhecia `time`, e a primeira pergunta contra o banco de verdade morria em
+`TypeError` — que o `except` largo do turno mostrava como "falha ao consultar o
+modelo". Fixture com `{"total": 42}` nunca alcançaria isso. É a razão de o E2E
+do assistente existir com provider falso (`E2E_FAKE_LLM=1`): o que ele prova é
+transporte e integração, não a qualidade da frase.
+
+**O que o registro de custo passou a carregar.** `app.ai_query` ganhou a coluna
+`model` (migration 19). Token não é preço: os mesmos 10.000 tokens custam um
+número num modelo pequeno e outro num grande, o backend é multi-provider de
+propósito, e uma tabela de contadores sem o nome do modelo responde "quantos
+tokens?" e não responde "quanto custou?", que é para o que a coluna foi criada.
+
+**A lacuna que a migration 20 abriu, de propósito.** Com `fn_kpi_period` no
+lugar da view de eventos, o assistente deixou de aceitar filtro por **tipo** e
+por **colaborador** nas duas métricas de desvio — a função não os recebe. Não é
+perda de capacidade que funcionava: um "quantos atrasos?" contra a view também
+batia no teto de 200 e devolvia 200. Hoje a pergunta recebe recusa nomeada. O
+que fecha isso é uma métrica de contagem **por tipo**, e ela é uma das três que
+a `COBERTURA-ESCOPO.md` já lista como faltando.
+
+Há um efeito colateral que vale registrar como ganho: o que o assistente manda
+para o provider virou **agregado**. Antes, uma pergunta de desvio embarcava até
+200 linhas nominais — com nome de colaborador — num serviço de terceiro. Duas
+métricas ainda fazem isso (`documents_expiring` e `ranking_by_employee`, as duas
+com nome de pessoa na saída), e isso **não** foi decidido aqui: fica anotado
+como pergunta em aberto, porque a resposta certa pode ser projetar a saída antes
+de mandar, e isso muda o que a UI recebe.
+
+**O que continua fora.** Thread de conversa — cada pergunta é um turno só, sem
+histórico. Não é limitação de fiação: é escopo que ninguém pediu, e um histórico
+enviado a cada turno multiplica o custo por token sem que ninguém tenha pedido a
+continuidade.
 
 ---
 
@@ -283,6 +685,11 @@ cadastro manual de escala.
 Se o S3 revelar que a escala precisa ser cadastrada à mão, isso é escopo adicional
 e precisa ser conversado com o cliente **no momento em que for descoberto**, não
 no fechamento.
+
+**Revelou, em 24/08/2026 — e o alcance é pequeno.** Sete pessoas em duas unidades,
+não a base inteira: o resto está em semana fixa e ela é confiável. É escopo
+adicional de qualquer forma, e está sendo dito agora, que é o ponto desta regra.
+Outras seis pessoas não precisam de escala nenhuma — precisam sair do motor.
 
 ---
 

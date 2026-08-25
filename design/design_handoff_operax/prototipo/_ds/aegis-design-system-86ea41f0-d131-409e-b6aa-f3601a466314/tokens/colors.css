@@ -1,20 +1,22 @@
 /* ============================================================
-   Aegis — Color Tokens
+   FastPark — Color Tokens
    Light = :root (default).  Dark = [data-theme="dark"].
-   Base palette is verbatim from the product spec; semantic
-   aliases below map raw values to roles used across the UI.
+   Values from the FastPark brand manual (Pantone 151 C / 425 C /
+   427 C / 2975 C). Token NAMES are unchanged: only values moved.
+   Orange #FF8C00 is a FILL colour (2.33:1 as text on white) —
+   text/links use --brand-strong #A85F00 (4.88:1).
    ============================================================ */
 
 :root {
   /* ---- Categorical (data viz) ---- */
-  --categorical-1: #9FBFFE;
-  --categorical-2: #6D9DFD;
-  --categorical-3: #407FFC;
-  --categorical-4: #015DFC;
-  --categorical-5: #013DF2;
-  --categorical-6: #835FF2;
-  --categorical-7: #FDAD0D;
-  --categorical-8: #F55902;
+  --categorical-1: #FFC372;
+  --categorical-2: #FF8C00;
+  --categorical-3: #C2410C;
+  --categorical-4: #A85F00;
+  --categorical-5: #1F7A8A;
+  --categorical-6: #98D2DB;
+  --categorical-7: #5A5A5A;
+  --categorical-8: #DCDCDC;
 
   /* ---- Foreground (text) ---- */
   --foreground-primary:    #3D3D3D;
@@ -23,11 +25,11 @@
   --foreground-quaternary: #767676;
 
   /* ---- Background / surfaces ---- */
-  --background-primary:   #F4F4F4;
+  --background-primary:   #F1F1F1;
   --background-secondary: #FFFFFF;
-  --background-header:     #111D2D;
-  --background-card:       #FFFFFF;
-  --background-muted:      #F1F1F2;
+  --background-header:    #5A5A5A;
+  --background-card:      #FFFFFF;
+  --background-muted:     #F5F1EB;
 
   /* ---- Semantic states ---- */
   --bad-foreground:   #C10202;
@@ -59,44 +61,44 @@
   --text-body:    var(--foreground-secondary);
   --text-muted:   var(--foreground-tertiary);
   --text-faint:   var(--foreground-quaternary);
-  --text-on-accent: #FFFFFF;
+  --text-on-accent: #262626;   /* dark text on the orange fill — 5.42:1 */
   --text-on-dark:   #F5F5F5;
 
   /* Brand / action */
-  --brand:        var(--categorical-4);   /* #015DFC primary action */
-  --brand-strong: var(--categorical-5);   /* #013DF2 active/pressed  */
-  --brand-soft:   var(--categorical-1);   /* tints, fills            */
-  --accent-violet: var(--categorical-6);
-  --accent-amber:  var(--categorical-7);
-  --accent-orange: #CE4B02;
+  --brand:        #FF8C00;   /* fill only  */
+  --brand-strong: #A85F00;   /* links, orange text, hover */
+  --brand-soft:   #FFF1DE;
+  --accent-violet: #1F7A8A;  /* excedente — teal (name kept) */
+  --accent-amber:  #996601;
+  --accent-orange: #C2410C;  /* faltante — burnt orange */
 
   /* Borders & lines */
-  --border-subtle:  rgba(17, 29, 45, 0.08);
-  --border-default: rgba(17, 29, 45, 0.12);
-  --border-strong:  rgba(17, 29, 45, 0.18);
-  --border-focus:   var(--categorical-4);
-  --grid-line:      rgba(17, 29, 45, 0.06);
+  --border-subtle:  rgba(45, 45, 45, 0.08);
+  --border-default: rgba(45, 45, 45, 0.12);
+  --border-strong:  rgba(45, 45, 45, 0.18);
+  --border-focus:   #A85F00;
+  --grid-line:      rgba(45, 45, 45, 0.06);
 
   /* Control fills */
   --control-bg:        #FFFFFF;
   --control-bg-hover:  var(--background-muted);
-  --control-border:    rgba(17, 29, 45, 0.14);
+  --control-border:    rgba(45, 45, 45, 0.14);
   --control-disabled-bg: var(--background-muted);
   --control-disabled-fg: var(--foreground-quaternary);
 
   /* Overlay / scrim */
-  --scrim: rgba(17, 29, 45, 0.45);
+  --scrim: rgba(30, 30, 30, 0.45);
 }
 
 [data-theme="dark"] {
   /* ---- Categorical (data viz) ---- */
-  --categorical-1: #CDDDFE;
-  --categorical-2: #9FBFFE;
-  --categorical-3: #6D9DFD;
-  --categorical-4: #407FFC;
-  --categorical-5: #015DFC;
-  --categorical-6: #835FF2;
-  --categorical-7: #FDBE3F;
+  --categorical-1: #FFE3BF;
+  --categorical-2: #FFC372;
+  --categorical-3: #FFA640;
+  --categorical-4: #FF8C00;
+  --categorical-5: #E07A00;
+  --categorical-6: #98D2DB;
+  --categorical-7: #DCDCDC;
   --categorical-8: #FE8F53;
 
   /* ---- Foreground (text) ---- */
@@ -106,11 +108,11 @@
   --foreground-quaternary: #6E6E6E;
 
   /* ---- Background / surfaces ---- */
-  --background-primary:   #111D2D;
-  --background-secondary: #172335;
-  --background-header:     #0B1420;
-  --background-card:       #162233;
-  --background-muted:      #121E2E;
+  --background-primary:   #2E2E2E;
+  --background-secondary: #383838;
+  --background-header:    #262626;
+  --background-card:      #383838;
+  --background-muted:     #333333;
 
   /* ---- Semantic states ---- */
   --bad-foreground:   #FE9F9F;
@@ -129,19 +131,24 @@
   --surface-header: var(--background-header);
   --surface-sidebar: var(--background-header);
 
-  --brand:        var(--categorical-4);   /* #407FFC */
-  --brand-strong: var(--categorical-5);   /* #015DFC */
-  --brand-soft:   rgba(64, 127, 252, 0.16);
+  --brand:        #FF8C00;   /* 5.82:1 on #2E2E2E */
+  --brand-strong: #FFC372;
+  --brand-soft:   rgba(255, 140, 0, 0.16);
 
-  --text-on-accent: #FFFFFF;
+  --accent-violet: #7FC4D0;  /* excedente — light teal, 6.9:1 */
+  --accent-amber:  #FDBE3F;
+  --accent-orange: #FE8F53;  /* faltante */
+
+  --text-on-accent: #262626;
 
   --border-subtle:  rgba(255, 255, 255, 0.06);
   --border-default: rgba(255, 255, 255, 0.10);
   --border-strong:  rgba(255, 255, 255, 0.16);
+  --border-focus:   #FF8C00;
   --grid-line:      rgba(255, 255, 255, 0.07);
 
-  --control-bg:        #172335;
-  --control-bg-hover:  #1C2A3F;
+  --control-bg:        #383838;
+  --control-bg-hover:  #444444;
   --control-border:    rgba(255, 255, 255, 0.14);
   --control-disabled-bg: var(--background-muted);
   --control-disabled-fg: var(--foreground-quaternary);

@@ -4,7 +4,10 @@ Design system for **OperaX** — a B2B, multi-tenant **workforce-time, people an
 payroll-cost management SaaS** (Supabase-backed) built on top of a third-party
 time-clock system. It reads clock data, detects deviations from the expected
 workday, alerts the manager the same day, and consolidates payroll cost.
-Anchor client: Kastro Park. Vendor: EURECA.
+Anchor client: FastPark. Vendor: EURECA. The interface is white-label:
+the FastPark brand is the first tenant theme, carried entirely by the colour
+tokens, the type tokens and the logo — brand is tenant configuration, not a
+product constant.
 
 The flagship surface is **Gestão de ponto**, a management dashboard with
 persistent filters, hierarchised KPIs, a diverging deviation trend, three
@@ -87,27 +90,42 @@ rankings and a drill-down occurrences table.
 ## Visual foundations
 
 - **Mood.** Premium, sophisticated, corporate. Clean, high breathing room, dense
-  but organised. Deep-navy structural chrome (`#111D2D`) against light-grey app
-  canvas; cool, blue-led data palette.
-- **Colour.** A blue-forward 8-step categorical ramp (`categorical1…8`,
-  `#9FBFFE → #013DF2`, plus violet/amber/orange accents) for data viz; semantic
-  pairs for bad/good/alert; a 3-stop heatmap (`#DCFFDC → #FFF6E6 → #FFCCCC`,
-  Baixa → Média → Alta). Full light **and** dark palettes — see `tokens/colors.css`.
-  Brand action = `categorical-4` (`#015DFC` light / `#407FFC` dark);
-  active/pressed = `categorical-5`. **Stay inside the palette** — no off-token
-  colours. Direction pair for signed minutes: `accent-violet` = excedente,
-  `accent-orange` = faltante.
-- **Type.** *Manrope* for UI/display (weights 400–800), *JetBrains Mono* for
-  codes, timestamps and tabular figures. Tight tracking on headings; uppercase
-  `0.08em` eyebrows. (Fonts are a substitution — see Caveats.)
+  but organised. Warm-grey structural chrome (`#5A5A5A`, Pantone 425 C) against a
+  light-grey app canvas (`#F1F1F1`, 427 C at 50%); orange-led data palette with a
+  teal counterpart.
+- **Colour.** The FastPark brand palette: orange `#FF8C00` (Pantone 151 C),
+  grey `#5A5A5A` (425 C), light grey `#DCDCDC` (427 C), light blue `#98D2DB`
+  (2975 C). The 8-step categorical ramp is derived from those four. Semantic
+  pairs for bad/good/alert and the 3-stop heatmap (`#DCFFDC → #FFF6E6 → #FFCCCC`)
+  are unchanged. Full light **and** dark palettes — see `tokens/colors.css`.
+  **Stay inside the palette** — no off-token colours.
+
+  **The rule that governs the orange.** `#FF8C00` is 2.33:1 on white and never
+  works as text. It appears as a **fill with dark text on top**
+  (`--text-on-accent #262626`, 5.42:1). Where the interface needs orange in text
+  or a link, it uses `--brand-strong #A85F00` — the same hue darkened to 4.88:1.
+  On the dark TV surface (`#2E2E2E`) the pure orange reaches 5.82:1 and is used
+  directly for large figures.
+
+  **Direction pair for signed minutes:** `accent-violet` = excedente (the token
+  name is kept; the value is teal `#1F7A8A`), `accent-orange` = faltante (burnt
+  `#C2410C`). Both differ from the brand orange, so a deviation bar never reads
+  as a button, and teal × orange stays legible under the common colour
+  deficiencies. Colour codes **direction**, and the sign and the word are always
+  present alongside it.
+- **Type.** *Hanken Grotesk* for UI/display (weights 300–800) — the brand family
+  from the manual, with **Verdana** as the institutional fallback. Tabular
+  figures come from the family's own `"tnum"` feature. *JetBrains Mono* for codes
+  and URLs is a declared substitution: the manual defines no mono face. Tight
+  tracking on headings; uppercase `0.08em` eyebrows.
 - **Spacing.** 4px base grid; generous gutters (24px page padding, 16px card
   gaps). Layout: fixed sidebar (264px / 76px collapsed), 84px header, fluid
   content.
 - **Corners.** High radii: cards `18px`, containers `24px`, fields `10px`,
   buttons & filter chips are full **pills** (`999px`), avatars/icon-buttons round.
-- **Elevation.** Soft, low-opacity navy shadows (`shadow-sm` resting on cards,
+- **Elevation.** Soft, low-opacity neutral-grey shadows (`shadow-sm` resting on cards,
   `shadow-md` on hover, `shadow-lg` for popovers/menus). No harsh borders — lines
-  are low-opacity (`border-subtle` ≈ 8% navy).
+  are low-opacity (`border-subtle` ≈ 8% neutral grey).
 - **Backgrounds.** Flat surfaces, no textures/patterns. The only gradients are
   the subtle trend-area fill and the heatmap scale — never decorative bg
   gradients. No bluish-purple hero gradients.
@@ -117,7 +135,7 @@ rankings and a drill-down occurrences table.
   lighter fill on dark chrome; cards lift `-1px` + `shadow-md`. Active = brand
   fill (`brand-strong`) + a `0.5px` nudge. Focus = brand ring
   (`shadow-focus`). Disabled = `background-muted` + `foreground-quaternary`.
-- **Transparency/blur.** Used sparingly — translucent white fills on the navy
+- **Transparency/blur.** Used sparingly — translucent white fills on the grey
   sidebar; scrim token for overlays. No glassmorphism elsewhere.
 - **Contrast.** Light-theme semantic foregrounds were darkened to clear WCAG AA
   4.5:1 on their own backgrounds (`alert-foreground #996601`,
@@ -140,11 +158,15 @@ rankings and a drill-down occurrences table.
   (header); `sliders-horizontal`, `building-2`, `calendar`, `eraser` (filters);
   `timer`, `clock`, `triangle-alert`, `calendar-off` (states); `external-link`,
   `message-square-plus`, `download`, `chevron-right` (actions).
-- **Logo.** The Aegis monogram — a thin-line apex ("A") inside an open ring.
-  Stored as `assets/aegis-symbol-white.png` (white, for navy chrome),
-  `assets/aegis-symbol-navy.png` (`#111D2D`) and `assets/aegis-symbol-blue.png`
-  (`#015DFC`). OperaX chrome pairs the `timer` glyph tile with the "OperaX"
-  wordmark (Manrope 800) until a product logo is supplied.
+- **Logo.** The FastPark mark: a rounded frame open at the base, in orange
+  `#FF8C00`, with the **smile** — the arc — below it. Drawn as inline SVG,
+  `viewBox="0 0 269.8 257.1"`, geometry traced from the brand manual. Symbol sits
+  to the **left** of the wordmark; wordmark is "Fast" + "Park" in Hanken Grotesk
+  700, where "Park" is always orange and "Fast" takes white on dark chrome or
+  `#5A5A5A` on light. Clear space ½X; minimum digital size 35px wide for symbol +
+  wordmark together — below that, use the symbol alone. Never rotate, shadow,
+  recolour or mirror it. The smile arc doubles as a base element on the TV panel
+  cards, following the physical signage in the manual.
 
 ---
 
@@ -189,10 +211,13 @@ rankings and a drill-down occurrences table.
 
 ## Caveats
 
-- **Fonts are substitutes.** No brand fonts were provided — Manrope + JetBrains
-  Mono were chosen. Provide official font files to swap them in `tokens/fonts.css`.
-- **Logo.** The Aegis monogram files ship here; a dedicated OperaX mark does not
-  exist yet.
+- **Fonts.** Hanken Grotesk is the brand family and loads from Google Fonts;
+  Verdana is the manual's fallback. JetBrains Mono for code and URLs is a
+  declared substitution — the manual defines no mono face.
+- **Logo.** The FastPark symbol is drawn as inline SVG from geometry traced out
+  of the brand manual PDF; no vector asset was supplied. Replace it with the
+  official file when one exists — the paths live in the prototype chrome
+  (sidebar, mobile login, TV panel header).
 - **Icons via CDN.** Lucide is loaded from unpkg; vendor it locally for offline
   use if needed.
 - **Validate against the schema.** Component names, copy and state vocabulary

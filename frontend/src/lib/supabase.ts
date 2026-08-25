@@ -1,11 +1,8 @@
 import { createBrowserClient } from "@supabase/ssr";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+import type { Database } from "@/lib/database.types";
 import { publicEnv } from "@/lib/env";
-
-// TODO (pendencia) Type the client with the output of
-// `supabase gen types typescript` (as src/lib/database.types.ts) once a
-// Supabase project exists. Table types are never hand-written (CLAUDE.md).
 
 /**
  * Caminho 1 do contrato — the browser talks to Supabase directly with the anon
@@ -18,10 +15,10 @@ import { publicEnv } from "@/lib/env";
  * Individual, sensitive or write access is Caminho 2 and goes through
  * src/lib/api.ts.
  */
-export function createBrowserSupabaseClient(): SupabaseClient {
+export function createBrowserSupabaseClient(): SupabaseClient<Database> {
   const env = publicEnv();
 
-  return createBrowserClient(
+  return createBrowserClient<Database>(
     env.NEXT_PUBLIC_SUPABASE_URL,
     env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   );

@@ -117,12 +117,17 @@ enabled = true
 # The maximum file size allowed (e.g. "5MB", "500KB").
 file_size_limit = "50MiB"
 
-# Uncomment to configure local storage buckets
-# [storage.buckets.images]
-# public = false
-# file_size_limit = "50MiB"
-# allowed_mime_types = ["image/png", "image/jpeg"]
-# objects_path = "./images"
+# Onde o arquivo de importacao de RH fica guardado. O `storage_path` de
+# `app.file_import` e NOT NULL porque o arquivo e a prova: o relatorio diz que
+# tres linhas cairam, e a unica forma de conferir isso depois e abrir o arquivo
+# que o produziu. Privado nao e opiniao — ele carrega nome, matricula e,
+# conforme o template, salario.
+#
+# Em producao o bucket e criado no painel do Supabase: `storage.*` e gerenciado
+# pelo Supabase e nao entra em migration. O nome vem de IMPORT_BUCKET.
+[storage.buckets.imports]
+public = false
+file_size_limit = "5MiB"
 
 # Allow connections via S3 compatible clients
 [storage.s3_protocol]

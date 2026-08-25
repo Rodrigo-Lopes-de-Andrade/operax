@@ -17,6 +17,7 @@ from operax.core.config import get_settings
 from operax.core.db import get_pools
 from server.deps import CurrentTenant, CurrentUser
 from server.models import HealthResponse, Identity
+from server.routers import assistente, employees, monitor, rh, rh_employees
 
 settings = get_settings()
 
@@ -41,6 +42,13 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+app.include_router(assistente.router)
+app.include_router(employees.router)
+app.include_router(monitor.router)
+app.include_router(rh.router)
+app.include_router(rh_employees.router)
 
 
 @app.get("/health")

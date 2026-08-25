@@ -34,7 +34,7 @@ casos do produto sem virar div:
 |---|---|
 | `badge` | `{tone, label, dot}` no Badge do sistema |
 | `stack` | `{title, sub, dot, chip, chipIcon}` — duas linhas, ponto de estado, selo |
-| `signed` | `{value, color, sub}` — número tabular 700 com sinal; sem `color`, deduz pelo sinal (− laranja, + violeta) |
+| `signed` | `{value, color, sub}` — número tabular 700 com sinal; sem `color`, deduz pelo sinal (− laranja queimado, + teal) |
 | `textchip` | `{label, chip, chipIcon}` — texto de corpo + selo tracejado |
 | `chip` | `{label, icon}` — selo tracejado isolado |
 | `bar` | `{label, pct, color, width}` — valor + barra 6px |
@@ -57,7 +57,7 @@ height, color, posColor, negColor, posLabel, negLabel, empty, onSelect
 gridColor, labelColor, labelSize, valueSize, barHeight, valueColor, track, gap
 ```
 
-- **diverging** — zero no meio, excedente acima (`--accent-violet`), faltante abaixo
+- **diverging** — zero no meio, excedente acima (`--accent-violet`, valor teal), faltante abaixo
   (`--accent-orange`), legenda própria, hover realça a coluna e apaga as outras para
   55%, `title` nativo com os minutos. É a tendência diária.
 - **trend** — série temporal em SVG `viewBox 0 0 100 100` com
@@ -128,7 +128,8 @@ novo, com três ajustes de uso:
   **Skeleton** cobre "enviando justificativa"; **Badge** carrega os estados
   (*Em análise*, *Enviando*) com `dot`.
 - **Signed sempre com palavra.** No celular a cor não basta: além de
-  `--accent-violet` / `--accent-orange`, o sinal e a palavra da direção são
+  `--accent-violet` (teal, excedente) / `--accent-orange` (laranja queimado,
+  faltante), o sinal e a palavra da direção são
   obrigatórios. Vale como regra para o `kind: 'signed'` da Table no desktop também.
 
 A moldura de aparelho usada na apresentação (`ios-frame.jsx`, `IOSDevice`) é

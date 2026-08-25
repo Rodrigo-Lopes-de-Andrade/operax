@@ -1,7 +1,7 @@
 # CLAUDE.md
 
 **Projeto:** OperaX
-**Descrição:** Camada de gestão, automação e inteligência sobre sistemas de ponto — lê o Secullum, detecta desvio de jornada, avisa o gestor no dia e consolida custo de pessoal. Multi-tenant; Kastro Park é o primeiro cliente.
+**Descrição:** Camada de gestão, automação e inteligência sobre sistemas de ponto — lê o Secullum, detecta desvio de jornada, avisa o gestor no dia e consolida custo de pessoal. Multi-tenant e **white-label**: FastPark é o cliente âncora e a marca que aparece na interface. "OperaX" é o nome do produto no repositório, nos identificadores e nestes documentos — não aparece em nenhuma superfície.
 **Stack:** Next.js 16 (React 19) + FastAPI (gerenciado com `uv`) · Agente LangChain 1.x (`create_agent`) · Supabase (PostgreSQL + Auth + Storage; migrações com Supabase CLI) · Deploy: Railway (backend) / Vercel (frontend)
 
 ---
@@ -61,9 +61,11 @@ Convenções não-óbvias (o resto está em `package.json` / `pyproject.toml`):
 
 ### Backend (`backend/`)
 
-- FastAPI servindo três coisas: API do painel para dado individual e sensível, o assistente de IA, e os endpoints administrativos. Processos agendados (sync, motor, sender) rodam no mesmo container.
+- FastAPI servindo três coisas: API do painel para dado individual e sensível, o assistente de IA, e os endpoints administrativos. Motor e sender rodam agendados no mesmo container. **A sincronização não** — ver abaixo.
 - Agente LangChain 1.x com `create_agent` — multi-provider (OpenAI / Anthropic / Google GenAI). **Sem text-to-SQL:** o agente escolhe do catálogo `app.metric` e devolve `{metrica, parametros}`; quem executa é o backend, como o usuário que perguntou.
-- Cliente Secullum isolado em `operax/sync/secullum/` — trocar de sistema de ponto é implementar essa interface, nada mais.
+- **A sincronização com o Secullum é Edge Function, não worker Python.** Vive no projeto Supabase, em Deno: `sync-cadastro`, `sync-batidas` e `secullum-test-auth`. Decisão de 22/08/2026, tomada depois que elas já estavam entregando dado — dado chegando vale mais que arquitetura simétrica. `backend/operax/sync/` **não existe e não deve ser criado**.
+  A regra que continua valendo é a que importa: trocar de sistema de ponto mexe num lugar só. Esse lugar agora é a Edge Function.
+  A origem autentica com usuário, senha e `client_id` (secrets `SECULLUM_USERNAME`, `SECULLUM_PASSWORD`, `SECULLUM_CLIENT_ID` da função).
 - Motor de detecção conforme `docs/SPEC-TECNICA.md` §3. Roda em `modo='sombra'` até o falso positivo cair abaixo de 5%.
 - Sender de alertas consome `app.alert_queue` com `for update skip locked`. **O motor nunca envia** — enfileira.
 - Streaming SSE real para as respostas do assistente.
@@ -99,7 +101,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 - Ruff (Python), Prettier + TS strict (frontend). Sentry para erros da aplicação.
 - Observabilidade do agente: **LangSmith é o default** (traces de LLM, tools, latência e tokens). Não introduzir outro vendor sem decisão explícita.
 - Testes: pytest (backend), Vitest (frontend), Playwright (E2E).
-- **Suíte de banco** (`make db-test`): sobe Postgres descartável, aplica as 15 migrations, roda 23 asserções funcionais de isolamento (dois tenants, quatro papéis), 24 asserções de regra de alerta, cadência e provedor, e 13 verificações estruturais, regenera o dicionário de dados e valida que toda referência a objeto de banco na documentação existe. Obrigatória em qualquer PR que toque policy, view, grant ou migration.
+- **Suíte de banco** (`make db-test`): sobe Postgres descartável, aplica as 22 migrations, roda 23 asserções funcionais de isolamento (dois tenants, quatro papéis), 24 asserções de regra de alerta, cadência e provedor, e 13 verificações estruturais, regenera o dicionário de dados e valida que toda referência a objeto de banco na documentação existe. Obrigatória em qualquer PR que toque policy, view, grant ou migration.
 
 ### Deploy
 
@@ -109,19 +111,20 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 - **Topologia:** instância única no Railway — rate limiting in-memory é aceitável; revisar antes de escalar horizontalmente.
 - **Env de produção:** painéis do Railway e da Vercel; chave nova entra no `.env.example` **e** no painel correspondente. Credencial de integração por tenant **não** é env — vai para o Supabase Vault.
 - **Operação:** logs via `railway logs` e painel da Vercel; rollback = redeploy de versão anterior. Health check em `GET /health`.
-- **Previews da Vercel:** por padrão **fora** da allowlist de CORS e das Redirect URLs do Supabase Auth; se necessário, aponte previews para um projeto Supabase de staging.
+- **Previews da Vercel:** por padrão **fora** da allowlist de CORS e das Redirect URLs do Supabase Auth. O projeto de staging existe e é o destino deles — `wbzaqjlfpqteesehapnn`, env em `backend/.env.staging`. Produção é `nklobmlxyidqxarzisph` ("Kastro Park Ponto"), que recebe o Secullum e ainda não conversa com este repositório: ver `docs/PLANO-RECONCILIACAO-NUVEM.md`.
 
 ---
 
 ## Mapa de Arquitetura
 
-- **`backend/operax/sync/`** — espelhamento da origem. `secullum/client.py` = cliente HTTP; `mirror.py` = upsert em `secullum`; `cursor.py` = incremental. Trocar de sistema de ponto acontece só aqui.
-- **`backend/operax/motor/`** — `jornada.py` materializa `app.expected_workday` com grau de confiança (é onde o 12x36 é tratado); `deteccao.py` gera `app.deviation_event`; `revogacao.py` trata correção retroativa.
-- **`backend/operax/alertas/`** — `ciclo.py` monta `app.report_cycle` com reserva transacional; `outbox.py` enfileira; `sender.py` consome. `provedores/` = WhatsApp e e-mail atrás de uma interface **template-first**: `enviar(template, variaveis, destino)`, nunca string pronta — ver `docs/DECISAO-WHATSAPP.md`.
-- **`backend/operax/agente/`** — `agente.py` = `create_agent`; `catalogo.py` = carrega `app.metric` e valida a escolha do modelo; `executor.py` = roda a métrica **como o usuário**.
+- **Espelhamento da origem** — fora deste repositório, em Edge Functions do Supabase (`sync-cadastro`, `sync-batidas`, `secullum-test-auth`). Trocar de sistema de ponto acontece só ali. ⚠️ O código dessas funções **não está versionado aqui** — `supabase functions download` resolveria, e até lá o que sustenta o produto inteiro existe só no projeto na nuvem.
+- **`backend/operax/motor/`** — `cadastro.py` promove empresa, departamento e colaborador do espelho para o domínio e devolve a **fila de mapeamento pendente** (empresa vem de `Funcionario.empresa_id`, nunca do departamento — regra 5); `regras.py` = o SQL do que é desvio num dia, sem driver e sem cópia, lido pelos três statements e pelo `make db-test`; `jornada.py` materializa `app.expected_workday` com grau de confiança (é onde o 12x36 é tratado); `deteccao.py` grava `app.deviation_event` com `on conflict` por (colaborador, dia, tipo, modo); `revogacao.py` revoga o que sumiu e substitui o que já saiu em relatório. `python -m operax.motor` roda os três em ordem.
+- **`backend/operax/alertas/`** — `ciclo.py` monta `app.report_cycle` com reserva transacional (`report_cycle_id is null` é a cláusula inteira do "um desvio em exatamente um ciclo"); `outbox.py` enfileira com chave de idempotência; `sender.py` consome com `for update skip locked` e **pergunta o gate G4 ao banco** — sem execução do motor em produção, nada é entregue. `provedores/` = WhatsApp e e-mail atrás de uma interface **template-first**: `enviar(template, variaveis, destino)`, nunca string pronta — ver `docs/DECISAO-WHATSAPP.md`.
+- **`backend/operax/agente/`** — `catalogo.py` = carrega `app.metric`, filtra por domínio **antes** de o modelo ver, valida a escolha com **cinco** recusas nomeadas (a quinta confere o *valor*, não só o nome do parâmetro) e monta a consulta (o `BINDINGS` é o único lugar em que nome de coluna encosta em SQL); `executor.py` = roda a métrica **como o usuário**, sob `user_scope`; `agente.py` = o `create_agent`, a allowlist de modelo e o turno como eventos tipados — o modelo tem **duas** ferramentas, consultar e recusar, e nenhuma outra forma de alcançar dado; `e2e.py` = o provider falso de `E2E_FAKE_LLM`, que passa pela mesma fronteira.
+- **`backend/operax/rh/`** — `ownership.py` = a matriz dono-do-campo (sync x RH), lida por template, tela e import; `validators.py` = um funil só para formulário e planilha; `templates.py` = o que cada modelo `.xlsx` carrega; `workbook.py` = gera e lê o arquivo; `importer.py` = o veredito por linha, sem escrever; `repository.py` = o SQL, com leitura como o usuário e gravação junto da auditoria; `employees.py` = a lista e o detalhe da aba Colaboradores; `carga_inicial.py` = o conversor de implantação, que preenche os modelos baixados e **não abre conexão com o banco**.
 - **`backend/operax/core/`** — `db.py` = pools por schema; `tenant.py` = contexto de tenant (todo acesso com `service_role` passa por aqui); `config.py`; `vault.py` = leitura de credencial por tenant.
 - **`backend/server/`** — `main.py` = entrypoint; `deps.py` = valida o JWT do Supabase e resolve tenant e papel; `models.py` = **fonte da verdade dos schemas**; `routers/` = endpoints por área.
-- **`supabase/migrations/`** — 15 migrations aplicadas em ordem. Ver `docs/PLANO-BANCO-OPERAX.md`.
+- **`supabase/migrations/`** — 22 migrations aplicadas em ordem (numeradas 00–20, com a 11b). Ver `docs/PLANO-BANCO-OPERAX.md`.
 - **`scripts/`** — diagnóstico, testes de isolamento, gerador do dicionário, verificador de documentação.
 - **`frontend/src/`** — `app/` roteamento; `components/` (`ui/` = design system); `lib/supabase.ts` = cliente com anon key; `lib/api.ts` = cliente do FastAPI; `state/` = sessão + streaming do assistente.
 
@@ -131,11 +134,6 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 .
 ├── backend/
 │   ├── operax/
-│   │   ├── sync/
-│   │   │   ├── secullum/
-│   │   │   │   └── client.py
-│   │   │   ├── mirror.py
-│   │   │   └── cursor.py
 │   │   ├── motor/
 │   │   │   ├── jornada.py
 │   │   │   ├── deteccao.py
@@ -149,9 +147,19 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 │   │   │   ├── agente.py
 │   │   │   ├── catalogo.py
 │   │   │   └── executor.py
+│   │   ├── rh/
+│   │   │   ├── ownership.py
+│   │   │   ├── validators.py
+│   │   │   ├── templates.py
+│   │   │   ├── workbook.py
+│   │   │   ├── importer.py
+│   │   │   ├── repository.py
+│   │   │   ├── employees.py
+│   │   │   └── carga_inicial.py
 │   │   └── core/
 │   │       ├── config.py
 │   │       ├── db.py
+│   │       ├── storage.py
 │   │       ├── tenant.py
 │   │       └── vault.py
 │   ├── server/
@@ -180,12 +188,14 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 │   └── vitest.config.ts
 ├── supabase/
 │   ├── migrations/
+│   ├── functions/          # sincronizacao com o Secullum (Deno) — ainda nao baixadas
 │   └── config.toml
 ├── scripts/
 │   ├── 00_diagnostico.sql
 │   ├── 98_teste_isolamento_tenant.sql
 │   ├── 99_verificacao_rls.sql
 │   ├── gerar_dicionario.py
+│   ├── rh_carga_inicial.py
 │   ├── testar_migrations.sh
 │   └── verificar_docs.py
 ├── docs/
@@ -240,12 +250,20 @@ Só agregado não sensível: `vw_deviation_summary_by_unit`, `vw_deviation_daily
   `EventSource` nativo (não aceita header `Authorization`).
 - **Eventos:**
   - `event: token` · `data: {"content": "…"}` — delta de texto.
-  - `event: metrica` · `data: {"codigo": "…", "parametros": {…}}` — qual métrica
-    foi escolhida; a UI mostra período e filtros para o usuário conferir.
-  - `event: recusa` · `data: {"motivo": "…"}` — fora do catálogo ou sem permissão
-    de domínio. **Recusa é resposta válida**, não erro.
+  - `event: metrica` · `data: {"codigo": "…", "titulo": "…", "parametros": {…},
+    "ignorados": […], "linhas": N}` — qual métrica foi escolhida; a UI mostra
+    período e filtros para o usuário conferir.
+    `parametros` traz só o que **de fato** filtrou; `ignorados` traz o que a
+    métrica não filtra e por isso foi descartado — um filtro pedido e não
+    aplicado é a diferença entre o número certo e a frase errada.
+  - `event: recusa` · `data: {"codigo": "…", "motivo": "…"}` — fora do catálogo,
+    sem permissão de domínio, parâmetro ou valor que a métrica não aceita, ou o
+    modelo declarando que nenhuma métrica serve (`sem_metrica`). **Recusa é
+    resposta válida**, não erro: ela chega dentro de um 200.
   - `event: error` · `data: {"message": "…"}` — erro mid-stream; encerra o turno.
-  - `event: done` · `data: {"consulta_id": "…"}`.
+  - `event: done` · `data: {"consulta_id": "…", "modelo": "…",
+    "tokens_entrada": N, "tokens_saida": N, "latencia_ms": N}` — quem pergunta é
+    quem gasta, então o custo do turno volta com ele.
   - `event: ping` a cada ~15 s — keep-alive; sem ele proxies derrubam o stream.
 - A rota SSE fica **fora** de compressão e buffering.
 - **Erros fora do stream:** status ≠ 2xx antes do primeiro byte (401/403/429)
@@ -282,7 +300,7 @@ cp frontend/.env.local.example frontend/.env.local
 
 # 3. Banco local + migrações
 supabase start                                    # Postgres + Auth + Storage locais
-supabase db reset                                 # aplica as 15 migrations do zero
+supabase db reset                                 # aplica as 22 migrations do zero
 
 # 4. Rodar / verificar
 make dev                    # backend + frontend
@@ -309,7 +327,8 @@ make sender                 # consome a fila de alertas
 
 - **Backend — obrigatórias:** `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_JWKS_URL`, e **pelo menos uma** chave de provider (`OPENAI_API_KEY` | `ANTHROPIC_API_KEY` | `GOOGLE_API_KEY`).
 - **Backend — opcionais:** demais chaves de provider, `SENTRY_DSN`, `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY` (+ `LANGSMITH_PROJECT`), `CORS_ORIGINS` (origens exatas do painel, separadas por vírgula; default `http://localhost:3000`; `*` é rejeitado no startup porque a API responde com credenciais).
-- **Não são env:** credencial do Secullum e token do provedor de WhatsApp — seja ele `meta_cloud` (token da WABA), `z_api` ou `uazapi` (token da instância). São **por tenant** e vivem no Supabase Vault, referenciadas em `app.integration_secret`. Um tenant tem no máximo um provedor de WhatsApp ativo, garantido por índice único.
+- **Credencial do Secullum:** hoje são secrets da Edge Function, no escopo do **projeto** — não por tenant. Funciona com um cliente e quebra no segundo, que é o desenho que `app.integration_secret` + Vault previa. Decisão pendente antes do segundo tenant.
+- **Não são env:** token do provedor de WhatsApp — seja ele `meta_cloud` (token da WABA), `z_api` ou `uazapi` (token da instância). São **por tenant** e vivem no Supabase Vault, referenciadas em `app.integration_secret`. Um tenant tem no máximo um provedor de WhatsApp ativo, garantido por índice único.
 - **Frontend:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_URL` e, se usado, `NEXT_PUBLIC_SENTRY_DSN`.
 
 ---
@@ -328,11 +347,12 @@ make sender                 # consome a fila de alertas
 
 - **Backend:** Ruff (lint + format), type hints obrigatórios, Pydantic v2, pytest. Dependências via `uv` (não usar `pip install` direto). Schema do banco via Supabase CLI (nunca `CREATE TABLE` manual, nunca Alembic).
 - **Frontend:** Prettier + TypeScript strict (`tsc --noEmit` no `make lint`), validação com Zod, forms via React Hook Form. Vitest para componentes; Playwright para login, dashboard filtrado e assistente.
-- **SQL:** toda migration é idempotente (`if not exists`, `drop policy if exists`) e termina com um bloco `do $$` que **falha alto** se a garantia dela não se sustentar. Siga o padrão das 14 existentes.
+- **SQL:** toda migration é idempotente (`if not exists`, `drop policy if exists`) e termina com um bloco `do $$` que **falha alto** se a garantia dela não se sustentar. Siga o padrão das 15 existentes.
 - **E2E:** Playwright sobe front+back com provider de LLM **fake** (`E2E_FAKE_LLM=1`) e projeto Supabase local. Roda com `make e2e`, fora do gate `make test`.
 - **Idioma:** código, identificadores, commits e comentários em inglês; UI e textos ao usuário em pt-BR. O domínio segue inglês snake_case, alinhado com `work_schedule_day`, que já existia antes deste modelo. O mapa completo pt→en está em `scripts/rename_map.py` — consultar antes de nomear qualquer coisa nova.
 - **Exceção deliberada:** identificadores brasileiros que são nome próprio de instrumento legal permanecem sem tradução — `cnpj`, `cpf`, `rg`, `pis`, `ctps`, `fgts`, `inss`, `irrf`, `rat`, `aso`. "CNPJ" virar `tax_id` perde informação em vez de ganhar, do mesmo jeito que ninguém traduz "IBAN".
 - **Vocabulário de negócio em inglês:** *deviation*, não *desvio*, em nome de objeto. Na UI em pt-BR continua sendo "desvio" e "indício" — e **nunca** "hora extra".
+- **Marca:** a interface carrega a marca do tenant, nunca a do fornecedor. Cor de marca é token CSS (`frontend/src/app/globals.css`) e nome é configuração (`frontend/src/lib/brand.ts`) — nunca literal em componente. O laranja `#FF8C00` é preenchimento com texto escuro por cima, jamais texto e jamais sob texto branco; laranja de texto é `#A85F00`.
 - **Vocabulário de produto:** é sempre *desvio* ou *indício*. **Nunca "hora extra"** — o registro oficial é o Secullum, e divergência com ação do gestor em cima é exposição do fornecedor.
 - **Commits:** Conventional Commits. A mensagem explica **por quê**, não o quê.
 - **Branches:** `feature/*`, `fix/*` a partir de `main`; PR com review.
@@ -346,7 +366,7 @@ que o desenho está errado, não a regra.
 2. Toda view de `public` com `security_invoker = on`.
 3. Toda tabela de `app` com `tenant_id` e RLS.
 4. `service_role` só no backend FastAPI, e nenhuma consulta sem filtro de `tenant_id`.
-5. Agregação por empresa vai por `colaborador → empresa`, nunca `departamento → empresa` (~26% divergem na Kastro Park).
+5. Agregação por empresa vai por `colaborador → empresa`, nunca `departamento → empresa` (~26% divergem na FastPark).
 6. Nunca deletar desvio — usar `app.revoke_deviation()`.
 7. Alerta de conteúdo individual nunca vai para grupo.
 8. Nenhum alerta enviado antes do modo sombra fechar com falso positivo ≤5%.

@@ -76,6 +76,12 @@ for doc in DOCS:
     # declara suas exceções, e só valem dentro dele:
     #
     #   <!-- verificar-docs: inexistentes-de-proposito app.foo app.bar -->
+    #
+    # Vale nos TRÊS formatos que este verificador reconhece — `app.tabela`,
+    # `app.tabela.coluna` e `vw_x`/`fn_x`. Valia só no primeiro até 24/08/2026, e
+    # o silêncio era a pior parte: um documento declarava a exceção do jeito
+    # documentado, o verificador a ignorava, e a mensagem de erro dizia que o
+    # objeto não existia — que era justamente o que o autor já tinha escrito.
     excecoes_do_doc = set()
     for m in re.finditer(r"<!--\s*verificar-docs:\s*inexistentes-de-proposito\s+([^>]+?)-->", texto):
         excecoes_do_doc.update(m.group(1).split())
@@ -110,6 +116,8 @@ for doc in DOCS:
         m = re.fullmatch(r"(app|secullum|util|public)\.([a-zA-Z_]\w*)\.([a-zA-Z_]\w*)", t)
         if m:
             citados.add(t)
+            if t in excecoes_do_doc:
+                continue
             rel = f"{m.group(1)}.{m.group(2)}"
             col = f"{m.group(2)}.{m.group(3)}"
             if rel not in existentes:
@@ -121,7 +129,7 @@ for doc in DOCS:
         # view/rpc citada sem schema (vw_*, fn_*)
         if re.fullmatch(r"(vw|fn|mv)_\w+", t):
             citados.add(t)
-            if t not in nomes_curtos:
+            if t not in nomes_curtos and t not in excecoes_do_doc:
                 problemas.append((doc, t, "view/função não existe"))
 
 print(f"Documentos verificados: {len([d for d in DOCS if os.path.exists(d) and not d.endswith('DICIONARIO-DE-DADOS.md')])}")

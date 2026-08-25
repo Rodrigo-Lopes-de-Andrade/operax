@@ -9,11 +9,11 @@ const Icon = (name, size, color) => ns.Icon ? h(ns.Icon, { name, size, color }) 
 
 const TONE_FG = {
   neutral: 'var(--text-muted)', good: 'var(--good-foreground)', bad: 'var(--bad-foreground)',
-  alert: 'var(--alert-foreground)', brand: 'var(--brand)', violet: 'var(--accent-violet)', orange: 'var(--accent-orange)',
+  alert: 'var(--alert-foreground)', brand: 'var(--brand-strong)', violet: 'var(--accent-violet)', orange: 'var(--accent-orange)',
 };
 const TONE_BG = {
   neutral: 'var(--surface-muted)', good: 'var(--good-background)', bad: 'var(--bad-background)',
-  alert: 'var(--alert-background)', brand: 'var(--brand-soft)', violet: 'rgba(131,95,242,0.14)', orange: 'rgba(206,75,2,0.12)',
+  alert: 'var(--alert-background)', brand: 'var(--brand-soft)', violet: 'rgba(31,122,138,0.14)', orange: 'rgba(194,65,12,0.12)',
 };
 
 /* ---------------------------------------------------------------- Skeleton */
@@ -285,7 +285,7 @@ function Tabs({ tabs = [], value, onChange, style = {} }) {
         className: 'aegis-tnum',
         style: {
           fontSize: 'var(--text-2xs)', fontWeight: 700, padding: '1px 7px', borderRadius: 'var(--radius-pill)',
-          background: sel ? 'var(--brand-soft)' : 'var(--surface-muted)', color: sel ? 'var(--brand)' : 'var(--text-muted)',
+          background: sel ? 'var(--brand-soft)' : 'var(--surface-muted)', color: sel ? 'var(--brand-strong)' : 'var(--text-muted)',
         },
       }, t.count) : null);
   }));
@@ -315,7 +315,7 @@ function Toast({ tone = 'neutral', title, description, action, actionLabel, onCl
         type: 'button', onClick: action,
         style: {
           marginTop: 8, border: 'none', background: 'transparent', padding: 0, cursor: 'pointer',
-          fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--brand)',
+          fontFamily: 'var(--font-sans)', fontSize: 'var(--text-xs)', fontWeight: 700, color: 'var(--brand-strong)',
         },
       }, actionLabel || 'Desfazer') : null),
     onClose ? h('button', {

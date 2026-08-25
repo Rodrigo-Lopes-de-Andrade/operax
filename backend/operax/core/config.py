@@ -37,10 +37,26 @@ class Settings(BaseSettings):
     # Exact origins of the dashboard. With allow_credentials, "*" is forbidden.
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ("http://localhost:3000",)
 
+    # Bucket privado do Storage onde o arquivo importado fica guardado. Privado
+    # não é opinião: o arquivo carrega nome, matrícula e, conforme o template,
+    # salário.
+    import_bucket: str = "imports"
+
     sentry_dsn: SecretStr | None = None
     langsmith_tracing: bool = False
     langsmith_api_key: SecretStr | None = None
     langsmith_project: str | None = None
+
+    @property
+    def dashboard_url(self) -> str:
+        """De onde sai o link profundo do relatório.
+
+        É a primeira origem de `CORS_ORIGINS` — que é, por definição, a origem
+        exata do painel. Uma variável nova para a mesma coisa seria uma variável
+        a mais para esquecer num dos dois painéis de deploy, e um link quebrado
+        numa mensagem de WhatsApp não tem como ser corrigido depois de enviado.
+        """
+        return self.cors_origins[0]
 
     @property
     def jwt_issuer(self) -> str:

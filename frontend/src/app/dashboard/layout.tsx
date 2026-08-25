@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AppShell } from "@/components/app-shell";
+import { loadIdentity, reachesHr } from "@/lib/identity";
 import { LOGIN_PATH, PATHNAME_HEADER, safeNextPath } from "@/lib/navigation";
 import { getCurrentUser } from "@/lib/supabase-server";
 import { SessionProvider } from "@/state/session";
@@ -27,9 +28,14 @@ export default async function DashboardLayout({
     redirect(`${LOGIN_PATH}?${query}`);
   }
 
+  // O papel vem do backend, nunca de uma claim que o navegador leria sozinho.
+  // Ele decide navegação e nada mais: cada página da área decide de novo, e a
+  // API decide por último.
+  const identity = await loadIdentity();
+
   return (
     <SessionProvider user={{ id: user.id, email: user.email ?? "" }}>
-      <AppShell>{children}</AppShell>
+      <AppShell showAdmin={reachesHr(identity?.role)}>{children}</AppShell>
     </SessionProvider>
   );
 }

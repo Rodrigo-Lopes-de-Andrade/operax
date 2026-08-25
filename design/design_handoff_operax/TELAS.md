@@ -4,9 +4,13 @@ Medidas em px. Onde há token, use o token. Cópia entre aspas é final.
 
 ## Chrome (todas as telas)
 
-**Sidebar** — 264px, fundo `--surface-sidebar` (navy `#111D2D`), padding 22/18.
-Marca no topo: tile 32×32 raio `--radius-md` fundo `--brand` com ícone `timer` 19px,
-ao lado "OperaX" 21px/800, tracking −0.5px, `#F5F7FA`.
+**Sidebar** — 264px, fundo `--surface-sidebar` (cinza `#5A5A5A`, Pantone 425 C),
+padding 22/18. Marca no topo: símbolo FastPark em SVG inline
+(`viewBox="0 0 269.8 257.1"`, moldura `#FF8C00` + sorriso branco), 32px de altura,
+ao lado o wordmark "Fast" `#FFFFFF` + "Park" `#FF8C00`, 21px/700, tracking −0.2px.
+O mesmo par símbolo+wordmark aparece no login do celular (34px) e no cabeçalho do
+celular (26px). Mínimo digital de 35px de largura para o conjunto; abaixo disso,
+símbolo sozinho.
 Grupos de nav com eyebrow 11px/700 uppercase em `rgba(231,237,245,0.4)`:
 
 - **Operação** — Gestão de ponto (`layout-dashboard`) · Monitor diário (`activity`,
@@ -53,14 +57,14 @@ direita) e a URL do recorte em mono `--text-faint` — o estado vive na URL.
 - Grade 3 colunas: `KpiCard` "Ocorrências no recorte" (43, accent alert) ·
   card de minutos · `KpiCard` "Pendentes de justificativa" (12, accent bad).
 - O card do meio: eyebrow "Minutos em desvio", número 32px/800 tabular (1.284), barra
-  empilhada 8px com 58% `--accent-violet` e 42% `--accent-orange`, legenda
+  empilhada 8px com 58% `--accent-violet` (teal) e 42% `--accent-orange` (laranja queimado), legenda
   "Excedente +742" / "Faltante −542".
 - Faixa secundária: seis contagens de baixo peso (Ativos 182 · Presentes hoje 168 ·
   Ausentes 6 · Férias 5 · Afastados 3 · Saldo consolidado +12h40) em card único
   dividido por bordas, rótulo eyebrow e valor 20px/700.
 
 **Tendência diária** — `Chart type="diverging"`, 14 dias, zero no meio, excedente
-acima em violeta, faltante abaixo em laranja, legenda própria, altura 220.
+acima em teal, faltante abaixo em laranja queimado, legenda própria, altura 220.
 
 **Recorrência** — lista de quem teve desvio em 3+ dias na janela: tile tabular com o
 número de dias em `--alert-background`, nome, "unidade · N eventos", `chevron-right`.
@@ -76,7 +80,7 @@ matrícula, ordenável) · Tipo de desvio (texto + selo "escala não confirmada"
 for o caso) · Previsto (mono) · Registrado (mono) · Minutos (sinal, cor por direção,
 sub com a direção, ordenável) · Situação (Badge pendente/justificado/não contabilizado).
 Linha inteira clicável → Drawer. Rodapé: `Pagination` (43 registros, 25/50/100) e a
-frase "Registro oficial de jornada permanece no Secullum. O OperaX aponta indícios."
+frase "Registro oficial de jornada permanece no Secullum. A plataforma aponta indícios."
 
 **Cenário sem ocorrência** — `EmptyState` tone good, ícone `check-check`: "Nenhum
 desvio no recorte" + "182 colaboradores previstos, 182 dentro do previsto. A detecção
@@ -124,8 +128,8 @@ Marcações (mono, "06:58 · 12:30 · 13:47 · —") · Desvio (sinal com cor de
 
 **Desvio por tipo** — `Chart type="rankbar"`, valor "4 · 326 min".
 
-**Saldo de horas** — número 32px/800 em violeta, nota "Indício consolidado pelo
-OperaX. A apuração válida é a do sistema de ponto.", botão "Conferir no Secullum".
+**Saldo de horas** — número 32px/800 em teal, nota "Indício consolidado pela
+plataforma. A apuração válida é a do sistema de ponto.", botão "Conferir no Secullum".
 
 **Justificativas** — lista com data mono, texto, autor e Badge de status.
 
@@ -147,7 +151,7 @@ período e filtros em mono, com o **código real** da métrica
 
 **Duas recusas de natureza diferente, ambas resposta válida e não erro:**
 - *Domínio sensível* — "qual o atestado médico mais frequente?" → não tenho esse dado,
-  motivo de afastamento é informação de saúde e o OperaX não captura; proveniência
+  motivo de afastamento é informação de saúde e a plataforma não captura; proveniência
   "nenhuma — domínio sensível, fora do catálogo".
 - *Métrica prevista* — "qual o custo médio por colaborador no Aeroporto?" → ainda não
   respondo isso; depende do mapa de eventos de folha, que não foi definido;
@@ -324,7 +328,7 @@ porque é tela de acesso coletivo. A frase aparece na própria tela.
 
 Não é o produto responsivo: é **uma superfície nova**, com um propósito único.
 O alerta sai por WhatsApp com o recorte na query string
-(`operax.app/ponto?un=shopping-norte&per=hoje&ev=4821`) e abre no telefone do
+(`app.fastpark.com.br/ponto?un=shopping-norte&per=hoje&ev=4821`) e abre no telefone do
 gestor. As nove telas de desktop continuam desktop.
 
 Quem está do outro lado é o **papel mais restrito** — supervisor de unidade. Nesta

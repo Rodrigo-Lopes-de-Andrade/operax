@@ -1,5 +1,5 @@
 .PHONY: help dev dev-backend dev-frontend test lint db-test e2e build \
-        sync motor sender dicionario
+        sync cadastro motor revogacao ciclo sender dicionario carga-inicial
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -43,17 +43,35 @@ dicionario:     ## regenera docs/DICIONARIO-DE-DADOS.md a partir do banco
 sync:           ## espelha a origem em `secullum`
 	cd backend && uv run python -m operax.sync
 
-motor:          ## detecção — MODO=sombra (padrão) | producao
+cadastro:       ## promove empresa, departamento e colaborador do espelho para o domínio
+	cd backend && uv run python -m operax.motor.cadastro
+
+jornada:        ## materializa app.expected_workday e reporta a cobertura (S3)
+	cd backend && uv run python -m operax.motor.jornada --dias $(or $(DIAS),90)
+
+motor:          ## jornada + detecção — MODO=sombra (padrão) | producao
 	cd backend && uv run python -m operax.motor --modo=$(or $(MODO),sombra)
 
-sender:         ## consome app.alerta_fila
+revogacao:      ## reconcilia indícios com batidas corrigidas na origem (retroativo)
+	cd backend && uv run python -m operax.motor.revogacao --modo=$(or $(MODO),producao) --dias=$(or $(DIAS),7)
+
+ciclo:          ## monta o ciclo de relatório por unidade e enfileira (não envia)
+	cd backend && uv run python -m operax.alertas
+
+sender:         ## consome app.alert_queue — não entrega antes do gate G4
 	cd backend && uv run python -m operax.alertas.sender
+
+carga-inicial:  ## converte a planilha de RH do cliente em templates (implantação)
+	python3 scripts/rh_carga_inicial.py --planilha "$(PLANILHA)" --modelos "$(MODELOS)" --saida "$(SAIDA)"
 
 # ---------------------------------------------------------------------------
 # Fora do gate
 # ---------------------------------------------------------------------------
 e2e:            ## Playwright (1ª vez: npx playwright install)
 	cd frontend && npx playwright test
+
+e2e-prod:       ## Playwright contra build de produção — inclui o orçamento de 3s
+	cd frontend && E2E_PROD=1 npx playwright test
 
 build:          ## build de produção
 	cd frontend && npm run build

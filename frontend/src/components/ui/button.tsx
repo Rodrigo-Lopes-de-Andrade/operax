@@ -8,11 +8,15 @@ type ButtonProps = ComponentPropsWithRef<"button"> & {
 };
 
 const VARIANT_CLASS: Record<ButtonVariant, string> = {
-  // The disabled state of this button is "Entrando…" — the moment the user
-  // most wants to read it, so the fill only softens (4.5:1 kept), it does not
-  // wash out.
+  // The brand orange is a fill and never a text colour, so the label on it is
+  // dark (#262626 on #FF8C00, 5.42:1). On hover the fill darkens to
+  // --brand-strong and the label has to flip: dark on that would be 3.1:1,
+  // white on it is 4.88:1.
+  //
+  // The disabled state of this button is "Entrando…" — the moment the user most
+  // wants to read it, so the fill only softens, it does not wash out.
   primary:
-    "bg-brand text-on-brand hover:bg-brand-strong disabled:bg-brand/90 disabled:text-on-brand",
+    "bg-brand text-on-brand hover:bg-brand-strong hover:text-white disabled:bg-brand/90 disabled:text-on-brand",
   chrome:
     "border border-white/20 text-on-chrome hover:bg-white/10 disabled:opacity-60",
 };

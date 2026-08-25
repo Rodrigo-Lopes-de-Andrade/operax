@@ -1,11 +1,11 @@
 /* ============================================================
    Aegis — Typography Tokens
-   Family: Manrope (UI/display) · JetBrains Mono (codes, figures)
+   Family: Hanken Grotesk (UI/display, brand) · JetBrains Mono (codes)
    ============================================================ */
 
 :root {
   /* Families */
-  --font-sans: 'Manrope', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-sans: 'Hanken Grotesk', Verdana, system-ui, -apple-system, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
 
   /* Weights */

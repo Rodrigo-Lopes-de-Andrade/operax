@@ -29,4 +29,20 @@ coverage/
 *.log
 .claude/settings.local.json
 .claude/settings.json.bak
-scripts/_baseline.sql
+# Artefatos gerados por scripts/introspeccao_nuvem.py e pelo ensaio do rename.
+# Nao entram no repo: sao o schema do banco de um cliente e catalogos derivados,
+# todos regeneraveis em segundos. `_test_stub_supabase.sql` e a excecao — ele e
+# escrito a mao e versionado.
+scripts/_*
+!scripts/_test_stub_supabase.sql
+# O baseline é versionado, ao contrário dos outros `_*`: `make db-test` tem de
+# significar a mesma coisa em toda máquina, e desde que o motor de jornada lê o
+# espelho real ele falharia contra o stub. É só catálogo — 25 tabelas, nenhuma
+# linha de dado — e o mesmo schema já está em docs/DICIONARIO-DE-DADOS.md.
+# Regerar: scripts/gerar_baseline_nuvem.py
+!scripts/_baseline.sql
+
+# Metadado do Windows: o Explorer cria um `<arquivo>:Zone.Identifier` ao lado de
+# tudo que veio da internet, e eles aparecem em bloco quando um documento é
+# copiado para cá pelo WSL. Não são do projeto.
+*:Zone.Identifier
