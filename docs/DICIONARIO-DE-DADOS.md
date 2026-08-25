@@ -649,6 +649,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `triggers_alert` | boolean | não | `false` |  |  |
 | `tolerance_extra_minutes` | integer | sim |  |  |  |
 | `tolerance_absence_minutes` | integer | sim |  |  |  |
+| `requires_justification` | boolean | não | `false` |  | Nasce false, como triggers_alert. Política por cliente: atraso pode exigir explicação onde marcação incompleta não exige. Sem isto, "pendente de justificativa" não tem de onde sair — todo desvio pareceria pendente, ou nenhum. |
 
 **Policies**
 
@@ -1232,10 +1233,12 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `author_user_id` | uuid | sim |  | `auth.users` |  |
 | `author_name` | text | sim |  |  |  |
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
+| `status` | text | não | `'accepted'::text` |  | Default accepted de propósito: até esta migration uma linha aqui ERA a resposta final, e nenhuma justificativa já escrita pode virar pendente retroativamente. Não existe tela que rejeite — enquanto não existir, "aceita" e "escrita" são a mesma coisa. |
 
 **Restrições**
 
 - `CHECK ((source = ANY (ARRAY['secullum'::text, 'operax'::text, 'whatsapp'::text])))`
+- `CHECK ((status = ANY (ARRAY['accepted'::text, 'rejected'::text])))`
 
 **Policies**
 
@@ -1246,6 +1249,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 <details><summary>Índices</summary>
 
+- `justification_aceita_idx` — `app.justification USING btree (deviation_event_id) WHERE (status = 'accepted'::text)`
 - `justification_author_user_id_fkidx` — `app.justification USING btree (author_user_id)`
 - `justification_colab_idx` — `app.justification USING btree (employee_id, reference_date DESC)`
 - `justification_evento_idx` — `app.justification USING btree (deviation_event_id)`
@@ -2836,28 +2840,38 @@ Backfill overdue is true when it has not completed in p_backfill_max_age_hours O
 ### `fn_kpi_period`
 
 ```sql
-public.fn_kpi_period(p_de date, p_ate date, p_company_id uuid DEFAULT NULL::uuid, p_unit_id uuid DEFAULT NULL::uuid)
+public.fn_kpi_period(p_de date, p_ate date, p_company_id uuid DEFAULT NULL::uuid, p_unit_id uuid DEFAULT NULL::uuid, p_department_id uuid DEFAULT NULL::uuid, p_manager_id uuid DEFAULT NULL::uuid)
   returns TABLE(eventos bigint, colaboradores_afetados bigint, minutes_excedente bigint, minutes_faltante bigint, minutes_abs bigint, unidades_afetadas bigint, eventos_pendentes_ciclo bigint)
 ```
+
+### `fn_pending_justification`
+
+```sql
+public.fn_pending_justification(p_de date, p_ate date, p_unit_id uuid DEFAULT NULL::uuid, p_department_id uuid DEFAULT NULL::uuid, p_manager_id uuid DEFAULT NULL::uuid)
+  returns TABLE(deviation_event_id uuid, employee_id uuid, employee_name text, unit_id uuid, unit_name text, reference_date date, type text, type_description text, minutes integer, detected_at timestamp with time zone)
+```
+
+Desvio ativo, de tipo que exige justificativa, sem nenhuma justificativa aceita. Devolve a existência da pendência, nunca o texto de justificativa nenhuma.
+
 
 ### `fn_ranking_by_employee`
 
 ```sql
-public.fn_ranking_by_employee(p_de date, p_ate date, p_company_id uuid DEFAULT NULL::uuid, p_unit_id uuid DEFAULT NULL::uuid, p_limite integer DEFAULT 20)
+public.fn_ranking_by_employee(p_de date, p_ate date, p_company_id uuid DEFAULT NULL::uuid, p_unit_id uuid DEFAULT NULL::uuid, p_limite integer DEFAULT 20, p_department_id uuid DEFAULT NULL::uuid, p_manager_id uuid DEFAULT NULL::uuid)
   returns TABLE(employee_id uuid, employee_name text, unit_name text, eventos bigint, minutes_abs bigint)
 ```
 
 ### `fn_ranking_by_unit`
 
 ```sql
-public.fn_ranking_by_unit(p_de date, p_ate date, p_company_id uuid DEFAULT NULL::uuid, p_limite integer DEFAULT 20)
+public.fn_ranking_by_unit(p_de date, p_ate date, p_company_id uuid DEFAULT NULL::uuid, p_limite integer DEFAULT 20, p_department_id uuid DEFAULT NULL::uuid, p_manager_id uuid DEFAULT NULL::uuid)
   returns TABLE(unit_id uuid, unit_name text, eventos bigint, minutes_abs bigint, colaboradores bigint)
 ```
 
 ### `fn_recurrence`
 
 ```sql
-public.fn_recurrence(p_de date, p_ate date, p_min_dias integer DEFAULT 3, p_unit_id uuid DEFAULT NULL::uuid)
+public.fn_recurrence(p_de date, p_ate date, p_min_dias integer DEFAULT 3, p_unit_id uuid DEFAULT NULL::uuid, p_department_id uuid DEFAULT NULL::uuid, p_manager_id uuid DEFAULT NULL::uuid)
   returns TABLE(employee_id uuid, employee_name text, unit_name text, dias_com_desvio bigint, eventos bigint)
 ```
 

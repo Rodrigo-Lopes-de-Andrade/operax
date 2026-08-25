@@ -45,7 +45,7 @@ O escopo lista 18 indicadores como mínimo. Cobertos: 14. Faltam 4.
 | 7 | Marcação incompleta | ✅ | `incomplete_punches` |
 | 8 | Com horas extras | ✅ | direção `surplus` |
 | 9 | Com horas faltantes | ✅ | direção `shortfall` |
-| 10 | Ocorrências pendentes de justificativa | ⚠️ | `app.justification` existe, mas nada marca um desvio como *exigindo* justificativa nem como *pendente* |
+| 10 | Ocorrências pendentes de justificativa | ✅ | `deviation_type_config.requires_justification` + `justification.status` + `fn_pending_justification` (migration 23) |
 | 11 | **Saldo consolidado de horas** | ❌ | Banco de horas não é modelado. Aparece também em 4.4 e 4.8 |
 | 12 | Evolução das ocorrências por período | ✅ | `vw_deviation_daily_trend` |
 | 13 | Comparação entre unidades | ✅ | `fn_ranking_by_unit` |
@@ -72,10 +72,13 @@ Os indicadores 2 e 3 continuam ❌ e **não** foram aproximados. "Escalado e sem
 indício" já existe na tela com a ressalva escrita ("não é confirmação de
 presença"); rebatizá-lo de "presentes" transformaria a ressalva em mentira.
 
-**Filtros exigidos:** período ✅ · empresa ✅ · unidade ✅ · **departamento ❌** ·
-**gestor ❌** · colaborador ⚠️ · tipo de ocorrência ⚠️
+**Filtros exigidos:** período ✅ · empresa ✅ · unidade ✅ · departamento ✅ ·
+gestor ✅ · colaborador ⚠️ · tipo de ocorrência ⚠️
 
-Verificado: nenhum dos quatro RPCs aceita `department_id` nem `manager_id`.
+Departamento e gestor entraram nos quatro RPCs na migration 22, como parâmetros
+opcionais no fim da lista — chamada antiga continua com o mesmo significado. O
+filtro passa por `app.employee`, nunca por `app.department.company_id`: derivar
+empresa do departamento é a regra 5, e ~26% dos vínculos da FastPark divergem.
 
 ```
 fn_kpi_period(p_de, p_ate, p_company_id, p_unit_id)
@@ -250,12 +253,12 @@ domínio. O eixo de autorização existe protegendo o vazio.
 
 1. Saldo de horas — aparece em três seções diferentes
 2. ~~KPIs de headcount~~ — **3 dos 5 entregues em 25/08**. Restam presentes e ausentes, que dependem da tabela de ingestão congelada
-3. Filtro e agregação por gestor e por departamento
+3. ~~Filtro por gestor e por departamento~~ — **entregue em 25/08** (migration 22). Falta a *agregação* por gestor (ranking de equipes)
 4. Histórico de marcações na tela individual
 5. Catálogo dos 11 relatórios + exportação
 6. Importação do Excel do Domínio, ponta a ponta
 7. Mapa de código de evento de folha → categoria
-8. Ocorrências pendentes de justificativa
+8. ~~Ocorrências pendentes de justificativa~~ — **entregue em 25/08** (migration 23). Sem tela que aceite ou rejeite: hoje "aceita" e "escrita" são a mesma coisa
 9. Tabela de ocorrência disciplinar
 
 **Volume, sem risco técnico (5)**
