@@ -37,6 +37,17 @@ export function reachesHr(role: string | undefined): boolean {
 }
 
 /**
+ * Os três papéis que `util.is_admin` aceita — os que escrevem. `executive` está
+ * fora, e essa é a diferença entre esta lista e `HR_ROLES`: ele lê a área de RH
+ * e não cura nada. Curadoria é escrita, e escrita é `is_admin`.
+ */
+export const ADMIN_ROLES = ["owner", "hr", "personnel"] as const;
+
+export function isAdmin(role: string | undefined): boolean {
+  return (ADMIN_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
  * Cached per request: the shell asks for it, and so does any page that needs to
  * fail closed on a deep link. `cache` makes that one call, not three.
  */

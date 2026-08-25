@@ -17,7 +17,7 @@ from operax.core.config import get_settings
 from operax.core.db import get_pools
 from server.deps import CurrentTenant, CurrentUser
 from server.models import HealthResponse, Identity
-from server.routers import assistente, employees, monitor, rh, rh_employees
+from server.routers import assistente, curadoria, employees, monitor, rh, rh_employees
 
 settings = get_settings()
 
@@ -45,6 +45,7 @@ app.add_middleware(
 
 
 app.include_router(assistente.router)
+app.include_router(curadoria.router)
 app.include_router(employees.router)
 app.include_router(monitor.router)
 app.include_router(rh.router)

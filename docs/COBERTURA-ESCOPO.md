@@ -253,7 +253,7 @@ domínio. O eixo de autorização existe protegendo o vazio.
 | 8. Documentos e vencimentos | ✅ `document`, `document_type`, `vw_document_expiry` |
 | 9. Valores e descontos | ✅ `financial_agreement` + `agreement_installment`, com autorização documentada obrigatória |
 | 10. Controle de acesso | ✅ nove perfis mapeados em o enum `app.user_role` |
-| 11. Multiempresa e multiunidade | ✅ com a ressalva do mapeamento curado de unidade |
+| 11. Multiempresa e multiunidade | ✅ e a curadoria do mapa tem tela desde 25/08 — `/dashboard/administracao/mapeamento` |
 | 12. Exibição em TV | ✅ no S5, só agregado |
 | 13. Auditoria | ✅ `audit_log`, `sync_run`, `alert_sent`, `ai_query` |
 | 14. Segurança | ✅ verificado por 34 asserções na suíte |
@@ -310,6 +310,13 @@ que não recria a exposição jurídica que o resto do desenho evita.**
 **Mapa de código de evento de folha.** Sem ele metade do dashboard financeiro não
 existe. É trabalho de curadoria com a contabilidade, igual ao mapa de unidades —
 e precisa estar dimensionado como atividade de implantação, não absorvido.
+
+⚠️ **A ferramenta dele está a uma decisão de distância, e a decisão é sua.** A
+tela de curadoria origem → unidade entrou em 25/08 e não precisou de migration
+nenhuma: `app.unit_secullum_map` já existia, com `validated_by` e `validated_at`.
+O mapa de eventos não existe como tabela, e criá-lo é **tabela nova em `app` com
+policy nova** — uma das três paradas obrigatórias do CLAUDE.md. Está descrito e
+parado nisso, de propósito.
 
 **Exportação.** O escopo exige, meu PRD excluía. Confirmar formato (Excel, PDF ou
 os dois) muda o esforço do sprint de relatórios.

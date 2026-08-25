@@ -9,6 +9,7 @@ import { UserBadge } from "@/components/user-badge";
 import { ASSISTENTE_PATH } from "@/lib/assistente/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
+import { MAPEAMENTO_PATH } from "@/lib/curadoria/url";
 import { COLABORADORES_PATH, IMPORTACAO_PATH } from "@/lib/rh/url";
 import { TV_PATH } from "@/lib/tv/url";
 
@@ -31,9 +32,17 @@ import { TV_PATH } from "@/lib/tv/url";
 export function AppShell({
   children,
   showAdmin = false,
+  showCuration = false,
 }: {
   children: ReactNode;
   showAdmin?: boolean;
+  /**
+   * Curadoria é escrita, e escrita é `util.is_admin` — que não inclui
+   * `executive`. Ele alcança a área de RH para ler e não cura nada, então o
+   * item não aparece para ele: a página responde 404, e um link que leva a 404
+   * é pior do que link nenhum.
+   */
+  showCuration?: boolean;
 }) {
   return (
     <div className="bg-canvas flex min-h-dvh">
@@ -64,6 +73,9 @@ export function AppShell({
             </p>
             <NavLink href={COLABORADORES_PATH} label="Colaboradores" />
             <NavLink href={IMPORTACAO_PATH} label="Importação" />
+            {showCuration ? (
+              <NavLink href={MAPEAMENTO_PATH} label="Mapeamento" />
+            ) : null}
           </nav>
         ) : null}
       </aside>

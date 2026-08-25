@@ -73,6 +73,31 @@ O que continua dependendo do cliente é a curadoria em si — decidir qual
 departamento é qual pátio. A diferença é que agora ela tem uma fila para
 trabalhar em cima, em vez de uma tabela vazia.
 
+**Atualização de 25/08/2026 — a fila ganhou tela.**
+`/dashboard/administracao/mapeamento` mostra os departamentos do espelho por peso
+(quem tem mais gente sem unidade vem primeiro), sugere a unidade por semelhança de
+nome com o número do palpite ao lado, aplica em lote acima de um limiar escolhido
+por quem cura, e grava `validated_by`/`validated_at`. Nenhuma migration: a tabela
+já tinha as duas colunas desde a migration 04.
+
+Três decisões que a tela toma e vale registrar:
+
+- **A sugestão não é um mapeamento.** Ela é semelhança de nome, não é gravada, e
+  some assim que a linha é validada — oferecer alternativa a uma decisão humana é
+  convidar a desfazê-la sem querer. É o oposto do que a promoção faz de propósito:
+  lá adivinhar é proibido, porque palpite gravado não se distingue de fato lido.
+- **A semelhança é contada por palavra, não por letra.** Letra a letra,
+  "Departamento 4471" e "Aeroporto 01" passam de 45% — vogais em comum bastam — e
+  o palpite errado chega à tela com meio termômetro do lado, virando o clique
+  automático de quem está curando quarenta linhas.
+- **"Provisório" não entra em "validado".** Mapa que existe e ninguém confirmou é
+  uma faixa própria na barra. Somar os dois faria a curadoria parecer terminada
+  com metade do trabalho por fazer, que é o jeito mais eficiente de não terminá-la.
+
+O que a curadoria **não** faz é mover quem já tem unidade: é a mesma regra do
+`coalesce(excluded.unit_id, app.employee.unit_id)` da promoção. Alocação existente
+é trabalho de alguém.
+
 ### O S3 tinha uma pergunta que decidia o cronograma. Ela foi respondida
 
 O plano avisava: *"se `HorarioDia` descreve semana fixa, a escala não cabe e a

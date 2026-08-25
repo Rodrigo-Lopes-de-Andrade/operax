@@ -299,6 +299,100 @@ class DailyMonitor(BaseModel):
     truncated: bool = False
 
 
+class UnitOption(BaseModel):
+    """Uma unidade que pode receber um departamento do espelho."""
+
+    unit_id: UUID
+    code: str
+    name: str
+    company_id: UUID
+    company_name: str
+
+
+class UnitSuggestion(BaseModel):
+    """Um palpite, com o tamanho do palpite ao lado.
+
+    `confidence` é semelhança de nome, e nada mais. Ela não é gravada em lugar
+    nenhum: existe para ordenar o trabalho de quem cura e para dar um limiar ao
+    lote. O que vira dado é a escolha da pessoa.
+    """
+
+    unit_id: UUID
+    unit_name: str
+    confidence: int
+
+
+class UnitMappingRow(BaseModel):
+    """Um departamento do espelho, o mapa dele e o peso de não ter mapa.
+
+    Três estados, e a diferença entre os dois últimos é o ponto da tela:
+
+    - **não mapeado** — `unit_id` nulo. Quem está nele foi promovido sem unidade
+      e some de todo recorte por unidade;
+    - **provisório** — mapeado com `validated_at` nulo. Alguém ou alguma carga
+      escreveu o mapa e ninguém confirmou;
+    - **validado** — uma pessoa apertou o botão, e está registrado quem e quando.
+    """
+
+    secullum_department_id: int
+    department: str
+    company_id: UUID
+    company_name: str
+    #: Ativos lotados neste departamento.
+    employees: int
+    #: Ativos daqui que estão sem unidade — é o que a curadoria resolve.
+    unmapped: int
+    unit_id: UUID | None = None
+    unit_name: str | None = None
+    validated_at: datetime | None = None
+    suggestion: UnitSuggestion | None = None
+
+
+class UnitMappingScreen(BaseModel):
+    """A fila de curadoria inteira, com a conta que ela fecha.
+
+    `validated` **exclui o provisório de propósito**: uma pessoa cuja unidade veio
+    de um mapa que ninguém confirmou está alocada e não está curada. Somar as
+    duas faria a barra chegar a 100% com metade do trabalho por fazer, que é o
+    modo mais eficiente de encerrar uma curadoria pela metade.
+    """
+
+    rows: list[UnitMappingRow]
+    units: list[UnitOption]
+    active: int
+    validated: int
+    provisional: int
+    without_unit: int
+
+
+class UnitMappingPair(BaseModel):
+    secullum_department_id: int
+    unit_id: UUID
+
+
+class UnitMappingRequest(BaseModel):
+    """O que a tela manda de volta: pares departamento → unidade.
+
+    Uma lista, e não um par, porque o lote é o caso principal: "aplicar as
+    sugestões acima de N%" é uma decisão só, tomada uma vez, e mandá-la como
+    quarenta requisições faria metade dela sobreviver a uma queda de rede.
+    """
+
+    mappings: list[UnitMappingPair] = Field(min_length=1, max_length=500)
+
+
+class UnitMappingApplied(BaseModel):
+    """Quantos mapas foram validados, e quanta gente andou por causa disso.
+
+    `employees_allocated` conta só quem **estava sem unidade**. Curar o mapa não
+    move quem já está alocado: alocação existente é trabalho humano, e a mesma
+    regra vale na promoção (`coalesce(excluded.unit_id, app.employee.unit_id)`).
+    """
+
+    validated: int
+    employees_allocated: int
+
+
 class ImportLineError(BaseModel):
     """Por que uma linha não entra. Texto em pt-BR, chega ao usuário como está."""
 

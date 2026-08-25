@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AppShell } from "@/components/app-shell";
-import { loadIdentity, reachesHr } from "@/lib/identity";
+import { isAdmin, loadIdentity, reachesHr } from "@/lib/identity";
 import { LOGIN_PATH, PATHNAME_HEADER, safeNextPath } from "@/lib/navigation";
 import { getCurrentUser } from "@/lib/supabase-server";
 import { SessionProvider } from "@/state/session";
@@ -35,7 +35,12 @@ export default async function DashboardLayout({
 
   return (
     <SessionProvider user={{ id: user.id, email: user.email ?? "" }}>
-      <AppShell showAdmin={reachesHr(identity?.role)}>{children}</AppShell>
+      <AppShell
+        showAdmin={reachesHr(identity?.role)}
+        showCuration={isAdmin(identity?.role)}
+      >
+        {children}
+      </AppShell>
     </SessionProvider>
   );
 }
