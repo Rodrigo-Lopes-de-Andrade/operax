@@ -125,6 +125,48 @@ A9 da auditoria de 24/08).
 
 ---
 
+### Andamento em 25/08/2026 — o quadro do dia, e a conta que não fechava
+
+Três dos cinco indicadores de headcount do escopo (§4.3, itens 1, 4 e 5) entraram
+no **monitor diário**: ativos, em férias e afastados. Ficaram no monitor e não no
+dashboard porque "em férias" é fato de um dia — num recorte de 30 dias a pergunta
+não tem resposta única.
+
+**A conta não fechava, e ninguém via.** O quadro do monitor saía de
+`app.expected_workday`, então quem o motor não materializou não era escalado, não
+era folga e não era nada: sumia da tela. Agora ele sai de `app.employee`, e a
+diferença virou um número — `unrostered`, ativo sem jornada prevista para o dia.
+Contra o seed local, hoje, **os 40 ativos estão todos nesse estado**; antes a
+tela mostrava "0 escalados, 0 fora da escala", que se lê como "todo mundo de
+folga". As seis pessoas da administração da FastPark estão nesse estado de
+propósito, e falha de cobertura do motor tem exatamente a mesma aparência: contar
+é o que separa as duas.
+
+**Os indicadores 2 e 3 não foram entregues, e não foram aproximados.** A
+primeira versão desta nota dizia que a marcação do dia era inalcançável. **Está
+errado, e a correção importa:** `app.batida_marcacao` existe, o `make db-test` a
+enxerga, e `app.employee.secullum_employee_id` liga a ela. O bloqueio é outro, e
+é de decisão, não de dado:
+
+- é uma das **quatro tabelas de ingestão congeladas** pela migration 11b. Nenhuma
+  migration deste repositório a cria — ela chega pelo `scripts/_baseline.sql`, um
+  dump de produção — e o que fazer com ela é decisão em aberto do dono
+  (`PLANO-RECONCILIACAO-NUVEM.md` §5);
+- o **banco de desenvolvimento não a tem** (foi criado sem o baseline), então
+  nada apoiado nela roda localmente nem entra no E2E, e a tela quebraria em dev;
+- a policy dela é `util.has_tenant` sozinha, e não o `util.can_see_employee`
+  que guarda as tabelas de domínio.
+
+Nada disso torna o indicador impossível. Torna-o uma decisão sobre as tabelas de
+ingestão em vez de uma consulta. "Escalado e sem indício" já está na tela com a
+ressalva escrita; rebatizá-lo de "presentes" transformaria a ressalva em mentira.
+
+Destravar os dois é o mesmo trabalho que destrava outra coisa: **baixar as Edge
+Functions e trazer as quatro tabelas de ingestão para as migrations** — com isso
+o banco de dev passa a tê-las e o indicador vira uma consulta.
+
+---
+
 ## Gates — pontos onde a sprint seguinte não começa
 
 Não são recomendações. Cada um existe porque violá-lo custa mais caro do que

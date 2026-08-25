@@ -160,13 +160,26 @@ class MonitorUnitRow(BaseModel):
     `scheduled` counts people the roster expected to work, so a unit that is
     entirely off today reports zero and still appears — "nobody was scheduled"
     and "nothing was read" are different answers and the screen shows both.
+
+    `active` is the headcount, and the five counts below it partition exactly:
+    `scheduled + on_vacation + on_leave + day_off + unrostered = active`. That
+    identity is the reason `unrostered` exists — without it the difference
+    between the headcount and the roster is a number nobody can see.
     """
 
     unit_id: UUID | None = None
     unit_name: str | None = None
+    active: int
     scheduled: int
     with_indication: int
     clear: int
+    on_vacation: int
+    on_leave: int
+    day_off: int
+    #: Ativo e sem jornada prevista para o dia. Pode ser desenho (o "ponto por
+    #: exceção" da administração) ou falha de cobertura do motor, e as duas
+    #: precisam ser contáveis para serem distinguíveis.
+    unrostered: int
     off_roster: int
 
 
@@ -199,19 +212,45 @@ class MonitorRow(BaseModel):
 class DailyMonitor(BaseModel):
     """The situation of one day, by unit.
 
-    What this can and cannot say is worth stating once. The product does not
-    mirror punches into its own schema — they live in the source mirror, which
-    is never exposed — so the monitor reports what the engine found, not who
-    walked through the door. "Sem indício" therefore means "the last reading
+    What this can and cannot say is worth stating once. The monitor reports what
+    the **engine** found, never who walked through the door: the punches of the
+    day reach `app.batida_marcacao`, which is ingestion and not domain, and
+    nothing on this screen reads it. "Sem indício" therefore means "the last reading
     found nothing", never "present"; the age of that reading is on the screen
     beside it, permanently, because a manager reading a 08:40 picture at 09:05
     would otherwise conclude that nobody is late.
+
+    Two indicators of the contracted scope are deliberately absent here, and
+    naming them is better than approximating them. "Colaboradores presentes" and
+    "ausentes" need the punches of the day. Those punches do exist in
+    `app.batida_marcacao`, and `app.employee.secullum_employee_id` joins to it —
+    the obstacle is not that the data is unreachable, so it is worth writing down
+    what it actually is:
+
+    - the table is one of the four ingestion tables migration 11b **froze**. No
+      migration in this repository creates it; it arrives from
+      `scripts/_baseline.sql`, a dump of production, and its future is an open
+      owner decision (`docs/PLANO-RECONCILIACAO-NUVEM.md` §5);
+    - the **development database does not have it** — it was built without the
+      baseline — so nothing built on it can be exercised locally or covered by
+      the E2E suite, and this screen would fail on a missing relation in dev;
+    - its policy is `util.has_tenant` alone, not the unit-scoped
+      `util.can_see_employee` that guards every domain table here.
+
+    None of that makes the indicator impossible. It makes it a decision about the
+    ingestion tables rather than a query, and that decision is not this screen's
+    to take.
     """
 
     day: date
+    active: int
     scheduled: int
     with_indication: int
     clear: int
+    on_vacation: int
+    on_leave: int
+    day_off: int
+    unrostered: int
     off_roster: int
     units: list[MonitorUnitRow]
     rows: list[MonitorRow]

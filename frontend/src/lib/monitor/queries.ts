@@ -24,9 +24,16 @@ import { getServerSupabase } from "@/lib/supabase-server";
 export type MonitorUnitRow = {
   unit_id: string | null;
   unit_name: string | null;
+  /** Headcount. `scheduled + on_vacation + on_leave + day_off + unrostered`. */
+  active: number;
   scheduled: number;
   with_indication: number;
   clear: number;
+  on_vacation: number;
+  on_leave: number;
+  day_off: number;
+  /** Ativo e sem jornada prevista — desenho ou falha de cobertura do motor. */
+  unrostered: number;
   off_roster: number;
 };
 
@@ -53,9 +60,14 @@ export type MonitorRow = {
 
 export type DailyMonitor = {
   day: string;
+  active: number;
   scheduled: number;
   with_indication: number;
   clear: number;
+  on_vacation: number;
+  on_leave: number;
+  day_off: number;
+  unrostered: number;
   off_roster: number;
   units: MonitorUnitRow[];
   rows: MonitorRow[];

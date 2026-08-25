@@ -65,14 +65,26 @@ _SEVERITY_ORDER: dict[Severity, int] = {"critical": 0, "attention": 1, "watch": 
 # The roster of the day, joined to whether the engine found anything. Kept as
 # one statement so "escalado" and "com indício" are counted over the same rows —
 # two queries would disagree the moment a colleague is admitted mid-morning.
+#
+# IT IS DRIVEN BY `app.employee`, NOT BY `app.expected_workday`, AND THAT IS THE
+# WHOLE POINT OF THE HEADCOUNT
+# The roster used to start from the expected workday, which meant a person the
+# engine never materialised simply did not exist on this screen: not scheduled,
+# not off, not counted. Six people at the anchor client are in exactly that
+# state on purpose — their schedules are "Ponto por exceção" and they belong
+# outside the engine — and there is no way to tell them apart from a coverage
+# failure by looking. Starting from the active headcount makes the difference a
+# number (`unrostered`) instead of an absence, and a unit whose whole team is off
+# stops disappearing from the list.
 _UNITS_SQL = """
     with roster as (
-        select w.employee_id, w.day_type, c.unit_id, u.name as unit_name
-        from app.expected_workday w
-        join app.employee c on c.id = w.employee_id
+        select c.id as employee_id, w.day_type, c.unit_id, u.name as unit_name
+        from app.employee c
         left join app.unit u on u.id = c.unit_id
-        where w.reference_date = %(dia)s
-          and c.status = 'active'
+        left join app.expected_workday w
+               on w.employee_id = c.id
+              and w.reference_date = %(dia)s
+        where c.status = 'active'
           and (%(unit_id)s::uuid is null or c.unit_id = %(unit_id)s::uuid)
     ),
     indication as (
@@ -84,6 +96,7 @@ _UNITS_SQL = """
     )
     select r.unit_id,
            r.unit_name,
+           count(*) as active,
            count(*) filter (where r.day_type = 'work') as scheduled,
            count(*) filter (
                where r.day_type = 'work' and i.employee_id is not null
@@ -91,7 +104,15 @@ _UNITS_SQL = """
            count(*) filter (
                where r.day_type = 'work' and i.employee_id is null
            ) as clear,
-           count(*) filter (where r.day_type <> 'work') as off_roster
+           count(*) filter (where r.day_type = 'vacation')     as on_vacation,
+           count(*) filter (where r.day_type = 'leave_period') as on_leave,
+           count(*) filter (
+               where r.day_type in ('day_off', 'holiday', 'compensated')
+           ) as day_off,
+           count(*) filter (where r.day_type is null) as unrostered,
+           count(*) filter (
+               where r.day_type is not null and r.day_type <> 'work'
+           ) as off_roster
     from roster r
     left join indication i on i.employee_id = r.employee_id
     group by r.unit_id, r.unit_name
@@ -159,9 +180,14 @@ async def daily_monitor(
 
     return DailyMonitor(
         day=dia,
+        active=sum(unit.active for unit in units),
         scheduled=sum(unit.scheduled for unit in units),
         with_indication=sum(unit.with_indication for unit in units),
         clear=sum(unit.clear for unit in units),
+        on_vacation=sum(unit.on_vacation for unit in units),
+        on_leave=sum(unit.on_leave for unit in units),
+        day_off=sum(unit.day_off for unit in units),
+        unrostered=sum(unit.unrostered for unit in units),
         off_roster=sum(unit.off_roster for unit in units),
         units=units,
         rows=rows[:_MAX_ROWS],

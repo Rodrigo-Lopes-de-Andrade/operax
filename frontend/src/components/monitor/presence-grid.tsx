@@ -31,7 +31,7 @@ export function PresenceGrid({ monitor }: { monitor: DailyMonitor }) {
       <KpiCard
         eyebrow="Fora da escala"
         value={formatNumber(monitor.off_roster)}
-        note="Folga, férias, afastamento ou feriado no dia."
+        note="Folga, férias ou afastamento. O quadro acima abre os três."
       />
     </div>
   );

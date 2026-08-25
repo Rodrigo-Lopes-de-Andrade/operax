@@ -31,10 +31,15 @@ def unit_row(**overrides: Any) -> dict[str, Any]:
     return {
         "unit_id": UNIT_ID,
         "unit_name": "Shopping Norte",
+        "active": 30,
         "scheduled": 20,
         "with_indication": 3,
         "clear": 17,
-        "off_roster": 4,
+        "on_vacation": 2,
+        "on_leave": 1,
+        "day_off": 4,
+        "unrostered": 3,
+        "off_roster": 7,
     } | overrides
 
 
@@ -209,6 +214,99 @@ def test_the_totals_are_the_units_and_nothing_else(client: TestClient, issue_tok
         4,
     )
     assert body["truncated"] is False
+
+
+def test_o_quadro_do_dia_particiona_o_headcount(client: TestClient, issue_token, answer):
+    """Ativos = escalados + férias + afastados + folga + sem jornada prevista.
+
+    A identidade é o que faz o quadro ser um quadro e não cinco números soltos.
+    Se ela não fechar, alguém está sendo contado duas vezes ou não está sendo
+    contado — e as duas leituras erradas são invisíveis sem esta soma.
+    """
+    answer(
+        [
+            unit_row(active=30, scheduled=20, on_vacation=2, on_leave=1, day_off=4, unrostered=3),
+            unit_row(
+                unit_id=None,
+                unit_name=None,
+                active=9,
+                scheduled=5,
+                with_indication=1,
+                clear=4,
+                on_vacation=1,
+                on_leave=0,
+                day_off=3,
+                unrostered=0,
+                off_roster=4,
+            ),
+        ],
+        [],
+    )
+
+    body = client.get(
+        "/monitor/diario",
+        params={"dia": DAY.isoformat()},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    ).json()
+
+    assert body["active"] == 39
+    assert (
+        body["scheduled"]
+        + body["on_vacation"]
+        + body["on_leave"]
+        + body["day_off"]
+        + body["unrostered"]
+        == body["active"]
+    )
+    assert (body["on_vacation"], body["on_leave"], body["unrostered"]) == (3, 1, 3)
+
+
+def test_quem_o_motor_nao_materializou_e_contado_em_vez_de_sumir(
+    client: TestClient, issue_token, answer
+):
+    """Uma unidade inteira sem jornada prevista aparece, com o número na cara.
+
+    Antes o quadro saía de `app.expected_workday`, e quem o motor não
+    materializou não era escalado, não era folga e não era nada: sumia. Seis
+    pessoas da administração estão nesse estado de propósito, e falha de
+    cobertura do motor tem exatamente a mesma aparência. Contar é o que separa
+    as duas.
+    """
+    answer(
+        [
+            unit_row(
+                unit_name="Administração",
+                active=6,
+                scheduled=0,
+                with_indication=0,
+                clear=0,
+                on_vacation=0,
+                on_leave=0,
+                day_off=0,
+                unrostered=6,
+                off_roster=0,
+            )
+        ],
+        [],
+    )
+
+    body = client.get(
+        "/monitor/diario",
+        params={"dia": DAY.isoformat()},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    ).json()
+
+    assert body["active"] == 6
+    assert body["unrostered"] == 6
+    assert len(body["units"]) == 1
+
+
+def test_o_quadro_sai_de_employee_e_nao_da_jornada_prevista(
+    client: TestClient, issue_token, answer
+):
+    """Dirigir pela jornada prevista faz o headcount ser o que o motor cobriu."""
+    assert "from app.employee c" in monitor._UNITS_SQL
+    assert "left join app.expected_workday w" in monitor._UNITS_SQL
 
 
 def test_a_day_past_the_ceiling_says_so(client: TestClient, issue_token, answer):

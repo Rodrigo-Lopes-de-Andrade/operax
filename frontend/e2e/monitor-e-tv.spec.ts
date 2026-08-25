@@ -57,6 +57,31 @@ test("o monitor separa escalado de sem indício, e diz que um não é presença"
   ).toBeVisible();
 });
 
+test("o quadro do dia mostra o efetivo e quem está fora dele", async ({
+  page,
+}) => {
+  await signIn(
+    page,
+    "owner@fastpark.dev",
+    "/dashboard/monitor",
+    "Monitor diário",
+  );
+
+  await expect(page.getByText("Quadro do dia")).toBeVisible();
+  await expect(page.getByText("colaboradores ativos")).toBeVisible();
+
+  // Férias e afastamento deixaram de viver dentro de "fora da escala": os dois
+  // são indicadores do escopo contratado e agora têm número próprio.
+  for (const rotulo of ["Em férias", "Afastados", "Sem jornada"]) {
+    await expect(page.getByText(rotulo, { exact: true })).toBeVisible();
+  }
+
+  // E nada aqui se chama presença: a marcação do dia vive numa tabela de
+  // ingestão que este repositório não declara.
+  await expect(page.getByText(/^Presentes$/)).toHaveCount(0);
+  await expect(page.getByText(/^Ausentes$/)).toHaveCount(0);
+});
+
 test("o dia do monitor troca pelo link e volta na URL", async ({ page }) => {
   await signIn(
     page,
