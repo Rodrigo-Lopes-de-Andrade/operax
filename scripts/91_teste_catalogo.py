@@ -11,8 +11,8 @@ entre as duas.
 
 Três coisas conferidas:
   1. todo alvo de `app.metric` existe em `public` — view ou função;
-  2. todo parâmetro declarado no catálogo tem binding, e toda coluna citada pelo
-     binding existe no alvo;
+  2. todo parâmetro declarado no catálogo tem binding e tipo, e toda coluna
+     citada pelo binding existe no alvo;
   3. a consulta que cada métrica gera **compila** contra o schema real.
 
 `operax/agente/catalogo.py` não importa driver nenhum, então este script o importa
@@ -61,21 +61,12 @@ def posicionar(sql: str) -> str:
     return re.sub(r"%\((\w+)\)s", trocar, sql)
 
 
-#: Um valor de exemplo por parâmetro, com o tipo que o alvo espera. O `prepare`
-#: precisa inferir o tipo, e um `$1` sozinho num `where` de uuid é ambíguo.
-TIPOS = {
-    "start_date": "date",
-    "end_date": "date",
-    "days_ahead": "int",
-    "stale_after_minutes": "int",
-    "year": "int",
-    "month": "int",
-    "unit": "uuid",
-    "company": "uuid",
-    "employee": "uuid",
-    "type": "text",
-    "payroll_period": "text",
-}
+#: O tipo de cada parâmetro, para o `prepare` inferir (um `$1` sozinho num `where`
+#: de uuid é ambíguo). Vive em `catalogo.TYPES` e não aqui porque o runtime passou
+#: a precisar do mesmo mapa para recusar valor inventado pelo modelo — duas
+#: cópias divergiriam na primeira métrica nova, e é esse tipo de divergência que
+#: este script existe para achar.
+TIPOS = catalogo.TYPES
 
 
 def main() -> None:
@@ -142,6 +133,10 @@ def main() -> None:
                 problemas.append(
                     f"{m.code}: binding de {parametro!r} aponta para {m.target}.{binding.column}, "
                     f"que não existe"
+                )
+            if parametro not in TIPOS:
+                problemas.append(
+                    f"{m.code}: o catálogo aceita {parametro!r} e TYPES não diz de que tipo ele é"
                 )
 
         # 3. a consulta compila

@@ -6,6 +6,7 @@ import { DataFreshness } from "@/components/data-freshness";
 import { NavLink } from "@/components/nav-link";
 import { SignOutButton } from "@/components/sign-out-button";
 import { UserBadge } from "@/components/user-badge";
+import { ASSISTENTE_PATH } from "@/lib/assistente/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
 import { COLABORADORES_PATH, IMPORTACAO_PATH } from "@/lib/rh/url";
@@ -17,9 +18,9 @@ import { TV_PATH } from "@/lib/tv/url";
  *
  * The navigation lists only what exists. The individual consultation is reached
  * from a row, not from here, because it is always about somebody you were
- * already looking at. Payroll, alert rules and the assistant arrive with their
- * own screens — a nav item that leads nowhere reads as a defect, and a disabled
- * one without a reason reads worse.
+ * already looking at. Payroll and alert rules arrive with their own screens — a
+ * nav item that leads nowhere reads as a defect, and a disabled one without a
+ * reason reads worse.
  *
  * The administration section follows the same rule one step further: it is
  * absent, not disabled, for a role that does not reach it. The role comes from
@@ -50,6 +51,7 @@ export function AppShell({
           <NavLink href={PONTO_PATH} label="Gestão de ponto" />
           <NavLink href={MONITOR_PATH} label="Monitor diário" />
           <NavLink href={TV_PATH} label="Painel de TV" />
+          <NavLink href={ASSISTENTE_PATH} label="Assistente" />
         </nav>
 
         {showAdmin ? (

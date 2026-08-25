@@ -93,6 +93,12 @@ export default defineConfig({
         // `fetch` morre no preflight e a interface mostra a mensagem genérica —
         // que é indistinguível de um bug de produto.
         CORS_ORIGINS: baseURL,
+        // O assistente é a única parte do produto que depende de um serviço
+        // pago e não determinístico. O que o E2E prova nele é transporte — que o
+        // `text/event-stream` atravessa o uvicorn e vira texto na tela — e um
+        // modelo de verdade só acrescentaria latência e variação a essa prova.
+        // A fronteira (catálogo, domínio, RLS) continua inteira no caminho.
+        E2E_FAKE_LLM: "1",
       },
     },
   ],

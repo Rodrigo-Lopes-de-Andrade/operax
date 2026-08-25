@@ -25,12 +25,13 @@ Este bloco registra **andamento**; o plano abaixo permanece como foi escrito.
 | S4 · Motor em modo sombra | não começou |
 | **S5 · Dashboard** | ✅ **fechada** — os quatro critérios de aceite com teste |
 | S6 · Alertas e relatório | não começou — travada em G4 |
-| S7 · Assistente de IA | não começou |
+| S7 · Assistente de IA | ✅ fechada — 25/08 |
 | S8 · Homologação e produção | não começou |
 
-**Números que mudaram desde que este plano foi escrito.** São **17 migrations**
+**Números que mudaram desde que este plano foi escrito.** São **22 migrations**
 (entraram a `11b`, que renomeia o schema da nuvem de pt para en, a `15` do
-rebrand FastPark e a `16` de RH). A suíte de banco tem **quatro** conjuntos:
+rebrand FastPark, a `16` e a `17` de RH, a `18` da idempotência da sombra, e a
+`19` e a `20` do assistente). A suíte de banco tem **quatro** conjuntos:
 motor de jornada (24 asserções), regras de alerta e cadência (24), isolamento
 multi-tenant (21) e verificações estruturais (13).
 
@@ -457,7 +458,7 @@ G4 impõe de qualquer forma.
 
 ---
 
-## S7 — Assistente de IA · 3–5 dias · fronteira entregue, ⚠️ agente não escrito
+## S7 — Assistente de IA · 3–5 dias · entregue
 
 | Trilha | Entrega |
 |---|---|
@@ -512,12 +513,111 @@ ordena unidades, e filtrar um ranking de unidades por uma unidade é pedir o
 ranking de um item só; e sobrava binding para uma view que nenhuma métrica ativa
 usa mais. As três eram invisíveis até alguém fazer a pergunta em produção.
 
-**Por que o agente não foi escrito.** Ele precisa do LangChain 1.x e de um
-provider real, e nenhum dos dois está no `pyproject.toml`. Escrever a fiação de
-`create_agent` sem conseguir exercitá-la produz exatamente o tipo de código que
-parece certo e falha na primeira pergunta — que é o oposto do que este sprint
-existe para evitar. A metade que carrega a garantia do produto está pronta e
-testada; a que falta é fiação, e ela liga a esta fronteira, não em volta dela.
+**Por que o agente não foi escrito naquele dia.** Ele precisava do LangChain 1.x
+e de um provider real, e nenhum dos dois estava no `pyproject.toml`. Escrever a
+fiação de `create_agent` sem conseguir exercitá-la produz exatamente o tipo de
+código que parece certo e falha na primeira pergunta.
+
+---
+
+### Andamento em 25/08/2026 — a fiação, e o que a primeira execução real mostrou
+
+**Entregue.** `agente.py` (o `create_agent`, a allowlist de modelo, o turno como
+eventos tipados), `POST /assistente/perguntar` com SSE, a tela de conversa, o
+registro em `app.ai_query`, o rate limiting por usuário e o provider falso do
+E2E. As dependências entraram: `langchain` 1.3, mais os três providers.
+
+**A decisão que valeu a espera foi exercitar antes de fechar.** Cinco perguntas
+reais contra um provider real acharam sete coisas que nenhum teste com fixture
+acharia. As quatro primeiras com as leituras de banco simuladas:
+
+1. **O modelo inventa valor, não só nome.** Para "quantos desvios tivemos este
+   mês?" ele mandou `unit="month"`. As quatro recusas do catálogo passam por
+   isso — `unit` é dimensão que a métrica aceita — e a string chegaria a uma
+   coluna `uuid`. Virou a **quinta recusa**, `valor_invalido`, e o mapa de tipos
+   que o `make db-test` já tinha saiu do script e virou `catalogo.TYPES`, com o
+   contrato conferido nos dois lados.
+
+2. **Quando o modelo acerta, o `event: recusa` não dispara.** Perguntado sobre
+   folha sem alcançar o domínio, ele recusou sozinho, em prosa, sem chamar
+   ferramenta nenhuma. A resposta é boa e a UI não sabe que foi recusa: o
+   `app.ai_query` conta a pergunta como respondida, e a lista de "métricas que
+   faltam" — que é o principal uso desse registro — nasce errada. O modelo
+   ganhou uma segunda ferramenta, `recusar`, e um sexto código, `sem_metrica`.
+   O texto que ele produz ali é o melhor insumo que existe para decidir qual
+   métrica criar: *"nenhuma métrica retorna média por colaborador"*.
+
+3. **Um filtro descartado virava uma frase falsa.** O modelo mandou `unit` para
+   `ranking_by_unit`; o `BINDINGS` descarta (a função **ordena** unidades e não
+   tem `p_unit_id`), a consulta rodou sem o filtro, e o modelo respondeu "com
+   filtro da unidade Shopping Norte". O número estava certo e a frase em cima
+   dele, não. O silêncio no SQL segue de pé — é limitação declarada do alvo —
+   mas agora a ferramenta devolve `filtros_aplicados` e `filtros_ignorados`, e
+   a tela mostra os dois.
+
+4. **A métrica de contagem não contava.** `deviations_total` apontava para
+   `vw_deviation_event`, uma linha por evento, e o assistente lê no máximo 200
+   linhas (elas são pagas por token). Contra o seed de desenvolvimento, com 508
+   eventos, "quantos desvios tivemos este mês?" responderia **200** — não erro,
+   não vazio: um número errado com uma frase confiante na frente. A migration 20
+   aponta `deviations_total` e `deviations_minutes` para `fn_kpi_period`, que já
+   existia desde a 10 e é o que o KPI do dashboard lê. Hoje a mesma pergunta
+   responde 217, que é a contagem. As dimensões `employee` e `type` saíram das
+   duas: a função não as aceita, e catálogo que promete o que o alvo não entrega
+   produz filtro descartado em silêncio.
+
+**E a primeira execução contra o banco de verdade achou mais duas.** Rodadas as
+mesmas perguntas contra o seed de desenvolvimento, com provider real, as cinco
+recusaram:
+
+5. **`null` não é valor inválido, é ausência de filtro.** Perguntado por um total
+   do mês, o modelo manda `{"unit": null}` — que é como ele escreve "sem filtro
+   de unidade". A recusa `valor_invalido` tratava isso como lixo e derrubava a
+   pergunta certa, cinco vezes em cinco. `null` e string vazia agora são
+   descartados antes de qualquer validação.
+
+6. **O modelo estreita o filtro por conta.** Sem poder filtrar por tipo, ele
+   trocava o recorte pedido por outro: "quantos atrasos em agosto?" virava o
+   total de uma unidade que ninguém citou — número certo para uma pergunta que
+   ninguém fez. Duas coisas seguraram isso: uma regra explícita no prompt e na
+   descrição da ferramenta ("só os parâmetros que a pergunta pediu"), e o evento
+   `metrica` passando a resolver **nome** de unidade em vez de mostrar o uuid.
+   A segunda é a que não depende de o modelo obedecer: `unidade: Shopping Norte`
+   numa pergunta que não citou unidade é visível; `unidade: dede0000-…-a1` não é.
+
+**E o E2E achou a sétima.** `expected_time` é `time`, o serializador não
+conhecia `time`, e a primeira pergunta contra o banco de verdade morria em
+`TypeError` — que o `except` largo do turno mostrava como "falha ao consultar o
+modelo". Fixture com `{"total": 42}` nunca alcançaria isso. É a razão de o E2E
+do assistente existir com provider falso (`E2E_FAKE_LLM=1`): o que ele prova é
+transporte e integração, não a qualidade da frase.
+
+**O que o registro de custo passou a carregar.** `app.ai_query` ganhou a coluna
+`model` (migration 19). Token não é preço: os mesmos 10.000 tokens custam um
+número num modelo pequeno e outro num grande, o backend é multi-provider de
+propósito, e uma tabela de contadores sem o nome do modelo responde "quantos
+tokens?" e não responde "quanto custou?", que é para o que a coluna foi criada.
+
+**A lacuna que a migration 20 abriu, de propósito.** Com `fn_kpi_period` no
+lugar da view de eventos, o assistente deixou de aceitar filtro por **tipo** e
+por **colaborador** nas duas métricas de desvio — a função não os recebe. Não é
+perda de capacidade que funcionava: um "quantos atrasos?" contra a view também
+batia no teto de 200 e devolvia 200. Hoje a pergunta recebe recusa nomeada. O
+que fecha isso é uma métrica de contagem **por tipo**, e ela é uma das três que
+a `COBERTURA-ESCOPO.md` já lista como faltando.
+
+Há um efeito colateral que vale registrar como ganho: o que o assistente manda
+para o provider virou **agregado**. Antes, uma pergunta de desvio embarcava até
+200 linhas nominais — com nome de colaborador — num serviço de terceiro. Duas
+métricas ainda fazem isso (`documents_expiring` e `ranking_by_employee`, as duas
+com nome de pessoa na saída), e isso **não** foi decidido aqui: fica anotado
+como pergunta em aberto, porque a resposta certa pode ser projetar a saída antes
+de mandar, e isso muda o que a UI recebe.
+
+**O que continua fora.** Thread de conversa — cada pergunta é um turno só, sem
+histórico. Não é limitação de fiação: é escopo que ninguém pediu, e um histórico
+enviado a cada turno multiplica o custo por token sem que ninguém tenha pedido a
+continuidade.
 
 ---
 

@@ -102,6 +102,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `refused` | boolean | não | `false` |  |  |
 | `refusal_reason` | text | sim |  |  |  |
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
+| `model` | text | sim |  |  | Id do modelo que respondeu, da allowlist de operax/agente/agente.py. Sem ele os contadores de token não viram dinheiro, que é para o que eles existem. |
 
 **Policies**
 
@@ -1334,7 +1335,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 ## `app.metric`
 
-> Catálogo fechado do assistente de IA. Métrica ausente daqui = question que ele responde "não tenho esse dado", em vez de inventar.
+> Catálogo fechado do assistente de IA. Métrica ausente daqui = pergunta que ele responde "não tenho esse dado", em vez de inventar. O alvo tem de responder o que o título promete: uma métrica de contagem apontada para uma view de linhas devolve o teto de linhas como se fosse a contagem.
 
 *tabela — RLS ligada*
 

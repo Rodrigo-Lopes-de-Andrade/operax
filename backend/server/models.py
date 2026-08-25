@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from operax.core.tenant import UserRole
 
@@ -464,3 +464,20 @@ class NewPosition(BaseModel):
     effective_from: date
     cargo: str
     unit_id: UUID | None = None
+
+
+class AssistantQuestion(BaseModel):
+    """A pergunta que entra no assistente.
+
+    O teto de caracteres não é higiene de formulário: a pergunta viaja para um
+    provider pago por token, e um campo de texto sem limite é uma conta sem
+    limite. `extra="forbid"` pelo motivo de sempre — um parâmetro que o servidor
+    não conhece chegando aqui é o cliente pedindo algo que ninguém desenhou.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    question: str = Field(min_length=1, max_length=1000)
+    #: Id do modelo, validado contra a allowlist de `operax.agente.agente`.
+    #: `None` = o padrão do provider configurado.
+    model: str | None = None

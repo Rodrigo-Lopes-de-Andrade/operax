@@ -101,7 +101,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 - Ruff (Python), Prettier + TS strict (frontend). Sentry para erros da aplicação.
 - Observabilidade do agente: **LangSmith é o default** (traces de LLM, tools, latência e tokens). Não introduzir outro vendor sem decisão explícita.
 - Testes: pytest (backend), Vitest (frontend), Playwright (E2E).
-- **Suíte de banco** (`make db-test`): sobe Postgres descartável, aplica as 20 migrations, roda 23 asserções funcionais de isolamento (dois tenants, quatro papéis), 24 asserções de regra de alerta, cadência e provedor, e 13 verificações estruturais, regenera o dicionário de dados e valida que toda referência a objeto de banco na documentação existe. Obrigatória em qualquer PR que toque policy, view, grant ou migration.
+- **Suíte de banco** (`make db-test`): sobe Postgres descartável, aplica as 22 migrations, roda 23 asserções funcionais de isolamento (dois tenants, quatro papéis), 24 asserções de regra de alerta, cadência e provedor, e 13 verificações estruturais, regenera o dicionário de dados e valida que toda referência a objeto de banco na documentação existe. Obrigatória em qualquer PR que toque policy, view, grant ou migration.
 
 ### Deploy
 
@@ -120,11 +120,11 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 - **Espelhamento da origem** — fora deste repositório, em Edge Functions do Supabase (`sync-cadastro`, `sync-batidas`, `secullum-test-auth`). Trocar de sistema de ponto acontece só ali. ⚠️ O código dessas funções **não está versionado aqui** — `supabase functions download` resolveria, e até lá o que sustenta o produto inteiro existe só no projeto na nuvem.
 - **`backend/operax/motor/`** — `cadastro.py` promove empresa, departamento e colaborador do espelho para o domínio e devolve a **fila de mapeamento pendente** (empresa vem de `Funcionario.empresa_id`, nunca do departamento — regra 5); `regras.py` = o SQL do que é desvio num dia, sem driver e sem cópia, lido pelos três statements e pelo `make db-test`; `jornada.py` materializa `app.expected_workday` com grau de confiança (é onde o 12x36 é tratado); `deteccao.py` grava `app.deviation_event` com `on conflict` por (colaborador, dia, tipo, modo); `revogacao.py` revoga o que sumiu e substitui o que já saiu em relatório. `python -m operax.motor` roda os três em ordem.
 - **`backend/operax/alertas/`** — `ciclo.py` monta `app.report_cycle` com reserva transacional (`report_cycle_id is null` é a cláusula inteira do "um desvio em exatamente um ciclo"); `outbox.py` enfileira com chave de idempotência; `sender.py` consome com `for update skip locked` e **pergunta o gate G4 ao banco** — sem execução do motor em produção, nada é entregue. `provedores/` = WhatsApp e e-mail atrás de uma interface **template-first**: `enviar(template, variaveis, destino)`, nunca string pronta — ver `docs/DECISAO-WHATSAPP.md`.
-- **`backend/operax/agente/`** — `catalogo.py` = carrega `app.metric`, filtra por domínio **antes** de o modelo ver, valida a escolha com quatro recusas nomeadas e monta a consulta (o `BINDINGS` é o único lugar em que nome de coluna encosta em SQL); `executor.py` = roda a métrica **como o usuário**, sob `user_scope`. `agente.py` = `create_agent` — ainda não escrito, ver `docs/SPRINTS.md` S7.
+- **`backend/operax/agente/`** — `catalogo.py` = carrega `app.metric`, filtra por domínio **antes** de o modelo ver, valida a escolha com **cinco** recusas nomeadas (a quinta confere o *valor*, não só o nome do parâmetro) e monta a consulta (o `BINDINGS` é o único lugar em que nome de coluna encosta em SQL); `executor.py` = roda a métrica **como o usuário**, sob `user_scope`; `agente.py` = o `create_agent`, a allowlist de modelo e o turno como eventos tipados — o modelo tem **duas** ferramentas, consultar e recusar, e nenhuma outra forma de alcançar dado; `e2e.py` = o provider falso de `E2E_FAKE_LLM`, que passa pela mesma fronteira.
 - **`backend/operax/rh/`** — `ownership.py` = a matriz dono-do-campo (sync x RH), lida por template, tela e import; `validators.py` = um funil só para formulário e planilha; `templates.py` = o que cada modelo `.xlsx` carrega; `workbook.py` = gera e lê o arquivo; `importer.py` = o veredito por linha, sem escrever; `repository.py` = o SQL, com leitura como o usuário e gravação junto da auditoria; `employees.py` = a lista e o detalhe da aba Colaboradores; `carga_inicial.py` = o conversor de implantação, que preenche os modelos baixados e **não abre conexão com o banco**.
 - **`backend/operax/core/`** — `db.py` = pools por schema; `tenant.py` = contexto de tenant (todo acesso com `service_role` passa por aqui); `config.py`; `vault.py` = leitura de credencial por tenant.
 - **`backend/server/`** — `main.py` = entrypoint; `deps.py` = valida o JWT do Supabase e resolve tenant e papel; `models.py` = **fonte da verdade dos schemas**; `routers/` = endpoints por área.
-- **`supabase/migrations/`** — 20 migrations aplicadas em ordem (numeradas 00–18, com a 11b). Ver `docs/PLANO-BANCO-OPERAX.md`.
+- **`supabase/migrations/`** — 22 migrations aplicadas em ordem (numeradas 00–20, com a 11b). Ver `docs/PLANO-BANCO-OPERAX.md`.
 - **`scripts/`** — diagnóstico, testes de isolamento, gerador do dicionário, verificador de documentação.
 - **`frontend/src/`** — `app/` roteamento; `components/` (`ui/` = design system); `lib/supabase.ts` = cliente com anon key; `lib/api.ts` = cliente do FastAPI; `state/` = sessão + streaming do assistente.
 
@@ -250,12 +250,20 @@ Só agregado não sensível: `vw_deviation_summary_by_unit`, `vw_deviation_daily
   `EventSource` nativo (não aceita header `Authorization`).
 - **Eventos:**
   - `event: token` · `data: {"content": "…"}` — delta de texto.
-  - `event: metrica` · `data: {"codigo": "…", "parametros": {…}}` — qual métrica
-    foi escolhida; a UI mostra período e filtros para o usuário conferir.
-  - `event: recusa` · `data: {"motivo": "…"}` — fora do catálogo ou sem permissão
-    de domínio. **Recusa é resposta válida**, não erro.
+  - `event: metrica` · `data: {"codigo": "…", "titulo": "…", "parametros": {…},
+    "ignorados": […], "linhas": N}` — qual métrica foi escolhida; a UI mostra
+    período e filtros para o usuário conferir.
+    `parametros` traz só o que **de fato** filtrou; `ignorados` traz o que a
+    métrica não filtra e por isso foi descartado — um filtro pedido e não
+    aplicado é a diferença entre o número certo e a frase errada.
+  - `event: recusa` · `data: {"codigo": "…", "motivo": "…"}` — fora do catálogo,
+    sem permissão de domínio, parâmetro ou valor que a métrica não aceita, ou o
+    modelo declarando que nenhuma métrica serve (`sem_metrica`). **Recusa é
+    resposta válida**, não erro: ela chega dentro de um 200.
   - `event: error` · `data: {"message": "…"}` — erro mid-stream; encerra o turno.
-  - `event: done` · `data: {"consulta_id": "…"}`.
+  - `event: done` · `data: {"consulta_id": "…", "modelo": "…",
+    "tokens_entrada": N, "tokens_saida": N, "latencia_ms": N}` — quem pergunta é
+    quem gasta, então o custo do turno volta com ele.
   - `event: ping` a cada ~15 s — keep-alive; sem ele proxies derrubam o stream.
 - A rota SSE fica **fora** de compressão e buffering.
 - **Erros fora do stream:** status ≠ 2xx antes do primeiro byte (401/403/429)
@@ -292,7 +300,7 @@ cp frontend/.env.local.example frontend/.env.local
 
 # 3. Banco local + migrações
 supabase start                                    # Postgres + Auth + Storage locais
-supabase db reset                                 # aplica as 20 migrations do zero
+supabase db reset                                 # aplica as 22 migrations do zero
 
 # 4. Rodar / verificar
 make dev                    # backend + frontend

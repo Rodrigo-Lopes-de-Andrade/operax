@@ -80,7 +80,7 @@ export async function requestApiAsUser<T>(
   return requestApi<T>(path, { ...options, accessToken });
 }
 
-async function readDetail(response: Response): Promise<string | null> {
+export async function readDetail(response: Response): Promise<string | null> {
   try {
     const payload: unknown = await response.json();
 

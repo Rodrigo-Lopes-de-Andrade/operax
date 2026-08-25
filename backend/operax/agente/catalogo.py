@@ -12,10 +12,19 @@ model asked to pick from nine named metrics can only be wrong in one way: pickin
 the wrong one of nine, which a person reads on screen and corrects. That is the
 trade, and it is why the refusal is a first-class answer.
 
-FOUR REASONS TO REFUSE, AND ALL OF THEM NAME THE PROBLEM
-Out of catalogue, domain out of reach, unknown parameter, missing filter. A
-refusal that says "não consigo responder isso" teaches nobody anything; one that
-says *which* parameter it did not recognise gets the next question right.
+FIVE REASONS TO REFUSE HERE, AND ALL OF THEM NAME THE PROBLEM
+Out of catalogue, domain out of reach, unknown parameter, missing filter, and a
+value that is not what the parameter is. A refusal that says "não consigo
+responder isso" teaches nobody anything; one that says *which* parameter it did
+not recognise gets the next question right. A sixth code, `sem_metrica`, is not
+produced here — it is the model saying no metric fits, and it is declared in
+`agente.py`.
+
+The fifth was not foreseen: it was written after the first real run of the agent,
+which invented `unit="month"` for "quantos desvios tivemos este mês?". The four
+name checks all pass on that — `unit` is a dimension the metric accepts — and the
+string reaches a `uuid` column. Validating the name and not the value is
+validating half of what the model said.
 
 THE DOMAIN IS FILTERED BEFORE THE MODEL SEES IT
 A metric the person cannot reach is not offered at all. Offering it and refusing
@@ -36,7 +45,9 @@ does not have.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Literal
+from uuid import UUID
 
 Kind = Literal["view", "function"]
 
@@ -89,7 +100,18 @@ class Refusal:
     pt-BR que chega à pessoa.
     """
 
-    code: Literal["fora_do_catalogo", "sem_dominio", "parametro_desconhecido", "filtro_ausente"]
+    code: Literal[
+        "fora_do_catalogo",
+        "sem_dominio",
+        "parametro_desconhecido",
+        "filtro_ausente",
+        "valor_invalido",
+        # A única que `choose` não devolve: é o modelo declarando que nenhuma
+        # métrica responde à pergunta, por `agente.recusar`. Vive aqui porque é
+        # o mesmo vocabulário — a UI trata as seis do mesmo jeito, e o `motivo`
+        # desta é o texto mais útil que existe para decidir qual métrica criar.
+        "sem_metrica",
+    ]
     reason: str
 
 
@@ -102,23 +124,13 @@ _PERIODO_VIEW = {
 }
 _PERIODO_FN = {"start_date": Binding(argument="p_de"), "end_date": Binding(argument="p_ate")}
 
+# `vw_deviation_event` e `vw_deviation_by_employee_day` **não** estão aqui, e a
+# ausência é a decisão da migration 20: as duas métricas de desvio que apontavam
+# para elas contavam lendo linhas, com teto de 200 — o que fazia "quantos desvios
+# tivemos?" responder o teto. Elas agora contam em `fn_kpi_period`. O efeito
+# colateral é que o assistente deixou de mandar linha de evento nominal para o
+# provider: o que sai daqui hoje é agregado.
 BINDINGS: dict[str, dict[str, Binding]] = {
-    "vw_deviation_event": {
-        **_PERIODO_VIEW,
-        "unit": Binding(column="unit_id"),
-        "company": Binding(column="company_id"),
-        "employee": Binding(column="employee_id"),
-        "type": Binding(column="type"),
-    },
-    "vw_deviation_by_employee_day": {
-        **_PERIODO_VIEW,
-        "unit": Binding(column="unit_id"),
-        "employee": Binding(column="employee_id"),
-        # A view é por colaborador e dia: não tem empresa nem tipo, e o catálogo
-        # não pode prometer o que ela não entrega.
-        "company": Binding(column=None),
-        "type": Binding(column=None),
-    },
     "vw_deviation_daily_trend": {
         **_PERIODO_VIEW,
         "unit": Binding(column="unit_id"),
@@ -137,6 +149,11 @@ BINDINGS: dict[str, dict[str, Binding]] = {
         # A folha é por competência; a unidade de tempo dela é ano e mês, e não
         # um intervalo de dias.
         "payroll_period": Binding(column=None),
+    },
+    "fn_kpi_period": {
+        **_PERIODO_FN,
+        "unit": Binding(argument="p_unit_id"),
+        "company": Binding(argument="p_company_id"),
     },
     "fn_ranking_by_employee": {
         **_PERIODO_FN,
@@ -172,6 +189,62 @@ BINDINGS: dict[str, dict[str, Binding]] = {
 #: histórico inteiro — e "quantos desvios tivemos?" sem recorte é uma pergunta
 #: que parece respondida e não está.
 REQUIRED = ("start_date", "end_date")
+
+#: O tipo que cada parâmetro tem no alvo. O `make db-test` já precisava dele para
+#: compilar a consulta (um `$1` sozinho num `where` de uuid é ambíguo), e o
+#: runtime precisa dele pelo motivo oposto: o modelo devolve JSON, e um modelo
+#: convidado a preencher `unit` preenche `unit` — na primeira execução real deste
+#: agente ele mandou a string "month". Sem tipo, isso chega ao Postgres como
+#: `unit_id = 'month'` e vira erro de cast: um 500 no lugar de uma frase que
+#: ensina a próxima pergunta.
+TYPES: dict[str, Literal["date", "uuid", "int", "text"]] = {
+    "start_date": "date",
+    "end_date": "date",
+    "days_ahead": "int",
+    "stale_after_minutes": "int",
+    "year": "int",
+    "month": "int",
+    "unit": "uuid",
+    "company": "uuid",
+    "employee": "uuid",
+    "type": "text",
+    "payroll_period": "text",
+    "entity": "text",
+}
+
+_TYPE_NAMES = {
+    "date": "data no formato AAAA-MM-DD",
+    "uuid": "identificador",
+    "int": "número inteiro",
+    "text": "texto",
+}
+
+
+class UntypedParameterError(RuntimeError):
+    """O catálogo aceita o parâmetro e `TYPES` não diz o que ele é.
+
+    Irmã de `UnboundParameterError`: catálogo e código discordando, não erro de
+    usuário. O `make db-test` confere as duas listas contra `app.metric`.
+    """
+
+
+def _coerce(name: str, value: Any) -> Any:
+    """O valor no tipo do alvo, ou `ValueError` nomeando o que ele não é."""
+    kind = TYPES.get(name)
+    if kind is None:
+        raise UntypedParameterError(f"{name!r} é aceito pelo catálogo e não tem tipo em TYPES")
+    if kind == "date":
+        return value if isinstance(value, date) else date.fromisoformat(str(value))
+    if kind == "uuid":
+        return value if isinstance(value, UUID) else UUID(str(value))
+    if kind == "int":
+        # `bool` é `int` em Python, e `year=True` não é um ano.
+        if isinstance(value, bool):
+            raise ValueError("booleano não é inteiro")
+        return int(value)
+    if not isinstance(value, str):
+        raise ValueError("texto esperado")
+    return value
 
 
 def from_rows(rows: list[dict[str, Any]]) -> tuple[Metric, ...]:
@@ -229,7 +302,13 @@ def choose(
             f"esse domínio.",
         )
 
-    desconhecidos = sorted(set(parameters) - metric.accepted)
+    # `null` e string vazia são "não filtre por isto", e é assim que o modelo
+    # escreve isso: perguntado por um total do mês, ele manda `unit: null`.
+    # Tratar isso como valor inválido recusaria a pergunta certa — e foi o que
+    # a primeira execução contra o banco de verdade fez, cinco vezes seguidas.
+    informados = {nome: valor for nome, valor in parameters.items() if valor not in (None, "")}
+
+    desconhecidos = sorted(set(informados) - metric.accepted)
     if desconhecidos:
         return Refusal(
             "parametro_desconhecido",
@@ -237,7 +316,7 @@ def choose(
             f"{', '.join(sorted(metric.accepted))}.",
         )
 
-    faltando = [f for f in REQUIRED if f in metric.filters and parameters.get(f) in (None, "")]
+    faltando = [f for f in REQUIRED if f in metric.filters and f not in informados]
     if faltando:
         return Refusal(
             "filtro_ausente",
@@ -245,7 +324,19 @@ def choose(
             f"histórico inteiro, e um número sem período não responde nada.",
         )
 
-    return Choice(metric=metric, parameters=dict(parameters))
+    convertidos: dict[str, Any] = {}
+    for nome, valor in informados.items():
+        try:
+            convertidos[nome] = _coerce(nome, valor)
+        except (ValueError, TypeError, AttributeError):
+            return Refusal(
+                "valor_invalido",
+                f"Não reconheci {valor!r} como {_TYPE_NAMES[TYPES[nome]]} em {nome}. "
+                f"Se você quis dizer um nome, eu preciso do identificador — pergunte sem esse "
+                f"filtro e eu respondo pelo que o seu acesso alcança.",
+            )
+
+    return Choice(metric=metric, parameters=convertidos)
 
 
 # ---------------------------------------------------------------------------
@@ -319,3 +410,22 @@ def build(choice: Choice, *, limit: int = MAX_ROWS) -> Query:
     return Query(
         sql=f"select * from public.{metric.target}{onde} limit {int(limit)}", parameters=valores
     )
+
+
+def effective(choice: Choice) -> tuple[dict[str, Any], tuple[str, ...]]:
+    """O que de fato filtra a consulta, e o que o alvo não teve onde ligar.
+
+    `build` descarta em silêncio o parâmetro cujo binding não tem destino, e a
+    razão está lá: é limitação declarada do alvo, e recusar transformaria uma
+    limitação conhecida em erro na cara de quem perguntou. Silêncio no SQL, no
+    entanto, não pode virar silêncio na resposta — na primeira execução real o
+    modelo mandou `unit` para `ranking_by_unit`, o mapa descartou (a métrica
+    *ordena* unidades), e o modelo respondeu "com filtro da unidade Shopping
+    Norte". O número estava certo e a frase em cima dele, não.
+
+    Então quem monta a resposta recebe as duas listas, e diz a verdade sobre as
+    duas.
+    """
+    aplicados = dict(build(choice).parameters)
+    ignorados = tuple(sorted(set(choice.parameters) - set(aplicados)))
+    return aplicados, ignorados
