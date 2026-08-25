@@ -12,10 +12,18 @@ supervisor see one unit. The filter is not written here; there is nothing here
 to forget.
 
 What the monitor can honestly claim is narrower than it looks, and the shape of
-the answer says so. Punches are not mirrored into `app`: they stay in the source
-schema, which is never exposed. So a person with no indication is a person the
-last reading found nothing about — not a person who is present. The screen
-carries the age of that reading beside every count.
+the answer says so. A person with no indication is a person the last detection
+found nothing about — not a person who is present. The screen carries the age of
+that reading beside every count.
+
+The punch counts are the one thing here that cannot run under `user_scope`:
+`app.batida_marcacao` keys the person by a uuid of the mirror, and `secullum` is
+revoked from `authenticated` at the schema level. So the ids of who punched are
+resolved first, under `tenant_scope`, and then handed to the roster statement as
+a plain array — which is counted *inside* the `user_scope` query, against rows
+the policies already chose. An id the caller may not see matches no countable
+row, so the array cannot widen the answer; and `util.can_see_employee` is still
+written in exactly one place, which is the policy.
 """
 
 from __future__ import annotations
@@ -26,7 +34,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, Query
 
-from operax.core.tenant import user_scope
+from operax.core.tenant import tenant_scope, user_scope
+from operax.motor.marcacao import PUNCH_READING_SQL, PUNCHED_EMPLOYEES_SQL
 from server.deps import CurrentTenant
 from server.models import DailyMonitor, MonitorRow, MonitorUnitRow, Severity
 
@@ -78,7 +87,8 @@ _SEVERITY_ORDER: dict[Severity, int] = {"critical": 0, "attention": 1, "watch": 
 # stops disappearing from the list.
 _UNITS_SQL = """
     with roster as (
-        select c.id as employee_id, w.day_type, c.unit_id, u.name as unit_name
+        select c.id as employee_id, w.day_type, c.unit_id, u.name as unit_name,
+               c.id = any (%(punched)s::uuid[]) as punched
         from app.employee c
         left join app.unit u on u.id = c.unit_id
         left join app.expected_workday w
@@ -104,6 +114,8 @@ _UNITS_SQL = """
            count(*) filter (
                where r.day_type = 'work' and i.employee_id is null
            ) as clear,
+           count(*) filter (where r.day_type = 'work' and r.punched)     as with_punch,
+           count(*) filter (where r.day_type = 'work' and not r.punched) as without_punch,
            count(*) filter (where r.day_type = 'vacation')     as on_vacation,
            count(*) filter (where r.day_type = 'leave_period') as on_leave,
            count(*) filter (
@@ -163,7 +175,17 @@ async def daily_monitor(
     unidade: Annotated[UUID | None, Query(description="Recorte de unidade")] = None,
 ) -> DailyMonitor:
     """The situation of one day, by unit and by person."""
-    params = {"dia": dia, "unit_id": unidade}
+    async with tenant_scope(tenant) as bound:
+        await bound.execute(PUNCH_READING_SQL, {})
+        reading = await bound.fetchone()
+        readable = bool(reading and reading["mirror_present"])
+
+        punched: list[UUID] = []
+        if readable:
+            await bound.execute(PUNCHED_EMPLOYEES_SQL, {"dia": dia})
+            punched = [row["employee_id"] for row in await bound.fetchall()]
+
+    params = {"dia": dia, "unit_id": unidade, "punched": punched}
 
     async with user_scope(tenant) as scope:
         await scope.execute(_UNITS_SQL, params)
@@ -184,6 +206,9 @@ async def daily_monitor(
         scheduled=sum(unit.scheduled for unit in units),
         with_indication=sum(unit.with_indication for unit in units),
         clear=sum(unit.clear for unit in units),
+        with_punch=sum(unit.with_punch for unit in units),
+        without_punch=sum(unit.without_punch for unit in units),
+        punches_read_at=reading["read_at"] if readable else None,
         on_vacation=sum(unit.on_vacation for unit in units),
         on_leave=sum(unit.on_leave for unit in units),
         day_off=sum(unit.day_off for unit in units),

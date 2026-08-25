@@ -11,6 +11,9 @@ function monitor(overrides: Partial<DailyMonitor> = {}): DailyMonitor {
     scheduled: 25,
     with_indication: 4,
     clear: 21,
+    with_punch: 22,
+    without_punch: 3,
+    punches_read_at: "2026-08-25T12:15:00Z",
     on_vacation: 3,
     on_leave: 1,
     day_off: 7,
@@ -55,9 +58,9 @@ describe("RosterBand", () => {
   });
 
   it("não chama nada de presença", () => {
-    // Marcação do dia vive numa tabela de ingestão fora deste repositório, e um
-    // cartão "presentes" alimentado por "escalado e sem indício" seria a única
-    // mentira desta tela.
+    // Marcação é registro; presença é fato. Um cartão "presentes" alimentado
+    // por "escalado e sem indício" seria a única mentira desta tela — e mesmo
+    // com a marcação lida, afirmar presença continua sendo a decisão A12.
     const { container } = render(<RosterBand monitor={monitor()} />);
 
     expect(container.textContent).not.toMatch(/presente|ausente/i);
@@ -73,6 +76,8 @@ describe("RosterBand", () => {
           on_leave: 0,
           day_off: 0,
           unrostered: 0,
+          with_punch: 0,
+          without_punch: 0,
         })}
       />,
     );

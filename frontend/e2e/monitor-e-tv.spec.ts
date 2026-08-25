@@ -76,10 +76,40 @@ test("o quadro do dia mostra o efetivo e quem está fora dele", async ({
     await expect(page.getByText(rotulo, { exact: true })).toBeVisible();
   }
 
-  // E nada aqui se chama presença: a marcação do dia vive numa tabela de
-  // ingestão que este repositório não declara.
+  // E nada aqui se chama presença: marcação é registro, presença é fato, e
+  // afirmar o segundo a partir do primeiro é a decisão A12, aberta com o dono.
   await expect(page.getByText(/^Presentes$/)).toHaveCount(0);
   await expect(page.getByText(/^Ausentes$/)).toHaveCount(0);
+});
+
+test("a contagem de marcação nunca aparece sem a hora da leitura", async ({
+  page,
+}) => {
+  await signIn(
+    page,
+    "owner@fastpark.dev",
+    "/dashboard/monitor",
+    "Monitor diário",
+  );
+
+  const cartao = page.getByText("Marcações", { exact: false }).first();
+  await expect(cartao).toBeVisible();
+
+  // O banco de desenvolvimento não tem o espelho, então este é o estado sem
+  // leitura — e ele mostra a falta em vez de dois zeros. As duas imagens são
+  // idênticas e significam o oposto uma da outra.
+  const semLeitura = page.getByText(/Nenhuma leitura de marcação concluída/);
+  const comLeitura = page.getByText(
+    /Com marcação até a leitura de \d{2}:\d{2}/,
+  );
+
+  expect(
+    (await semLeitura.count()) + (await comLeitura.count()),
+  ).toBeGreaterThan(0);
+
+  // Seja qual for o estado, o número solto sem a hora ao lado não existe.
+  await expect(page.getByText(/^Com marcação$/)).toHaveCount(0);
+  await expect(page.getByText(/^Sem marcação$/)).toHaveCount(0);
 });
 
 test("o dia do monitor troca pelo link e volta na URL", async ({ page }) => {

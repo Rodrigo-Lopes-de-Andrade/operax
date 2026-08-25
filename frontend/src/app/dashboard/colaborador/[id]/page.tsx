@@ -159,7 +159,11 @@ export default async function ColaboradorPage({
         </Card>
       </div>
 
-      <WorkdayHistory workdays={workdays} />
+      <WorkdayHistory
+        workdays={workdays}
+        punches={detail.punches}
+        readAt={detail.punches_read_at}
+      />
 
       <Card>
         <CardHeader

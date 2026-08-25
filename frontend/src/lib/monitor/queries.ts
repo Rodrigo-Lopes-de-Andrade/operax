@@ -29,6 +29,9 @@ export type MonitorUnitRow = {
   scheduled: number;
   with_indication: number;
   clear: number;
+  /** Escalados com marcação até a leitura. Nunca "presentes" — ver `DailyMonitor`. */
+  with_punch: number;
+  without_punch: number;
   on_vacation: number;
   on_leave: number;
   day_off: number;
@@ -58,12 +61,26 @@ export type MonitorRow = {
   detected_at: string;
 };
 
+/**
+ * `with_punch` e `without_punch` são a segunda partição dos escalados, e não são
+ * "presentes" e "ausentes": a conta é verdadeira em `punches_read_at`, nunca
+ * agora, e quem bateu um minuto depois daquela leitura está em `without_punch`.
+ * Afirmar presença é a decisão A12 da auditoria, aberta com o dono.
+ *
+ * `punches_read_at` null = não há leitura de que falar (nunca houve uma, ou o
+ * espelho não está neste banco). Os dois números então **não significam nada** e
+ * não podem ser mostrados — eles não são zerados, porque zerá-los quebraria
+ * `with_punch + without_punch = scheduled`. Quem exibe checa `punches_read_at`.
+ */
 export type DailyMonitor = {
   day: string;
   active: number;
   scheduled: number;
   with_indication: number;
   clear: number;
+  with_punch: number;
+  without_punch: number;
+  punches_read_at: string | null;
   on_vacation: number;
   on_leave: number;
   day_off: number;

@@ -32,13 +32,14 @@ plano B. Agora é caminho crítico da Fase 3.
 
 ## 4.3 Dashboard de gestão de ponto
 
-O escopo lista 18 indicadores como mínimo. Cobertos: 14. Faltam 4.
+O escopo lista 18 indicadores como mínimo. Cobertos: 14 + 2 com o rótulo que o
+dado sustenta. Faltam 2.
 
 | # | Indicador | Status | Onde está / o que falta |
 |---|---|---|---|
 | 1 | Total de colaboradores ativos | ✅ | `active` no monitor diário — e é ele que revela `unrostered`, ativo sem jornada prevista |
-| 2 | Colaboradores presentes no dia | ❌ 🔒 | A marcação **existe** em `app.batida_marcacao` e `app.employee.secullum_employee_id` liga a ela. O bloqueio é outro: é tabela de ingestão **congelada** pela 11b, nenhuma migration daqui a cria, o banco de dev não a tem, e a policy dela é só `util.has_tenant` |
-| 3 | Colaboradores ausentes | ❌ 🔒 | Idem. O mais próximo honesto que existe é o indício `no_punches`, que **não** é a mesma afirmação e por isso não recebeu o nome |
+| 2 | Colaboradores presentes no dia | ⚠️ | Entregue como **"com marcação até a leitura de HH:MM"** (`with_punch`), lido de `app.batida_marcacao`. O número é o pedido; o rótulo "presentes" é a decisão **A12**, aberta com o dono — ver abaixo |
+| 3 | Colaboradores ausentes | ⚠️ | Idem, como `without_punch`. "Sem marcação até a leitura" e "ausente" não são a mesma frase, e a diferença cai sobre uma pessoa com nome |
 | 4 | Colaboradores em férias | ✅ | `on_vacation` no monitor — de `app.expected_workday.day_type`, que é onde férias é fato do dia (ver `cadastro.py`), não de `app.employee.status` |
 | 5 | Colaboradores afastados | ✅ | `on_leave`, mesma fonte |
 | 6 | Colaboradores com atraso | ✅ | `late_entry` |
@@ -68,9 +69,21 @@ cobertura do motor tem exatamente a mesma aparência. Contra o seed local, hoje,
 os 40 ativos estão todos ali — antes a tela mostrava "0 escalados, 0 fora da
 escala", indistinguível de "todo mundo de folga".
 
-Os indicadores 2 e 3 continuam ❌ e **não** foram aproximados. "Escalado e sem
-indício" já existe na tela com a ressalva escrita ("não é confirmação de
-presença"); rebatizá-lo de "presentes" transformaria a ressalva em mentira.
+Os indicadores 2 e 3 entraram em 25/08 como contagem de **marcação**, não de
+presença. `app.batida_marcacao` é lida através de `operax/motor/marcacao.py`, que
+é o único lugar onde a ponte para o espelho está escrita — o mesmo caminho que
+`regras.py` usa, para que motor e tela nunca discordem sobre quem bateu.
+
+O rótulo é a entrega, tanto quanto o número. "Com marcação até a leitura de
+09:15" é conferível: quem bateu às 09:16 está do outro lado da conta, e a hora ao
+lado explica por quê. "Presentes" apagaria essa hora e viraria uma afirmação
+sobre onde a pessoa estava — que é a **decisão A12**, aberta com o Rodrigo, e o
+tipo de frase que um gestor repassa ao colaborador.
+
+⚠️ **Sem leitura, os dois números não aparecem.** Zero e "ninguém leu a origem"
+são a mesma imagem com significados opostos; a tela mostra a falta da leitura.
+É também o estado do banco de desenvolvimento, que tem `secullum` com zero
+tabelas — nenhuma migration deste repositório cria o espelho.
 
 **Filtros exigidos:** período ✅ · empresa ✅ · unidade ✅ · departamento ✅ ·
 gestor ✅ · colaborador ⚠️ · tipo de ocorrência ⚠️
@@ -95,7 +108,7 @@ fn_recurrence(p_de, p_ate, p_min_dias, p_unit_id)
 |---|---|---|
 | Dados cadastrais, unidade, departamento, gestor | ✅ | `vw_employee` |
 | Jornada contratada | ⚠️ | `expected_workday` é por data; falta o resumo do contrato |
-| **Histórico de marcações** | ❌ | **Lacuna arquitetural**: as marcações vivem em `secullum."Batida"` e `batida_marcacao`, e a regra é que o painel nunca lê `secullum`. Precisa de uma view curada em `app` ou de endpoint no FastAPI |
+| **Histórico de marcações** | ✅ | Coluna "Marcações" no dia a dia do período — endpoint no FastAPI (Caminho 2), como a lacuna previa. A policy autoriza a pessoa primeiro; só então a ponte para o espelho é atravessada, e um 404 nunca chega nela |
 | Histórico de atraso, falta, extra, faltante | ✅ | `vw_deviation_event` |
 | Justificativas apresentadas | ✅ | `app.justification` |
 | **Saldo de horas** | ❌ | Mesma lacuna do 4.3 #11 |
@@ -252,9 +265,9 @@ domínio. O eixo de autorização existe protegendo o vazio.
 **Bloqueiam entrega do escopo contratado (9)**
 
 1. Saldo de horas — aparece em três seções diferentes
-2. ~~KPIs de headcount~~ — **3 dos 5 entregues em 25/08**. Restam presentes e ausentes, que dependem da tabela de ingestão congelada
+2. ~~KPIs de headcount~~ — **os 5 entregues em 25/08**; os dois de marcação com o rótulo da leitura, e não como presença (A12)
 3. ~~Filtro por gestor e por departamento~~ — **entregue em 25/08** (migration 22). Falta a *agregação* por gestor (ranking de equipes)
-4. Histórico de marcações na tela individual
+4. ~~Histórico de marcações na tela individual~~ — **entregue em 25/08**
 5. Catálogo dos 11 relatórios + exportação
 6. Importação do Excel do Domínio, ponta a ponta
 7. Mapa de código de evento de folha → categoria

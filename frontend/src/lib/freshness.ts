@@ -3,9 +3,10 @@ import "server-only";
 import { getServerSupabase } from "@/lib/supabase-server";
 
 /**
- * How old the synced data is. The sync runs every 30 minutes, so a manager
- * looking at the board at 09:05 must not read "nobody is late" out of a picture
- * taken at 08:40.
+ * How old the synced data is. Punches are read every 15 minutes and the rest of
+ * the register every 30 (`docs/DECISAO-CADENCIA-SYNC.md`), so a manager looking
+ * at the board at 09:05 must not read "nobody is late" out of a picture taken at
+ * 08:50.
  *
  * `fn_data_freshness` answers per entity and derives the tenant from the
  * session — it takes no tenant parameter, so there is no way to probe another

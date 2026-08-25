@@ -37,6 +37,9 @@ python3 scripts/96_teste_jornada.py || exit 1
 echo "--- motor de detecção"
 python3 scripts/94_teste_deteccao.py || exit 1
 
+echo "--- ponte da marcação (ingestão -> domínio)"
+python3 scripts/89_teste_marcacao.py || exit 1
+
 echo "--- ciclo de relatório e fila de alertas"
 python3 scripts/93_teste_ciclo.py || exit 1
 echo "--- teste de regras de alerta e cadência"

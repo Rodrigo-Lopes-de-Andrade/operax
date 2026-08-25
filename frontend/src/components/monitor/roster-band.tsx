@@ -12,11 +12,11 @@ import { formatNumber } from "@/lib/ponto/format";
  * "Ponto por exceção". Mas falha de cobertura do motor tem exatamente a mesma
  * aparência, e a única forma de distinguir as duas é o número existir.
  *
- * "Presentes" e "ausentes" não estão aqui, e a ausência é deliberada. A marcação
- * do dia existe — em `app.batida_marcacao` —, mas ela é tabela de ingestão
- * congelada, ausente do banco de desenvolvimento, e o que a alimenta é decisão
- * em aberto do dono. Enquanto isso, um cartão chamado "presentes" alimentado por
- * "escalado e sem indício" seria a única mentira desta tela.
+ * "Presentes" e "ausentes" não estão aqui, e a ausência continua deliberada
+ * mesmo agora que a marcação do dia é lida. Marcação é registro; presença é
+ * fato, e afirmar o segundo a partir do primeiro é a decisão de produto A12,
+ * aberta com o dono. Os dois números existem no cartão ao lado, com o rótulo
+ * que o dado sustenta — "com marcação até a leitura de HH:MM".
  */
 export function RosterBand({ monitor }: { monitor: DailyMonitor }) {
   const partes = [

@@ -60,6 +60,26 @@ export type WorkdayRow = {
   actual_time: string | null;
 };
 
+/**
+ * Uma coluna de um dia, do jeito que a origem a transpôs.
+ *
+ * `column_index` é a posição no registro-dia, e é ela que emparelha uma entrada
+ * com a saída dela — emparelhar por ordem de horário inventaria um par sempre
+ * que um dos lados faltasse.
+ *
+ * Linha sem `punched_at` não é ruído: ou `status_label` explica ("Férias"), ou
+ * `expected_time` diz que uma marcação era esperada ali e não chegou.
+ */
+export type PunchRow = {
+  reference_date: string;
+  column_type: string;
+  column_index: number;
+  punched_at: string | null;
+  status_label: string | null;
+  expected_time: string | null;
+  disregarded: boolean;
+};
+
 export type JustificationRow = {
   reference_date: string;
   text: string;
@@ -92,6 +112,9 @@ export type EmployeeDetail = {
   indicators: DeviationIndicators;
   by_type: DeviationTypeCount[];
   workdays: WorkdayRow[];
+  punches: PunchRow[];
+  /** Null quando nunca houve leitura concluída — aí a lista vazia não afirma nada. */
+  punches_read_at: string | null;
   justifications: JustificationRow[];
   compensation: CompensationBand[] | null;
   documents: EmployeeDocument[] | null;

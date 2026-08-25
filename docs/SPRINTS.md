@@ -142,28 +142,30 @@ folga". As seis pessoas da administração da FastPark estão nesse estado de
 propósito, e falha de cobertura do motor tem exatamente a mesma aparência: contar
 é o que separa as duas.
 
-**Os indicadores 2 e 3 não foram entregues, e não foram aproximados.** A
-primeira versão desta nota dizia que a marcação do dia era inalcançável. **Está
-errado, e a correção importa:** `app.batida_marcacao` existe, o `make db-test` a
-enxerga, e `app.employee.secullum_employee_id` liga a ela. O bloqueio é outro, e
-é de decisão, não de dado:
+**Os indicadores 2 e 3 entraram em 25/08 — com o rótulo que o dado sustenta, e
+não com o nome que o escopo usa.** A migration 24 trouxe as quatro tabelas de
+ingestão para as migrations, e `operax/motor/marcacao.py` passou a ser o único
+lugar onde a ponte para o espelho está escrita: a mesma que `regras.py` atravessa,
+para que motor e tela nunca discordem sobre quem bateu.
 
-- é uma das **quatro tabelas de ingestão congeladas** pela migration 11b. Nenhuma
-  migration deste repositório a cria — ela chega pelo `scripts/_baseline.sql`, um
-  dump de produção — e o que fazer com ela é decisão em aberto do dono
-  (`PLANO-RECONCILIACAO-NUVEM.md` §5);
-- o **banco de desenvolvimento não a tem** (foi criado sem o baseline), então
-  nada apoiado nela roda localmente nem entra no E2E, e a tela quebraria em dev;
-- a policy dela é `util.has_tenant` sozinha, e não o `util.can_see_employee`
-  que guarda as tabelas de domínio.
+O que a tela diz é **"com marcação / sem marcação até a leitura de HH:MM"**, e a
+hora faz parte da entrega tanto quanto o número. Quem bateu um minuto depois
+daquela leitura está do outro lado da conta; sem a hora ao lado, o cartão
+afirmaria que essa pessoa não bateu ponto. "Presentes" apagaria a hora e viraria
+uma afirmação sobre onde a pessoa estava — que é a **decisão de produto A12**,
+aberta com o Rodrigo, e o tipo de frase que um gestor repassa ao colaborador.
 
-Nada disso torna o indicador impossível. Torna-o uma decisão sobre as tabelas de
-ingestão em vez de uma consulta. "Escalado e sem indício" já está na tela com a
-ressalva escrita; rebatizá-lo de "presentes" transformaria a ressalva em mentira.
+Duas coisas continuam verdadeiras e ficam escritas:
 
-Destravar os dois é o mesmo trabalho que destrava outra coisa: **baixar as Edge
-Functions e trazer as quatro tabelas de ingestão para as migrations** — com isso
-o banco de dev passa a tê-las e o indicador vira uma consulta.
+- a policy dessas tabelas é `util.has_tenant` sozinha, e não o
+  `util.can_see_employee` que guarda as de domínio. Por isso a marcação **não** é
+  lida como o usuário: quem autoriza é a consulta de domínio que vem antes, e a
+  ponte só é atravessada depois — com um id que a policy já devolveu;
+- **nenhuma migration deste repositório cria o espelho.** A 03 endurece as
+  tabelas `secullum` que encontrar, e não encontrar nenhuma é desfecho válido: é
+  o estado do banco de desenvolvimento. Quando o espelho não está lá, a tela
+  mostra a falta da leitura em vez de dois zeros — as duas imagens são idênticas
+  e significam o oposto uma da outra.
 
 ---
 

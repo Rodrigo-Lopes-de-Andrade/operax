@@ -132,6 +132,32 @@ class OccupationalExamRow(BaseModel):
     result: str | None = None
 
 
+class PunchRow(BaseModel):
+    """One column of one day, exactly as the source transposed it.
+
+    The source records a day as a row of up to five `Entrada`/`Saida` pairs, and
+    ingestion turns each column into a line here. `column_index` is that
+    position, kept because it is what pairs an entry with its exit — pairing by
+    time order would invent a pair whenever one side is missing.
+
+    A line with no `punched_at` is not noise. Either `status_label` explains it
+    ("Férias", "Atestado") or `expected_time` says a punch was expected there and
+    never arrived, which is the line that most often needs a person.
+
+    `disregarded` is a punch somebody discarded at the source. It is shown, and
+    it does not count: the engine ignores it, and a screen that counted it would
+    contradict the indication beside it.
+    """
+
+    reference_date: date
+    column_type: str
+    column_index: int
+    punched_at: time | None = None
+    status_label: str | None = None
+    expected_time: time | None = None
+    disregarded: bool
+
+
 class EmployeeDetail(BaseModel):
     """Individual consultation.
 
@@ -145,6 +171,11 @@ class EmployeeDetail(BaseModel):
     indicators: DeviationIndicators
     by_type: list[DeviationTypeCount]
     workdays: list[WorkdayRow]
+    #: As marcações do período, do jeito que chegaram da origem. Vazia também
+    #: quando a leitura nunca aconteceu — a tela distingue as duas pela data da
+    #: última leitura, não por esta lista.
+    punches: list[PunchRow]
+    punches_read_at: datetime | None = None
     justifications: list[JustificationRow]
     compensation: list[CompensationBand] | None = None
     documents: list[EmployeeDocument] | None = None
@@ -165,6 +196,11 @@ class MonitorUnitRow(BaseModel):
     `scheduled + on_vacation + on_leave + day_off + unrostered = active`. That
     identity is the reason `unrostered` exists — without it the difference
     between the headcount and the roster is a number nobody can see.
+
+    `with_punch + without_punch = scheduled`, over the same rows as
+    `with_indication + clear`. Two partitions of one population, answering two
+    different questions: what the engine found, and what the last reading of the
+    source contains.
     """
 
     unit_id: UUID | None = None
@@ -173,6 +209,10 @@ class MonitorUnitRow(BaseModel):
     scheduled: int
     with_indication: int
     clear: int
+    #: Escalados com ao menos uma marcação até a última leitura. Nunca "presentes":
+    #: ver `DailyMonitor`.
+    with_punch: int
+    without_punch: int
     on_vacation: int
     on_leave: int
     day_off: int
@@ -212,34 +252,31 @@ class MonitorRow(BaseModel):
 class DailyMonitor(BaseModel):
     """The situation of one day, by unit.
 
-    What this can and cannot say is worth stating once. The monitor reports what
-    the **engine** found, never who walked through the door: the punches of the
-    day reach `app.batida_marcacao`, which is ingestion and not domain, and
-    nothing on this screen reads it. "Sem indício" therefore means "the last reading
-    found nothing", never "present"; the age of that reading is on the screen
-    beside it, permanently, because a manager reading a 08:40 picture at 09:05
-    would otherwise conclude that nobody is late.
+    What this can and cannot say is worth stating once. `with_indication` and
+    `clear` report what the **engine** found, so "sem indício" means "the last
+    detection found nothing", never "present"; the age of that reading is on the
+    screen beside it, permanently, because a manager reading a 08:40 picture at
+    09:05 would otherwise conclude that nobody is late.
 
-    Two indicators of the contracted scope are deliberately absent here, and
-    naming them is better than approximating them. "Colaboradores presentes" and
-    "ausentes" need the punches of the day. Those punches do exist in
-    `app.batida_marcacao`, and `app.employee.secullum_employee_id` joins to it —
-    the obstacle is not that the data is unreachable, so it is worth writing down
-    what it actually is:
+    `with_punch` and `without_punch` are the punches of the day, read from
+    `app.batida_marcacao` through `operax.motor.marcacao`. They are **not**
+    "presentes" and "ausentes", and the difference is not pedantry:
 
-    - the table is one of the four ingestion tables migration 11b **froze**. No
-      migration in this repository creates it; it arrives from
-      `scripts/_baseline.sql`, a dump of production, and its future is an open
-      owner decision (`docs/PLANO-RECONCILIACAO-NUVEM.md` §5);
-    - the **development database does not have it** — it was built without the
-      baseline — so nothing built on it can be exercised locally or covered by
-      the E2E suite, and this screen would fail on a missing relation in dev;
-    - its policy is `util.has_tenant` alone, not the unit-scoped
-      `util.can_see_employee` that guards every domain table here.
+    - the count is true as of `punches_read_at`, never as of now. Somebody who
+      clocked in one minute after that reading is in `without_punch`, and the
+      screen must carry the instant beside the number or it states a falsehood
+      about a named person;
+    - a punch proves a record, not a body. Declaring presence from it is
+      decision A12 of the audit, open with the owner, and it is a product
+      decision rather than a query.
 
-    None of that makes the indicator impossible. It makes it a decision about the
-    ingestion tables rather than a query, and that decision is not this screen's
-    to take.
+    `punches_read_at` is null when there is no reading to speak of — the tenant
+    never completed one, or the mirror is not in this database at all. **The two
+    counts are then meaningless and must not be shown.** They are not zeroed:
+    zeroing them would break `with_punch + without_punch = scheduled`, and an
+    identity that holds only sometimes is worse than one number to check. A
+    consumer gates on `punches_read_at`, which is why it is here and not looked
+    up separately.
     """
 
     day: date
@@ -247,6 +284,11 @@ class DailyMonitor(BaseModel):
     scheduled: int
     with_indication: int
     clear: int
+    with_punch: int
+    without_punch: int
+    #: Instante da última leitura de `Batida` concluída. Null = nunca houve
+    #: leitura, e aí os dois números acima não afirmam nada.
+    punches_read_at: datetime | None = None
     on_vacation: int
     on_leave: int
     day_off: int

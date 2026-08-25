@@ -24,6 +24,7 @@ from server.routers import monitor
 
 DAY = date(2026, 8, 22)
 DETECTED_AT = datetime(2026, 8, 22, 9, 12, tzinfo=UTC)
+READ_AT = datetime(2026, 8, 22, 9, 15, tzinfo=UTC)
 UNIT_ID = UUID("33333333-3333-4333-8333-333333333333")
 
 
@@ -35,6 +36,8 @@ def unit_row(**overrides: Any) -> dict[str, Any]:
         "scheduled": 20,
         "with_indication": 3,
         "clear": 17,
+        "with_punch": 18,
+        "without_punch": 2,
         "on_vacation": 2,
         "on_leave": 1,
         "day_off": 4,
@@ -66,8 +69,13 @@ def indication(deviation_type: str, minutes: int, name: str, **overrides: Any) -
 class StubScope:
     """Hands back a queued batch per `fetchall`, and records what was asked."""
 
-    def __init__(self, batches: list[list[dict[str, Any]]]) -> None:
+    def __init__(
+        self,
+        batches: list[list[dict[str, Any]]],
+        singles: list[dict[str, Any] | None] | None = None,
+    ) -> None:
         self._batches = list(batches)
+        self._singles = list(singles or [])
         self.statements: list[str] = []
         self.params: list[Any] = []
 
@@ -77,6 +85,9 @@ class StubScope:
 
     async def fetchall(self) -> list[dict[str, Any]]:
         return self._batches.pop(0)
+
+    async def fetchone(self) -> dict[str, Any] | None:
+        return self._singles.pop(0)
 
 
 class StubScopeContext:
@@ -92,12 +103,29 @@ class StubScopeContext:
 
 @pytest.fixture
 def answer(monkeypatch: pytest.MonkeyPatch):
-    """Queues what the database would return, and exposes the scope it used."""
+    """Queues what each of the two scopes would return, and exposes both.
 
-    def install(units: list[dict[str, Any]], rows: list[dict[str, Any]]) -> StubScope:
+    There are two because the punches force it: `secullum` is unreachable to
+    `authenticated`, so who punched is resolved as `service_role` and only then
+    counted inside the statement the policies filter. The stub keeps them apart
+    so a test can assert *which* scope was asked what.
+    """
+
+    def install(
+        units: list[dict[str, Any]],
+        rows: list[dict[str, Any]],
+        punched: list[UUID] | None = None,
+        read_at: datetime | None = READ_AT,
+        mirror_present: bool = True,
+    ) -> tuple[StubScope, StubScope]:
+        bound = StubScope(
+            [[{"employee_id": each} for each in (punched or [])]],
+            [{"read_at": read_at, "mirror_present": mirror_present}],
+        )
         scope = StubScope([units, rows])
+        monkeypatch.setattr(monitor, "tenant_scope", lambda _context: StubScopeContext(bound))
         monkeypatch.setattr(monitor, "user_scope", lambda _context: StubScopeContext(scope))
-        return scope
+        return scope, bound
 
     return install
 
@@ -329,7 +357,7 @@ def test_the_unit_cut_reaches_both_queries(client: TestClient, issue_token, answ
     """A cut honoured by one query and forgotten by the other reads as a bug in
     the numbers: the unit table would count one unit and the list would show
     every unit under it."""
-    scope = answer([unit_row()], [])
+    scope, _ = answer([unit_row()], [])
 
     client.get(
         "/monitor/diario",
@@ -356,3 +384,142 @@ def test_no_ranking_lives_in_the_sql(client: TestClient, issue_token, answer):
 
 def test_the_monitor_refuses_an_anonymous_caller(client: TestClient):
     assert client.get("/monitor/diario", params={"dia": DAY.isoformat()}).status_code == 401
+
+
+def test_com_marcacao_e_sem_marcacao_particionam_os_escalados(
+    client: TestClient, issue_token, answer
+):
+    """A segunda partição da mesma população — e ela não é a primeira.
+
+    `com indício` e `sem indício` respondem o que o motor achou. `com marcação`
+    e `sem marcação` respondem o que a última leitura da origem contém, e as
+    duas coisas divergem o tempo todo: alguém pode ter batido e ainda assim ter
+    indício de atraso.
+    """
+    answer(
+        [
+            unit_row(scheduled=20, with_punch=18, without_punch=2),
+            unit_row(
+                unit_id=None,
+                unit_name=None,
+                active=9,
+                scheduled=5,
+                with_indication=1,
+                clear=4,
+                with_punch=3,
+                without_punch=2,
+                on_vacation=1,
+                on_leave=0,
+                day_off=3,
+                unrostered=0,
+                off_roster=4,
+            ),
+        ],
+        [],
+    )
+
+    body = client.get(
+        "/monitor/diario",
+        params={"dia": DAY.isoformat()},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    ).json()
+
+    assert body["with_punch"] + body["without_punch"] == body["scheduled"] == 25
+    assert (body["with_punch"], body["without_punch"]) == (21, 4)
+
+
+def test_quem_bateu_e_contado_dentro_da_consulta_do_usuario(
+    client: TestClient, issue_token, answer
+):
+    """Os ids resolvidos como `service_role` entram como PARÂMETRO, não como conta.
+
+    É o que mantém o recorte de unidade onde ele já está — na policy. Se a
+    contagem fosse feita em Python sobre o conjunto devolvido pelo
+    `service_role`, um supervisor de uma unidade passaria a contar gente de
+    outra, e `util.can_see_employee` estaria escrito duas vezes.
+    """
+    bateram = [uuid4(), uuid4()]
+    scope, bound = answer([unit_row()], [], punched=bateram)
+
+    client.get(
+        "/monitor/diario",
+        params={"dia": DAY.isoformat()},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    )
+
+    assert scope.params[0]["punched"] == bateram
+    assert "any (%(punched)s::uuid[])" in monitor._UNITS_SQL
+    # E o lado que alcança o espelho nunca é o do usuário.
+    assert not any("app.batida_marcacao" in stmt for stmt in scope.statements)
+    assert any('join secullum."Funcionario" f' in stmt for stmt in bound.statements)
+
+
+def test_sem_nenhuma_leitura_concluida_os_numeros_nao_afirmam_nada(
+    client: TestClient, issue_token, answer
+):
+    """Zero e "nunca leram" não podem chegar iguais à tela.
+
+    Sem `punches_read_at`, "sem marcação: 20" significaria que vinte pessoas não
+    bateram ponto. O que aconteceu foi que ninguém leu a origem — e é a tela que
+    decide o que fazer com isso, mas só se o dado disser qual dos dois é.
+    """
+    answer([unit_row(with_punch=0, without_punch=20)], [], read_at=None)
+
+    body = client.get(
+        "/monitor/diario",
+        params={"dia": DAY.isoformat()},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    ).json()
+
+    assert body["punches_read_at"] is None
+    assert body["without_punch"] == 20
+
+
+def test_a_leitura_das_marcacoes_viaja_junto_da_contagem(client: TestClient, issue_token, answer):
+    answer([unit_row()], [])
+
+    body = client.get(
+        "/monitor/diario",
+        params={"dia": DAY.isoformat()},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    ).json()
+
+    assert body["punches_read_at"] == READ_AT.isoformat().replace("+00:00", "Z")
+
+
+def test_marcacao_desconsiderada_nao_conta_como_marcacao():
+    """O motor a ignora, então a tela não pode contá-la.
+
+    Contar aqui e não lá poria "com marcação" ao lado de `no_punches` sobre a
+    mesma pessoa, no mesmo cartão.
+    """
+    from operax.motor import marcacao
+
+    assert "not m.desconsiderada" in marcacao.PUNCHED_EMPLOYEES_SQL
+    assert "m.hora is not null" in marcacao.PUNCHED_EMPLOYEES_SQL
+
+
+def test_sem_o_espelho_no_banco_a_tela_responde_em_vez_de_quebrar(
+    client: TestClient, issue_token, answer
+):
+    """`secullum."Funcionario"` não é criado por migration nenhuma deste repo.
+
+    Migration 03 endurece o espelho que encontrar, e não encontrar nada é um
+    desfecho válido: é o estado do banco de desenvolvimento e o de qualquer
+    projeto montado só com estas migrations. Nomear uma relação inexistente
+    falha no parse — nenhum `case` dentro do SQL salva —, então a consulta não
+    pode nem ser emitida. A tela precisa continuar respondendo o resto do dia.
+    """
+    _, bound = answer([unit_row(with_punch=0, without_punch=20)], [], mirror_present=False)
+
+    response = client.get(
+        "/monitor/diario",
+        params={"dia": DAY.isoformat()},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    )
+
+    assert response.status_code == 200
+    # Nem a leitura, porque um instante ao lado de dois zeros afirmaria que
+    # ninguém bateu quando o que houve foi não haver o que ler.
+    assert response.json()["punches_read_at"] is None
+    assert not any("from app.batida_marcacao m" in stmt for stmt in bound.statements)

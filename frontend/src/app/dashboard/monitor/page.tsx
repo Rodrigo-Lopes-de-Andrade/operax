@@ -4,6 +4,7 @@ import type { Metadata } from "next";
 import { IndicationGroups } from "@/components/monitor/indication-groups";
 import { MonitorBar } from "@/components/monitor/monitor-bar";
 import { PresenceGrid } from "@/components/monitor/presence-grid";
+import { PunchReading } from "@/components/monitor/punch-reading";
 import { RosterBand } from "@/components/monitor/roster-band";
 import { UnitPresence } from "@/components/monitor/unit-presence";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -47,6 +48,7 @@ export default async function MonitorDiarioPage({
       {screen.monitor ? (
         <>
           <RosterBand monitor={screen.monitor} />
+          <PunchReading monitor={screen.monitor} />
           <PresenceGrid monitor={screen.monitor} />
           <UnitPresence screen={screen} filters={filters} />
           <IndicationGroups monitor={screen.monitor} />

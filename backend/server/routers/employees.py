@@ -12,6 +12,14 @@ the policies call. The gate is needed on top of RLS for one reason: with RLS
 alone, "you may not see salaries" and "this person has no salary on record" are
 both an empty list, and the screen has to tell them apart — one renders nothing,
 the other renders an empty state.
+
+The punches are the single read here that leaves `user_scope`, and the order is
+what makes that safe. `app.batida_marcacao` keys the person by a uuid of the
+mirror, and `secullum` is revoked from `authenticated` at the schema level, so
+the bridge cannot run as the user. It runs after the header query has already
+answered: if the policies did not return this person, the request is a 404 and
+the punch query never happens. Authorisation stays in the policy; the second
+scope only fetches, by an id already cleared.
 """
 
 from __future__ import annotations
@@ -22,7 +30,8 @@ from uuid import UUID
 
 from fastapi import APIRouter, HTTPException, Query, status
 
-from operax.core.tenant import user_scope
+from operax.core.tenant import tenant_scope, user_scope
+from operax.motor.marcacao import EMPLOYEE_PUNCHES_SQL, PUNCH_READING_SQL
 from server.deps import CurrentTenant
 from server.models import (
     CompensationBand,
@@ -33,6 +42,7 @@ from server.models import (
     EmployeeSummary,
     JustificationRow,
     OccupationalExamRow,
+    PunchRow,
     WorkdayRow,
 )
 
@@ -208,11 +218,24 @@ async def get_employee(
             await scope.execute(_EXAMS_SQL, {"employee_id": employee_id})
             exams = [OccupationalExamRow(**row) for row in await scope.fetchall()]
 
+    # Only now, and only for a person the policies just returned.
+    async with tenant_scope(tenant) as bound:
+        await bound.execute(PUNCH_READING_SQL, {})
+        reading = await bound.fetchone()
+        readable = bool(reading and reading["mirror_present"])
+
+        punches: list[PunchRow] = []
+        if readable:
+            await bound.execute(EMPLOYEE_PUNCHES_SQL, window)
+            punches = [PunchRow(**row) for row in await bound.fetchall()]
+
     return EmployeeDetail(
         employee=EmployeeSummary(**employee),
         indicators=DeviationIndicators(**indicators) if indicators else _NO_DEVIATION,
         by_type=[DeviationTypeCount(**row) for row in by_type],
         workdays=[WorkdayRow(**row) for row in workdays],
+        punches=punches,
+        punches_read_at=reading["read_at"] if readable else None,
         justifications=[JustificationRow(**row) for row in justifications],
         compensation=compensation,
         documents=documents,
