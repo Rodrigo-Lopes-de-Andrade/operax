@@ -88,10 +88,17 @@ tem sua própria linha de execução: cadastro muda pouco, marcação muda o tem
 | Empresa, Departamento, Horário | diária | completa |
 | Funcionário, Estrutura | diária | completa |
 | Afastamento | diária | 90 dias |
-| Batida | **30 min** (decisão do cliente) | 7 dias retroativos, 1×/dia |
+| Batida | **15 min** (decisão de 24/08) | 7 dias retroativos, 1×/dia |
 
 A releitura retroativa de 7 dias existe porque marcação é corrigida depois do
 fato. Sem ela, correção feita ontem em batida de anteontem nunca chega.
+
+> **Backfill de 7 dias: entregue no código em 25/08, ainda não agendado.**
+> `sync-batidas` aceita `{"scope":"backfill"}` e lê `BACKFILL_WINDOW_DAYS` (7), e
+> a janela incremental virou configuração (`BATIDAS_WINDOW_DAYS`). O que falta
+> para o contrato ser verdadeiro em produção é **uma entrada de pg_cron no
+> projeto da nuvem** chamando a função com esse escopo uma vez por dia, fora de
+> pico — DDL na nuvem, que este repositório não aplica sozinho.
 
 ### Idempotência
 

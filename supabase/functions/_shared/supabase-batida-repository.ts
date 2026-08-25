@@ -16,7 +16,7 @@
 // cabeçalho de supabase/migrations/20260813163000_batidas.sql para o
 // racional completo de cada tabela.
 
-import { getSql } from "./postgres-client.ts";
+import { getSql, type Sql } from "./postgres-client.ts";
 import type {
   BatidaRow,
   BatidaSyncRepository,
@@ -25,12 +25,41 @@ import type {
   FuncionarioLookupRow,
   InsertFonteDadosInput,
   MarcacaoRow,
+  SyncRunRecord,
   UpsertBatidaInput,
   UpsertMarcacaoInput,
 } from "./batida-sync.ts";
 
 export class SupabaseBatidaRepository implements BatidaSyncRepository {
-  private readonly sql = getSql();
+  private readonly sql: Sql;
+
+  /**
+   * `sql` é injetável por um motivo só, e ele é a atomicidade: `transaction`
+   * abre uma transação com `sql.begin` e devolve **outro repositório**,
+   * construído sobre a conexão da transação. É o que permite `runBatidaSync`
+   * escrever a fase inteira sem saber que existe transação — ele só chama
+   * métodos do repositório que recebeu.
+   */
+  constructor(sql: Sql = getSql()) {
+    this.sql = sql;
+  }
+
+  /**
+   * Roda `work` dentro de uma transação. Ou tudo commita, ou nada.
+   *
+   * Sem isto, `upsertBatidas` commitava antes de `listMarcacoesByBatidaIds`
+   * rodar, e uma falha no meio deixava linhas de `Batida` com **zero
+   * marcação**. Esse estado não se lê como "faltou dado": o motor de detecção
+   * o lê como `no_punches` — "o colaborador não bateu ponto naquele dia" — e
+   * emite indício contra uma pessoa que bateu. É o risco 1 do §4b do
+   * `PLANO-RECONCILIACAO-NUVEM.md`, e é o pior dos quatro porque o modo de
+   * falha não é perder dado: é inventar um fato sobre alguém.
+   */
+  transaction<T>(work: (tx: BatidaSyncRepository) => Promise<T>): Promise<T> {
+    return this.sql.begin((txSql) =>
+      work(new SupabaseBatidaRepository(txSql as unknown as Sql))
+    ) as Promise<T>;
+  }
 
   async listFuncionariosBySecullumIds(
     secullumFuncionarioIds: number[],
@@ -294,6 +323,48 @@ export class SupabaseBatidaRepository implements BatidaSyncRepository {
       on conflict (chave) do update set
         valor = excluded.valor,
         atualizado_em = excluded.atualizado_em
+    `;
+  }
+
+  /**
+   * Grava o resultado da execução em `app.sync_run`.
+   *
+   * É o que transforma "o pg_cron entregou o POST" em "a sincronização
+   * funcionou". O agendador registra sucesso por ter feito a chamada HTTP, e um
+   * 500 e um 200 são indistinguíveis do lado dele — então o sinal verdadeiro
+   * tem de ficar numa linha de banco que alguém consegue consultar depois.
+   *
+   * Falha aqui **não derruba a ingestão**: dado gravado vale mais que telemetria
+   * gravada, e um erro ao registrar não pode desfazer batidas que já entraram.
+   * Mas ele é logado alto, porque uma execução sem rastro é exatamente o que o
+   * deadman de frescor procura.
+   */
+  async recordSyncRun(record: SyncRunRecord): Promise<void> {
+    const integration = await this.sql<{ id: string; tenant_id: string }[]>`
+      select id, tenant_id
+      from app.integration
+      where provider = 'secullum' and active
+      order by created_at
+      limit 1
+    `;
+    if (!integration.length) {
+      console.error(
+        "[sync-batidas] app.integration não tem provedor 'secullum' ativo — " +
+          "execução não registrada em app.sync_run, e o deadman de frescor não a verá.",
+      );
+      return;
+    }
+    const { id: integrationId, tenant_id: tenantId } = integration[0];
+    await this.sql`
+      insert into app.sync_run (
+        tenant_id, integration_id, entity, scope, started_at, finished_at,
+        status, records_read, records_written, records_skipped, error
+      ) values (
+        ${tenantId}, ${integrationId}, ${record.entity}, ${record.scope},
+        ${record.startedAt}, ${record.finishedAt}, ${record.status},
+        ${record.recordsRead}, ${record.recordsWritten}, ${record.recordsSkipped},
+        ${record.error}
+      )
     `;
   }
 }

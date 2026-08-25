@@ -193,9 +193,9 @@ Colunas sensíveis aparecem conforme o domínio permitido ao papel.
 Entrada registrada, situação da jornada, intervalo, quem não retornou, quem não
 registrou saída, tempo de atraso, marcação incompleta, presença por unidade.
 
-**Cadência de 30 minutos.** A tela exibe a idade do dado de forma permanente —
-sem isso, um gestor olha às 09:05 um retrato de 08:40 e conclui que ninguém
-atrasou. O alerta correspondente informa o horário observado, não "agora".
+**Cadência de 15 minutos** (`docs/DECISAO-CADENCIA-SYNC.md`; o cadastro segue em
+30). A tela exibe a idade do dado de forma permanente — sem isso, um gestor olha
+às 09:05 um retrato de 08:40 e conclui que ninguém atrasou. O alerta correspondente informa o horário observado, não "agora".
 
 ### F7 — Alertas
 
@@ -300,7 +300,7 @@ encomenda. **Pendente de redação.**
 
 | Risco | Impacto | Mitigação |
 |---|---|---|
-| Rate limit da origem não sustenta 48 execuções/dia | Cadência cai e o monitor diário perde utilidade | Confirmar o limite antes de homologar a cadência de 30 min |
+| Rate limit da origem não sustenta ~96 execuções/dia de batidas + o backfill diário | Cadência cai e o monitor diário perde utilidade | Pendência **reaberta** em 24/08 com o volume real — ver `docs/DECISAO-CADENCIA-SYNC.md` |
 | Escala 12x36 mal representada | Falso positivo em massa, produto desacreditado | Jornada esperada materializada com grau de confiança; modo sombra |
 | Plano de contas de eventos não mapeado | Metade do dashboard financeiro não sai | Curadoria com a contabilidade, dimensionada como atividade de implantação |
 | Provedor de WhatsApp não oficial | Número banido, sem SLA | Camada de abstração; migrar para API oficial antes de escalar |

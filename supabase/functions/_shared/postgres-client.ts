@@ -17,9 +17,17 @@
 
 import postgres from "postgres";
 
-let sql: ReturnType<typeof postgres> | null = null;
+/**
+ * O cliente do driver, ou a conexão de uma transação aberta com `sql.begin`.
+ * As duas satisfazem a mesma interface de *tagged template*, e é isso que
+ * permite um repositório ser construído sobre qualquer uma das duas sem saber
+ * em qual está — ver `SupabaseBatidaRepository.transaction`.
+ */
+export type Sql = ReturnType<typeof postgres>;
 
-export function getSql(): ReturnType<typeof postgres> {
+let sql: Sql | null = null;
+
+export function getSql(): Sql {
   if (sql) return sql;
   const url = Deno.env.get("DATABASE_URL") ?? "";
   if (!url) {

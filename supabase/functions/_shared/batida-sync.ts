@@ -217,8 +217,57 @@ export interface BatidaSyncRepository {
   /** INSERT em lote (nunca upsert — sem diffing item a item, mesmo padrão de "HorarioDescansoFaixaItem"). */
   insertFonteDados(inputs: InsertFonteDadosInput[]): Promise<void>;
 
-  /** `cursor_sincronizacao` — só rastreio/diagnóstico, NUNCA usado para calcular a próxima janela (a janela é sempre fixa: hoje-2..hoje). */
+  /** `cursor_sincronizacao` — só rastreio/diagnóstico, NUNCA usado para calcular a próxima janela. */
   setCursor(chave: string, valor: string): Promise<void>;
+
+  /**
+   * Roda `work` numa transação, com um repositório ligado a ela. Ou tudo
+   * commita, ou nada — ver o comentário em `SupabaseBatidaRepository`.
+   */
+  transaction<T>(work: (tx: BatidaSyncRepository) => Promise<T>): Promise<T>;
+
+  /** Grava o resultado da execução em `app.sync_run`. Nunca derruba a ingestão. */
+  recordSyncRun(record: SyncRunRecord): Promise<void>;
+}
+
+/** As duas palavras que o schema já usa em `app.detection_run.scope` (migration 13). */
+export type SyncScope = "incremental" | "backfill";
+
+/** Uma linha de `app.sync_run`, do jeito que a Edge Function a monta. */
+export interface SyncRunRecord {
+  entity: string;
+  scope: SyncScope;
+  startedAt: string;
+  finishedAt: string;
+  status: "completed" | "failed";
+  recordsRead: number;
+  recordsWritten: number;
+  recordsSkipped: number;
+  error: string | null;
+}
+
+/**
+ * A origem devolveu registros e **nenhum** deles encontrou funcionário local.
+ *
+ * É o risco 3 do §4b: `resolvedItems` vazio com `batidasFetched > 0` significa
+ * correlação quebrada — o cadastro não sincronizou, ou os ids mudaram —, e o
+ * código antigo respondia HTTP 200 `{ok: true}` com zero batidas gravadas. A
+ * sincronização estava parada e o único sinal era um aviso dentro de um JSON que
+ * ninguém lia. Janela genuinamente vazia (a origem devolveu zero) continua sendo
+ * sucesso, e por isso a condição olha `batidasFetched`, não `resolvedItems`.
+ */
+export class BatidaCorrelationBrokenError extends Error {
+  readonly summary: BatidaSyncSummary;
+
+  constructor(summary: BatidaSyncSummary) {
+    super(
+      `Correlação quebrada: ${summary.batidasFetched} registro(s) lido(s) da origem e ` +
+        `nenhum com "Funcionario" local correspondente ` +
+        `(${summary.batidasSkippedMissingFuncionario} pulado(s)). Nada foi gravado.`,
+    );
+    this.name = "BatidaCorrelationBrokenError";
+    this.summary = summary;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -240,6 +289,10 @@ export const consoleBatidaSyncLogger: SyncLogger = {
 };
 
 export interface BatidaSyncSummary {
+  /** Qual passada produziu este resumo — a mesma palavra que `app.sync_run.scope`. */
+  scope: SyncScope;
+  /** Janela efetivamente lida, para o registro de execução dizer o que foi coberto. */
+  windowDays: number;
   batidasFetched: number;
   batidasUpserted: number;
   batidasSkippedMissingFuncionario: number;
@@ -251,8 +304,10 @@ export interface BatidaSyncSummary {
   warnings: SyncWarning[];
 }
 
-function emptySummary(): BatidaSyncSummary {
+function emptySummary(scope: SyncScope, windowDays: number): BatidaSyncSummary {
   return {
+    scope,
+    windowDays,
     batidasFetched: 0,
     batidasUpserted: 0,
     batidasSkippedMissingFuncionario: 0,
@@ -270,8 +325,23 @@ const WARNING_SAMPLE_CAP = 50;
 /** Chave do cursor de rastreio (semeada com `null` pela migration 20260813163000). */
 export const BATIDAS_CURSOR_KEY = "batidas_ultima_data_sincronizada";
 
-/** Tamanho fixo da janela deslizante (dias antes de "hoje"), conforme docs/03-integracao-secullum.md. */
+/**
+ * Padrão da janela deslizante incremental, em dias antes de "hoje".
+ *
+ * Deixou de ser o tamanho fixo e passou a ser só o padrão: a janela é
+ * configuração (`BATIDAS_WINDOW_DAYS` no ambiente da função) e a passada de
+ * backfill usa `BACKFILL_WINDOW_DAYS`. Enquanto era constante, qualquer queda
+ * que passasse de 48 h deixava um buraco de batidas que **nenhum caminho de
+ * código conseguia preencher** — risco 2 do §4b.
+ */
 export const BATIDAS_WINDOW_DAYS = 2;
+
+/**
+ * Janela da passada retroativa diária, em dias. Sete, porque é o que a
+ * `SPEC-TECNICA.md` contrata: correção feita na origem até D-7 tem de virar
+ * revogação do indício já emitido.
+ */
+export const BACKFILL_WINDOW_DAYS = 7;
 
 /** Intervalo documentado de `FonteDados.Tipo` (Original=0..Desconsiderado=3) — fora disso é tolerado, mas logado como valor desconhecido. */
 const DOCUMENTED_TIPO_MAX = 3;
@@ -534,8 +604,9 @@ export async function runBatidaSync(
   logger: SyncLogger = consoleBatidaSyncLogger,
   today: TodayProvider = systemTodayInSaoPaulo,
   windowDays: number = BATIDAS_WINDOW_DAYS,
+  scope: SyncScope = "incremental",
 ): Promise<BatidaSyncSummary> {
-  const summary = emptySummary();
+  const summary = emptySummary(scope, windowDays);
 
   // Aviso com cap por código (ver WARNING_SAMPLE_CAP) — mesma proteção de
   // memória/log de cadastro-sync.ts.
@@ -641,6 +712,9 @@ export async function runBatidaSync(
 
   if (resolvedItems.length === 0) {
     flushSuppressedWarnings();
+    // Janela vazia é sucesso; janela cheia que não correlacionou com ninguém
+    // não é. Ver BatidaCorrelationBrokenError.
+    if (summary.batidasFetched > 0) throw new BatidaCorrelationBrokenError(summary);
     return summary;
   }
 
@@ -689,98 +763,106 @@ export async function runBatidaSync(
     refeicao: parsed.refeicao,
     statusDiaRotulo: parsed.statusDiaRotulo,
   }));
-  const batidaRows = await repo.upsertBatidas(upsertBatidaInputs);
-  summary.batidasUpserted = batidaRows.length;
-  const batidaRowByKey = new Map(batidaRows.map((b) => [`${b.funcionarioId}|${b.data}`, b]));
+  // A fase de escrita inteira numa transação só. São dois pontos de falha
+  // parcial documentados no §4b e eles têm a mesma cura: `upsertBatidas`
+  // commitava antes de `listMarcacoesByBatidaIds`, e `deleteFonteDadosByBatidaIds`
+  // commitava antes de `insertFonteDados`. O primeiro deixava `Batida` com zero
+  // marcação, que o motor lê como "não bateu ponto"; o segundo apagava a
+  // fonte-de-dados e não repunha. Nenhum dos dois é alcançável a partir daqui.
+  await repo.transaction(async (tx) => {
+    const batidaRows = await tx.upsertBatidas(upsertBatidaInputs);
+    summary.batidasUpserted = batidaRows.length;
+    const batidaRowByKey = new Map(batidaRows.map((b) => [`${b.funcionarioId}|${b.data}`, b]));
 
-  // 3) batida_marcacao — substituição integral do dia: upsert das colunas
-  // presentes + DELETE das que deixaram de existir. Todas as "Batida"
-  // tocadas nesta execução (batidaRows) entram no escopo da convergência —
-  // é sempre o registro-dia inteiro, nunca um slot isolado.
-  const touchedBatidaIds = batidaRows.map((b) => b.id);
-  const existingMarcacoes = touchedBatidaIds.length
-    ? await repo.listMarcacoesByBatidaIds(touchedBatidaIds)
-    : [];
+    // 3) batida_marcacao — substituição integral do dia: upsert das colunas
+    // presentes + DELETE das que deixaram de existir. Todas as "Batida"
+    // tocadas nesta execução (batidaRows) entram no escopo da convergência —
+    // é sempre o registro-dia inteiro, nunca um slot isolado.
+    const touchedBatidaIds = batidaRows.map((b) => b.id);
+    const existingMarcacoes = touchedBatidaIds.length
+      ? await tx.listMarcacoesByBatidaIds(touchedBatidaIds)
+      : [];
 
-  const upsertMarcacaoInputs: UpsertMarcacaoInput[] = [];
-  const newMarcacaoKeys = new Set<string>();
-  // Guarda o slot original (com fonteDados/fonteDadosId) por chave — usado
-  // DEPOIS do upsert de batida_marcacao para montar "BatidaFonteDados", que
-  // precisa do uuid gerado de batida_marcacao.
-  const slotByMarcacaoKey = new Map<string, ParsedMarcacaoSlot>();
+    const upsertMarcacaoInputs: UpsertMarcacaoInput[] = [];
+    const newMarcacaoKeys = new Set<string>();
+    // Guarda o slot original (com fonteDados/fonteDadosId) por chave — usado
+    // DEPOIS do upsert de batida_marcacao para montar "BatidaFonteDados", que
+    // precisa do uuid gerado de batida_marcacao.
+    const slotByMarcacaoKey = new Map<string, ParsedMarcacaoSlot>();
 
-  for (const { parsed, funcionarioId } of resolvedItems) {
-    const batidaRow = batidaRowByKey.get(`${funcionarioId}|${parsed.data}`);
-    if (!batidaRow) continue; // defensivo — todo item enviado no lote acima está no mapa de retorno.
-    for (const slot of parsed.slots) {
-      const key = `${batidaRow.id}|${slot.tipoColuna}|${slot.indiceColuna}`;
-      newMarcacaoKeys.add(key);
-      slotByMarcacaoKey.set(key, slot);
-      upsertMarcacaoInputs.push({
-        batidaId: batidaRow.id,
-        funcionarioId,
-        data: parsed.data,
-        tipoColuna: slot.tipoColuna,
-        indiceColuna: slot.indiceColuna,
-        valorBruto: slot.valorBruto,
-        hora: slot.hora,
-        statusRotulo: slot.statusRotulo,
-        memoria: slot.memoria,
-        equipId: slot.equipId,
+    for (const { parsed, funcionarioId } of resolvedItems) {
+      const batidaRow = batidaRowByKey.get(`${funcionarioId}|${parsed.data}`);
+      if (!batidaRow) continue; // defensivo — todo item enviado no lote acima está no mapa de retorno.
+      for (const slot of parsed.slots) {
+        const key = `${batidaRow.id}|${slot.tipoColuna}|${slot.indiceColuna}`;
+        newMarcacaoKeys.add(key);
+        slotByMarcacaoKey.set(key, slot);
+        upsertMarcacaoInputs.push({
+          batidaId: batidaRow.id,
+          funcionarioId,
+          data: parsed.data,
+          tipoColuna: slot.tipoColuna,
+          indiceColuna: slot.indiceColuna,
+          valorBruto: slot.valorBruto,
+          hora: slot.hora,
+          statusRotulo: slot.statusRotulo,
+          memoria: slot.memoria,
+          equipId: slot.equipId,
+          fonteDadosId: slot.fonteDadosId,
+          desconsiderada: slot.desconsiderada,
+        });
+      }
+    }
+
+    const marcacaoRows = upsertMarcacaoInputs.length
+      ? await tx.upsertMarcacoes(upsertMarcacaoInputs)
+      : [];
+    summary.marcacoesUpserted = marcacaoRows.length;
+
+    const marcacaoIdsToDelete = existingMarcacoes
+      .filter((m) => !newMarcacaoKeys.has(`${m.batidaId}|${m.tipoColuna}|${m.indiceColuna}`))
+      .map((m) => m.id);
+    if (marcacaoIdsToDelete.length) {
+      await tx.deleteMarcacoesByIds(marcacaoIdsToDelete);
+      summary.marcacoesDeleted = marcacaoIdsToDelete.length;
+    }
+
+    // 4) "BatidaFonteDados" — substituição integral por "Batida" tocada nesta
+    // execução: DELETE do que existia + INSERT do conjunto novo (mesmo padrão
+    // de "HorarioDescansoFaixaItem"/"HorarioFaixasExtrasItem" em
+    // cadastro-sync.ts — sem chave única de negócio própria, e cobre tanto o
+    // slot que sumiu (cascata via DELETE de batida_marcacao) quanto o slot que
+    // ficou mas perdeu o FonteDados).
+    if (touchedBatidaIds.length) {
+      await tx.deleteFonteDadosByBatidaIds(touchedBatidaIds);
+    }
+
+    const marcacaoIdByKey = new Map(
+      marcacaoRows.map((m) => [`${m.batidaId}|${m.tipoColuna}|${m.indiceColuna}`, m.id]),
+    );
+    const fonteDadosInputs: InsertFonteDadosInput[] = [];
+    for (const [key, slot] of slotByMarcacaoKey) {
+      if (!slot.fonteDados) continue;
+      const marcacaoId = marcacaoIdByKey.get(key);
+      if (!marcacaoId) continue; // defensivo — toda marcação foi enviada no lote de upsert acima.
+      const batidaId = key.split("|")[0];
+      fonteDadosInputs.push({
+        batidaMarcacaoId: marcacaoId,
+        batidaId,
         fonteDadosId: slot.fonteDadosId,
-        desconsiderada: slot.desconsiderada,
+        nsr: slot.fonteDados.nsr,
+        hora: slot.fonteDados.hora,
+        data: slot.fonteDados.data,
+        dataInclusao: slot.fonteDados.dataInclusao,
+        tipo: slot.fonteDados.tipo,
+        origem: slot.fonteDados.origem,
       });
     }
-  }
-
-  const marcacaoRows = upsertMarcacaoInputs.length
-    ? await repo.upsertMarcacoes(upsertMarcacaoInputs)
-    : [];
-  summary.marcacoesUpserted = marcacaoRows.length;
-
-  const marcacaoIdsToDelete = existingMarcacoes
-    .filter((m) => !newMarcacaoKeys.has(`${m.batidaId}|${m.tipoColuna}|${m.indiceColuna}`))
-    .map((m) => m.id);
-  if (marcacaoIdsToDelete.length) {
-    await repo.deleteMarcacoesByIds(marcacaoIdsToDelete);
-    summary.marcacoesDeleted = marcacaoIdsToDelete.length;
-  }
-
-  // 4) "BatidaFonteDados" — substituição integral por "Batida" tocada nesta
-  // execução: DELETE do que existia + INSERT do conjunto novo (mesmo padrão
-  // de "HorarioDescansoFaixaItem"/"HorarioFaixasExtrasItem" em
-  // cadastro-sync.ts — sem chave única de negócio própria, e cobre tanto o
-  // slot que sumiu (cascata via DELETE de batida_marcacao) quanto o slot que
-  // ficou mas perdeu o FonteDados).
-  if (touchedBatidaIds.length) {
-    await repo.deleteFonteDadosByBatidaIds(touchedBatidaIds);
-  }
-
-  const marcacaoIdByKey = new Map(
-    marcacaoRows.map((m) => [`${m.batidaId}|${m.tipoColuna}|${m.indiceColuna}`, m.id]),
-  );
-  const fonteDadosInputs: InsertFonteDadosInput[] = [];
-  for (const [key, slot] of slotByMarcacaoKey) {
-    if (!slot.fonteDados) continue;
-    const marcacaoId = marcacaoIdByKey.get(key);
-    if (!marcacaoId) continue; // defensivo — toda marcação foi enviada no lote de upsert acima.
-    const batidaId = key.split("|")[0];
-    fonteDadosInputs.push({
-      batidaMarcacaoId: marcacaoId,
-      batidaId,
-      fonteDadosId: slot.fonteDadosId,
-      nsr: slot.fonteDados.nsr,
-      hora: slot.fonteDados.hora,
-      data: slot.fonteDados.data,
-      dataInclusao: slot.fonteDados.dataInclusao,
-      tipo: slot.fonteDados.tipo,
-      origem: slot.fonteDados.origem,
-    });
-  }
-  if (fonteDadosInputs.length) {
-    await repo.insertFonteDados(fonteDadosInputs);
-    summary.fonteDadosInserted = fonteDadosInputs.length;
-  }
+    if (fonteDadosInputs.length) {
+      await tx.insertFonteDados(fonteDadosInputs);
+      summary.fonteDadosInserted = fonteDadosInputs.length;
+    }
+  });
 
   // 5) Cursor de rastreio — só diagnóstico (nunca usado para calcular a
   // próxima janela). Atualizado por último, só depois de toda a escrita ter

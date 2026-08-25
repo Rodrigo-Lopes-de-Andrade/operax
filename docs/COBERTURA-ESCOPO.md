@@ -32,15 +32,15 @@ plano B. Agora é caminho crítico da Fase 3.
 
 ## 4.3 Dashboard de gestão de ponto
 
-O escopo lista 18 indicadores como mínimo. Cobertos: 11. Faltam 7.
+O escopo lista 18 indicadores como mínimo. Cobertos: 14. Faltam 4.
 
 | # | Indicador | Status | Onde está / o que falta |
 |---|---|---|---|
-| 1 | Total de colaboradores ativos | ❌ | `app.employee` tem `status`, mas nenhuma view ou KPI conta headcount |
-| 2 | Colaboradores presentes no dia | ❌ 🔒 | Depende de marcação do dia corrente |
-| 3 | Colaboradores ausentes | ❌ 🔒 | Idem |
-| 4 | Colaboradores em férias | ❌ | `app.leave_period` existe com `category='vacation'`; falta view/KPI |
-| 5 | Colaboradores afastados | ❌ | Idem, `category='leave'` |
+| 1 | Total de colaboradores ativos | ✅ | `active` no monitor diário — e é ele que revela `unrostered`, ativo sem jornada prevista |
+| 2 | Colaboradores presentes no dia | ❌ 🔒 | A marcação **existe** em `app.batida_marcacao` e `app.employee.secullum_employee_id` liga a ela. O bloqueio é outro: é tabela de ingestão **congelada** pela 11b, nenhuma migration daqui a cria, o banco de dev não a tem, e a policy dela é só `util.has_tenant` |
+| 3 | Colaboradores ausentes | ❌ 🔒 | Idem. O mais próximo honesto que existe é o indício `no_punches`, que **não** é a mesma afirmação e por isso não recebeu o nome |
+| 4 | Colaboradores em férias | ✅ | `on_vacation` no monitor — de `app.expected_workday.day_type`, que é onde férias é fato do dia (ver `cadastro.py`), não de `app.employee.status` |
+| 5 | Colaboradores afastados | ✅ | `on_leave`, mesma fonte |
 | 6 | Colaboradores com atraso | ✅ | `late_entry` |
 | 7 | Marcação incompleta | ✅ | `incomplete_punches` |
 | 8 | Com horas extras | ✅ | direção `surplus` |
@@ -51,6 +51,26 @@ O escopo lista 18 indicadores como mínimo. Cobertos: 11. Faltam 7.
 | 13 | Comparação entre unidades | ✅ | `fn_ranking_by_unit` |
 | 14 | **Comparação entre equipes e gestores** | ❌ | `employee.manager_employee_id` existe; nenhuma view ou RPC agrega por gestor |
 | 15–18 | Rankings (atraso, extra, faltante, esquecimento) | ✅ | `fn_ranking_by_employee` + filtro de tipo |
+
+### 25/08/2026 — três indicadores entregues, e por que dois não
+
+Os indicadores 1, 4 e 5 vivem no **monitor diário**, não no dashboard, e a
+escolha é de significado: "em férias" é fato de um dia, e num recorte de 30 dias
+a pergunta não tem resposta única. O dashboard é tela de período; o monitor é a
+tela do dia.
+
+Eles não são quatro números novos, são cinco: `escalados + férias + afastados +
+folga + sem jornada prevista = ativos`. O quinto não estava no escopo e é o mais
+útil dos cinco — **antes desta mudança, quem o motor não materializou
+simplesmente não aparecia**, porque o quadro saía de `app.expected_workday`. Seis
+pessoas da administração da FastPark estão nesse estado de propósito, e falha de
+cobertura do motor tem exatamente a mesma aparência. Contra o seed local, hoje,
+os 40 ativos estão todos ali — antes a tela mostrava "0 escalados, 0 fora da
+escala", indistinguível de "todo mundo de folga".
+
+Os indicadores 2 e 3 continuam ❌ e **não** foram aproximados. "Escalado e sem
+indício" já existe na tela com a ressalva escrita ("não é confirmação de
+presença"); rebatizá-lo de "presentes" transformaria a ressalva em mentira.
 
 **Filtros exigidos:** período ✅ · empresa ✅ · unidade ✅ · **departamento ❌** ·
 **gestor ❌** · colaborador ⚠️ · tipo de ocorrência ⚠️
@@ -86,15 +106,18 @@ Continuava marcado como bloqueado por "a API expõe o dia corrente?". O
 `pg_stat_statements` mostrou que **`secullum."Batida"` tem `Data` e
 `batida_marcacao` tem `hora`** — o dado existe com granularidade suficiente.
 
-**Resolvido.** A cadência é **30 minutos**, por decisão do cliente. A tela é
-viável sem mudança de API.
+**Resolvido.** A cadência é **15 minutos para batidas** e 30 para cadastro
+(decisão de 24/08 — `docs/DECISAO-CADENCIA-SYNC.md`). A tela é viável sem mudança
+de API.
 
 O que entra junto: `public.fn_data_freshness()` (migration 12) e a exibição
 permanente da idade do dado. Sem isso a tela mente por omissão — mostra um
-retrato de até 30 min atrás como se fosse o agora.
+retrato de até 15 min atrás como se fosse o agora.
 
-Resta uma pendência real: **48 execuções/dia por tenant só para Batida** cabem no
-rate limit da API? É a única coisa que ainda pode derrubar a cadência.
+Resta uma pendência real, e ela **reabriu** com a cadência escrita: são **~96
+execuções/dia por tenant só para Batida**, mais a passada diária de backfill de 7
+dias. Cabem no rate limit da API? É a única coisa que ainda pode derrubar a
+cadência.
 
 ---
 
@@ -226,7 +249,7 @@ domínio. O eixo de autorização existe protegendo o vazio.
 **Bloqueiam entrega do escopo contratado (9)**
 
 1. Saldo de horas — aparece em três seções diferentes
-2. KPIs de headcount e presença (5 indicadores do 4.3)
+2. ~~KPIs de headcount~~ — **3 dos 5 entregues em 25/08**. Restam presentes e ausentes, que dependem da tabela de ingestão congelada
 3. Filtro e agregação por gestor e por departamento
 4. Histórico de marcações na tela individual
 5. Catálogo dos 11 relatórios + exportação
@@ -243,7 +266,7 @@ domínio. O eixo de autorização existe protegendo o vazio.
 
 15. Autorização de hora extra
 16. Origem do dado de perímetro
-17. ~~Frequência de sync~~ — **resolvido: 30 min**. Resta confirmar o rate limit
+17. ~~Frequência de sync~~ — **resolvido: 15 min (batidas) / 30 (cadastro)**. O rate limit reabriu com o volume real
 18. Três métricas do assistente
 19. Reconciliação ponto × folha
 20. Oito indicadores de folha (derivam do item 7)

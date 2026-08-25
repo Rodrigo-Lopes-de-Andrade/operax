@@ -1594,9 +1594,12 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `records_read` | integer | não | `0` |  |  |
 | `records_written` | integer | não | `0` |  |  |
 | `error` | text | sim |  |  |  |
+| `records_skipped` | integer | não | `0` |  | Registros lidos da origem que não viraram linha — tipicamente correlação quebrada (FuncionarioId sem colaborador local). Lido = escrito + pulado; sem esta coluna, uma execução que pulou tudo é indistinguível de uma janela vazia. |
+| `scope` | text | não | `'incremental'::text` |  | incremental = janela curta, a cada 15 min (batidas) / 30 (cadastro). backfill = 7 dias, 1x/dia, fora de pico. As mesmas duas palavras de app.detection_run.scope (migration 13), de propósito. |
 
 **Restrições**
 
+- `CHECK ((scope = ANY (ARRAY['incremental'::text, 'backfill'::text])))`
 - `CHECK ((status = ANY (ARRAY['running'::text, 'completed'::text, 'failed'::text, 'partial'::text])))`
 
 **Policies**
@@ -1607,6 +1610,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 <details><summary>Índices</summary>
 
+- `sync_run_backfill_idx` — `app.sync_run USING btree (tenant_id, entity, started_at DESC) WHERE ((scope = 'backfill'::text) AND (status = 'completed'::text))`
 - `sync_run_falha_idx` — `app.sync_run USING btree (tenant_id, started_at DESC) WHERE (status = 'failed'::text)`
 - `sync_run_freshness_idx` — `app.sync_run USING btree (tenant_id, entity, finished_at DESC) WHERE (status = 'completed'::text)`
 - `sync_run_idx` — `app.sync_run USING btree (integration_id, entity, started_at DESC)`
@@ -2812,11 +2816,11 @@ Funções com período parametrizado. `security invoker`: herdam a RLS de quem c
 ### `fn_data_freshness`
 
 ```sql
-public.fn_data_freshness(p_stale_after_minutes integer DEFAULT 45)
+public.fn_data_freshness(p_stale_after_minutes integer DEFAULT NULL::integer)
   returns TABLE(tenant_id uuid, entity text, last_sync_at timestamp with time zone, age_minutes integer, is_stale boolean)
 ```
 
-Data age per synced entity, for the "updated N minutes ago" indicator. Default threshold is 45 min — 1.5x the 30-minute cadence, so a single missed run does not raise a false alarm but two in a row do.
+Idade do dado por entidade sincronizada, e o deadman da ingestão. Sem argumento, o limiar é 1,5x a cadência da entidade — 25 min para Batida (cadência 15), 45 para as demais (cadência 30) — de modo que uma execução perdida não alarma e duas seguidas alarmam. Com argumento, ele vale para todas. Ver docs/DECISAO-CADENCIA-SYNC.md.
 
 
 ### `fn_detection_health`
