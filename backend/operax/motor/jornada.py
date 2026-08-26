@@ -43,6 +43,26 @@ The fix is arithmetic, not data — `regras.py` normalises both sides onto a
 continuous timeline, and the source already carries everything it needs. This
 module's part is only the break: see `break_minutes` below.
 
+WHERE THE ROTATION COMES FROM, SINCE THE MIRROR CANNOT HOLD IT
+`app.schedule_rotation_map` (migration 25) is the curated bridge for the shifts
+`HorarioDia` cannot express: an anchor date plus a cycle length, keyed by the
+mirror's schedule, because the rotation belongs to the SCHEDULE and
+`Funcionario.horario_id` already says who is on it. A day is worked when
+`(reference_date - anchor_date) mod cycle` is zero.
+
+Two rules live in the join above and not in a comment somewhere:
+
+  • it is read only where the schedule declares NO expediente. Where the mirror
+    speaks, the mirror is the record, and curation fills silence rather than
+    contradicting it;
+  • it is read only when `validated_at` is filled. A provisional rotation would
+    arrive at confidence 100 and become an alert against somebody — the same
+    reason the unit curation keeps "provisório" in its own band.
+
+A curated rotation is the first thing that lets this module say `day_off` about
+a 12x36. Without it a blank schedule produces `work` with no hours, because a
+day off and not knowing look identical and only one of them may be claimed.
+
 So this module does not guess. A schedule that declares no expediente produces
 `confidence = 0`, and the coverage report groups those rows **by schedule
 description** so a person can see which of the two problems they are looking at.
@@ -107,13 +127,28 @@ pessoa as (
            f.id                as mirror_id,
            f.horario_id,
            h."HorarioId"       as secullum_schedule_id,
-           coalesce(esc.work_days, 0) as work_days
+           coalesce(esc.work_days, 0) as work_days,
+           rot.cycle_length_days,
+           rot.anchor_date,
+           rot.expected_entry            as rot_entry,
+           rot.expected_exit             as rot_exit,
+           rot.expected_break_minutes    as rot_break,
+           rot.workload_minutes          as rot_workload,
+           rot.tolerance_extra_minutes   as rot_tol_extra,
+           rot.tolerance_absence_minutes as rot_tol_absence
     from app.employee e
     left join secullum."Funcionario" f
            on f.tenant_id = e.tenant_id
           and f."FuncionarioId" = e.secullum_employee_id
     left join secullum."Horario" h on h.id = f.horario_id
     left join escala esc on esc.horario_id = f.horario_id
+    -- ⛔ `validated_at is not null` faz parte do JOIN, não do filtro depois: uma
+    --    rotação provisória entraria como confiança 100 e viraria alerta contra
+    --    alguém. Mapa que ninguém confirmou não é mapa.
+    left join app.schedule_rotation_map rot
+           on rot.tenant_id = e.tenant_id
+          and rot.secullum_schedule_id = h."HorarioId"
+          and rot.validated_at is not null
     where e.tenant_id = %(tenant_id)s
 ),
 afastamento as (
@@ -137,6 +172,14 @@ bruto as (
     select p.employee_id,
            p.secullum_schedule_id,
            p.work_days,
+           p.rot_entry, p.rot_exit, p.rot_break, p.rot_workload,
+           p.rot_tol_extra, p.rot_tol_absence,
+           -- A rotação vale só onde o espelho não fala. Onde `HorarioDia`
+           -- declara expediente, ele é o registro oficial, e curadoria não
+           -- sobrescreve registro oficial — ela preenche silêncio.
+           (p.cycle_length_days is not null and p.work_days = 0) as rot_applies,
+           (p.cycle_length_days is not null and p.work_days = 0
+            and (d.reference_date - p.anchor_date) %% p.cycle_length_days = 0) as rot_work,
            d.reference_date,
            af.day_type       as leave_type,
            hd."DiaSemana"    as dow,
@@ -183,7 +226,8 @@ classificado as (
            (b.leave_type is null
             and b.work_days > 0
             and b.dow is not null
-            and not b.no_shift) as scheduled_work
+            and not b.no_shift) as scheduled_work,
+           (b.leave_type is null and b.rot_work) as rot_scheduled
     from bruto b
 )
 insert into app.expected_workday (
@@ -198,27 +242,43 @@ select
     c.reference_date,
     case
       when c.leave_type is not null then c.leave_type
+      -- A rotação decide os dois lados: o dia que ela trabalha e o que ela
+      -- folga. É a diferença entre 12x36 e o `work` sem hora que o motor
+      -- escrevia quando não sabia — aquele nunca virava folga porque não havia
+      -- como distinguir folga de ignorância.
+      when c.rot_applies            then case when c.rot_work then 'work' else 'day_off' end
       when c.work_days = 0          then 'work'
       when c.dow is null            then 'day_off'
       when c.no_shift               then 'day_off'
       else 'work'
     end,
-    case when c.scheduled_work then c.entry_at end,
-    case when c.scheduled_work then c.exit_at end,
-    case when c.scheduled_work then c.break_minutes end,
-    case when c.scheduled_work then c.workload_minutes end,
+    case when c.rot_scheduled then c.rot_entry
+         when c.scheduled_work then c.entry_at end,
+    case when c.rot_scheduled then c.rot_exit
+         when c.scheduled_work then c.exit_at end,
+    case when c.rot_scheduled then c.rot_break
+         when c.scheduled_work then c.break_minutes end,
+    case when c.rot_scheduled then c.rot_workload
+         when c.scheduled_work then c.workload_minutes end,
     -- ⚠️ A day off arrives with both tolerances filled. Carrying them onto a day
     --    with no shift would hand the detector a window around nothing.
-    case when c.scheduled_work then coalesce(c.tolerance_extra, 0) else 0 end,
-    case when c.scheduled_work then coalesce(c.tolerance_absence, 0) else 0 end,
+    case when c.rot_scheduled then c.rot_tol_extra
+         when c.scheduled_work then coalesce(c.tolerance_extra, 0) else 0 end,
+    case when c.rot_scheduled then c.rot_tol_absence
+         when c.scheduled_work then coalesce(c.tolerance_absence, 0) else 0 end,
     c.secullum_schedule_id,
     case
       when c.leave_type is not null then 'secullum_schedule'
+      when c.rot_applies            then 'manual_roster'
       when c.work_days = 0 or c.dow is null then 'inferred'
       else 'secullum_schedule'
     end,
     case
       when c.leave_type is not null then 100
+      -- Declarada por um humano que carimbou o dia: é fato lido, do mesmo jeito
+      -- que a semana do espelho é. O que não pode pontuar 100 é palpite, e
+      -- palpite não chega aqui — o join exige `validated_at`.
+      when c.rot_applies            then 100
       when c.work_days = 0          then 0
       when c.dow is null            then 0
       when c.no_shift               then 100

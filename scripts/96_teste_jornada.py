@@ -82,7 +82,9 @@ insert into secullum."Horario" (id, "HorarioId", "Numero", "Descricao", ativo, t
   ('c0000000-0000-0000-0000-0000000000f1', 9001, 9001, 'Seg a Sex 08:00 as 18:00', true, '{TENANT}'),
   ('c0000000-0000-0000-0000-0000000000f2', 9002, 9002, 'U-999 - P01 - 06h as 18h - Par', true, '{TENANT}'),
   ('c0000000-0000-0000-0000-0000000000f3', 9003, 9003, 'Seg a Sex sem hora de entrada', true, '{TENANT}'),
-  ('c0000000-0000-0000-0000-0000000000f4', 9004, 9004, 'U-999 - P05 - Seg a Sex - 19:00h ás 07:00h', true, '{TENANT}');
+  ('c0000000-0000-0000-0000-0000000000f4', 9004, 9004, 'U-999 - P05 - Seg a Sex - 19:00h ás 07:00h', true, '{TENANT}'),
+  ('c0000000-0000-0000-0000-0000000000f5', 9005, 9005, 'U-999 - P02 - 19h as 7h - Impar', true, '{TENANT}'),
+  ('c0000000-0000-0000-0000-0000000000f6', 9006, 9006, 'U-999 - P06 - 06h as 18h - Par', true, '{TENANT}');
 
 -- Semana fixa: expediente de segunda(0) a sexta(4), folga sábado(5) e domingo(6).
 insert into secullum."HorarioDia"
@@ -105,6 +107,16 @@ insert into secullum."HorarioDia"
    sem_expediente, tenant_id)
 select gen_random_uuid(), 'c0000000-0000-0000-0000-0000000000f2', 1, d, 0, 10, 5, true, '{TENANT}'
 from generate_series(0, 6) d;
+
+-- Mais dois 12x36, e a diferença entre eles é a única coisa que este par prova:
+-- um tem rotação curada e CARIMBADA, o outro tem a mesma rotação sem carimbo.
+insert into secullum."HorarioDia"
+  (id, horario_id, "HorarioDiaId", "DiaSemana", "Carga", "ToleranciaExtra", "ToleranciaFalta",
+   sem_expediente, tenant_id)
+select gen_random_uuid(), h, 1, d, 0, 10, 5, true, '{TENANT}'
+from unnest(array['c0000000-0000-0000-0000-0000000000f5'::uuid,
+                  'c0000000-0000-0000-0000-0000000000f6'::uuid]) h,
+     generate_series(0, 6) d;
 
 -- Turno noturno, copiado de `U-075 - P05` em produção: entra 19:00, sai para o
 -- intervalo 22:48, VOLTA 00:00 e encerra 05:00 do dia seguinte. Duas viradas num
@@ -145,7 +157,9 @@ from (values
   ('c0000000-0000-0000-0000-0000000000a3'::uuid, 9103, 'De Ferias',        'c0000000-0000-0000-0000-0000000000f1'::uuid),
   ('c0000000-0000-0000-0000-0000000000a4'::uuid, 9104, 'Atestado',         'c0000000-0000-0000-0000-0000000000f1'::uuid),
   ('c0000000-0000-0000-0000-0000000000a5'::uuid, 9105, 'Sem Hora',         'c0000000-0000-0000-0000-0000000000f3'::uuid),
-  ('c0000000-0000-0000-0000-0000000000a7'::uuid, 9107, 'Noturno',          'c0000000-0000-0000-0000-0000000000f4'::uuid)
+  ('c0000000-0000-0000-0000-0000000000a7'::uuid, 9107, 'Noturno',          'c0000000-0000-0000-0000-0000000000f4'::uuid),
+  ('c0000000-0000-0000-0000-0000000000a8'::uuid, 9108, 'Rotacao Curada',   'c0000000-0000-0000-0000-0000000000f5'::uuid),
+  ('c0000000-0000-0000-0000-0000000000a9'::uuid, 9109, 'Rotacao Provisoria','c0000000-0000-0000-0000-0000000000f6'::uuid)
 ) as f(id, num, nome, horario);
 
 insert into app.company (id, tenant_id, legal_name, trade_name) values
@@ -160,7 +174,20 @@ insert into app.employee (id, tenant_id, company_id, unit_id, secullum_employee_
   ('c0000000-0000-0000-0000-0000000000c4', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9104, 'Atestado No Fim De Semana'),
   ('c0000000-0000-0000-0000-0000000000c5', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9105, 'Sem Hora De Entrada'),
   ('c0000000-0000-0000-0000-0000000000c6', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', null, 'Sem Espelho'),
-  ('c0000000-0000-0000-0000-0000000000c7', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9107, 'Noturno');
+  ('c0000000-0000-0000-0000-0000000000c7', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9107, 'Noturno'),
+  ('c0000000-0000-0000-0000-0000000000c8', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9108, 'Rotacao Curada'),
+  ('c0000000-0000-0000-0000-0000000000c9', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9109, 'Rotacao Provisoria');
+
+-- ---------------------------------------------------------------------------
+-- A rotação curada. Ciclo de 2 dias ancorado numa segunda: trabalha 10, 12, 14 e
+-- 16; folga 11, 13 e 15. A segunda linha é IDÊNTICA menos o carimbo.
+-- ---------------------------------------------------------------------------
+insert into app.schedule_rotation_map
+  (tenant_id, secullum_schedule_id, cycle_length_days, anchor_date, expected_entry,
+   expected_exit, expected_break_minutes, workload_minutes, tolerance_extra_minutes,
+   tolerance_absence_minutes, validated_at) values
+  ('{TENANT}', 9005, 2, '{INICIO}', '19:00', '05:00', 72, 528, 10, 5, now()),
+  ('{TENANT}', 9006, 2, '{INICIO}', '06:00', '18:00', 60, 660, 10, 5, null);
 
 -- Férias cobrindo a semana inteira; atestado só no sábado, sobre a folga.
 insert into secullum."FuncionarioAfastamento"
@@ -251,6 +278,50 @@ do $$ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
+-- C3) a rotação curada, e a que ninguém carimbou
+-- ---------------------------------------------------------------------------
+do $$ begin
+  perform pg_temp.assert_eq('a âncora é dia de trabalho',
+    (select day_type from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c8' and reference_date='2026-08-10'), 'work');
+  -- É o que o 12x36 sem curadoria NÃO consegue dizer: lá o dia vazio vira
+  -- `work` sem hora, porque folga e ignorância têm a mesma aparência.
+  perform pg_temp.assert_eq('o dia seguinte é folga, e agora dá para afirmar isso',
+    (select day_type from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c8' and reference_date='2026-08-11'), 'day_off');
+  perform pg_temp.assert_eq('e o ciclo volta no terceiro dia',
+    (select day_type from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c8' and reference_date='2026-08-12'), 'work');
+  perform pg_temp.assert_eq('quatro trabalhados e três de folga na janela',
+    (select count(*) filter (where day_type='work')::text||'/'||
+            count(*) filter (where day_type='day_off')::text
+       from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c8'), '4/3');
+  perform pg_temp.assert_eq('o turno vem da rotação, não do espelho vazio',
+    (select expected_entry::text||' '||expected_exit::text||' '||expected_break_minutes::text
+       from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c8' and reference_date='2026-08-10'),
+    '19:00:00 05:00:00 72');
+  perform pg_temp.assert_eq('e a folga da rotação não herda tolerância',
+    (select tolerance_extra_minutes::text||'/'||tolerance_absence_minutes::text
+       from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c8' and reference_date='2026-08-11'), '0/0');
+  perform pg_temp.assert_eq('rotação carimbada é manual_roster, com confiança 100',
+    (select distinct source||' '||confidence::text from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c8'), 'manual_roster 100');
+
+  -- ⛔ A asserção que sustenta a regra: mesma rotação, sem carimbo, não vale
+  --    nada. Se ela valesse, uma curadoria pela metade viraria alerta contra
+  --    alguém com a autoridade de um fato lido.
+  perform pg_temp.assert_eq('rotação sem carimbo não é lida: segue confiança 0',
+    (select max(confidence)::text from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c9'), '0');
+  perform pg_temp.assert_eq('e continua inferida, sem folga nenhuma declarada',
+    (select distinct source from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c9'), 'inferred');
+end $$;
+
+-- ---------------------------------------------------------------------------
 -- D) precedência: afastamento > folga > jornada
 -- ---------------------------------------------------------------------------
 do $$ begin
@@ -311,12 +382,12 @@ end $$;
 -- G) a janela inteira, e o corte de cobertura do S3
 -- ---------------------------------------------------------------------------
 do $$ begin
-  perform pg_temp.assert_eq('7 pessoas x 7 dias',
-    (select count(*)::text from app.expected_workday where tenant_id='{TENANT}'), '49');
-  perform pg_temp.assert_eq('4 de 7 com confiança >= 80',
+  perform pg_temp.assert_eq('9 pessoas x 7 dias',
+    (select count(*)::text from app.expected_workday where tenant_id='{TENANT}'), '63');
+  perform pg_temp.assert_eq('5 de 9 com confiança >= 80',
     (select count(*)::text from (
        select employee_id from app.expected_workday
-        where tenant_id='{TENANT}' group by 1 having min(confidence) >= 80) t), '4');
+        where tenant_id='{TENANT}' group by 1 having min(confidence) >= 80) t), '5');
 end $$;
 
 rollback;

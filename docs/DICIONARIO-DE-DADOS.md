@@ -1581,6 +1581,44 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.schedule_rotation_map`
+
+> Rotação que o "HorarioDia" do Secullum não consegue escrever — 12x36 e afins. Uma linha por horário do espelho, curada com o cliente. Linha SEM validated_at é provisória e o motor de jornada NÃO a lê: rotação errada vira confiança 100 e alerta contra alguém. Vale apenas onde o horário não declara expediente nenhum.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `tenant_id` 🔑 | uuid | não |  | `app.tenant` |  |
+| `secullum_schedule_id` 🔑 | bigint | não |  |  |  |
+| `cycle_length_days` | smallint | não |  |  |  |
+| `anchor_date` | date | não |  |  | Um dia em que o ciclo trabalha. O dia é de trabalho quando (data - âncora) mod ciclo é zero. A âncora pode ficar no meio da janela: o resto negativo do Postgres (-1 mod 2 = -1) não muda ESTE teste, porque só o zero decide e zero não tem sinal. Quem for calcular a POSIÇÃO no ciclo, e não só se é dia de trabalho, aí sim precisa normalizar. |
+| `expected_entry` | time without time zone | não |  |  |  |
+| `expected_exit` | time without time zone | não |  |  | Pode ser MENOR que expected_entry: é assim que um turno noturno se declara, do mesmo jeito que "HorarioDia" o declara. Quem trata a virada é regras.py. |
+| `expected_break_minutes` | integer | sim |  |  |  |
+| `workload_minutes` | integer | não |  |  |  |
+| `tolerance_extra_minutes` | integer | não | `0` |  |  |
+| `tolerance_absence_minutes` | integer | não | `0` |  |  |
+| `validated_by` | uuid | sim |  | `auth.users` |  |
+| `validated_at` | timestamp with time zone | sim |  |  |  |
+| `notes` | text | sim |  |  |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Restrições**
+
+- `CHECK (((cycle_length_days >= 2) AND (cycle_length_days <= 31)))`
+- `CHECK ((expected_break_minutes >= 0))`
+- `CHECK ((tolerance_absence_minutes >= 0))`
+- `CHECK ((tolerance_extra_minutes >= 0))`
+- `CHECK ((workload_minutes > 0))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `rotation_map_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+
+
 ## `app.sync_run`
 
 *tabela — RLS ligada*
