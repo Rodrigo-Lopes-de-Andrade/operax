@@ -194,6 +194,48 @@ Duas coisas continuam verdadeiras e ficam escritas:
 
 ---
 
+### Andamento em 26/08/2026 — a noite que andava para trás, e a rotação que não cabia
+
+Duas entregas, e a medição que as ordenou inverteu o que o plano previa.
+
+**A medição de 24/08 perguntou cobertura e foi lida como corretude.** Ela contou
+quantas pessoas têm escala declarada — 66 de 79 — e não perguntou se o que a
+escala declara descreve o turno. Seis horários de produção declaram `Entrada1`
+**depois** da própria última `Saida` (19:00 às 05:00), e quatro pessoas ativas
+estão neles, em semana fixa, pontuando confiança 100. Estavam dentro dos 66.
+
+Lido como `time`, 05:00 menos 19:00 é menos catorze horas. Uma noite normal saía
+com `early_entry` de dezenove horas, `late_exit` de catorze e um intervalo de
+menos vinte e duas — três acusações por noite, contra exatamente quem o portão
+de 80 deixa passar. Medido sobre 11–26/08: **61 dos 682 dias trabalhados (8,9%)
+cruzam a meia-noite**, e 39 deles são dessas quatro pessoas.
+
+**O 12x36 nunca foi a fonte do falso positivo.** Confiança 0 já o barra no
+portão. O custo dele é outro, e é ausência: quem pontua 0 não é medido, e o G4
+tinha oito pessoas fora do denominador sem que isso aparecesse em lugar nenhum.
+
+O que entrou:
+
+- **A virada de meia-noite** (`regras.py`, `jornada.py`) — toda batida vira
+  instante antes de qualquer comparação. A data real sai de
+  `secullum."BatidaFonteDados"."Data"`; o degrau para trás na ordem posicional é
+  a rede, e a ordem entre as duas foi **medida**: sobre produção a rede
+  concordou nas 79 viradas reais e inventou mais 4. O grão de
+  `app.deviation_event` não se moveu.
+- **A rotação** (migration 25, `app.schedule_rotation_map`) — âncora mais
+  comprimento de ciclo, por horário do espelho, no formato do
+  `unit_secullum_map`. Rotação sem `validated_at` o motor não lê.
+- **A porta** — `/dashboard/administracao/rotacoes`. Mostra os dias em que cada
+  horário bateu ponto e deixa a pessoa escolher um como âncora. O sistema **não**
+  deduz a âncora das batidas: escala derivada de batida encaixa sempre, e escala
+  que encaixa sempre nunca produz `no_punches` nem `punch_on_day_off`.
+
+O que fica aberto: as 6 pessoas da administração (`U-000 … (Supervisão)`)
+continuam dentro do denominador do G4 — a decisão de tirá-las do motor foi
+tomada em 26/08 e ainda não foi implementada.
+
+---
+
 ## Gates — pontos onde a sprint seguinte não começa
 
 Não são recomendações. Cada um existe porque violá-lo custa mais caro do que
@@ -203,8 +245,8 @@ esperar.
 |---|---|---|---|---|
 | **G1** | Diagnóstico rodado e convenção PascalCase confirmada | S0 | As migrations 00 e 03 selecionam por essa convenção | ✅ |
 | **G2** | Suíte de isolamento verde | S3 | Motor grava dado real; RLS errada vira vazamento | ✅ e agora provado também por HTTP |
-| **G3** | Jornada esperada com ≥80% de confiança | S4 | Sem escala correta, o motor é gerador de falso positivo | número medido em **83,5%** contra o espelho de produção; falta o motor produzi-lo, o que depende da promoção `secullum → app` |
-| **G4** | Falso positivo ≤5% em duas execuções de sombra | S6 | Primeiro relatório errado mata a credibilidade e não se recupera | inalcançável até o S4 existir; a medição de 24/08 projeta **≥36%** enquanto as 7 escalas 12x36 não tiverem fonte |
+| **G3** | Jornada esperada com ≥80% de confiança | S4 | Sem escala correta, o motor é gerador de falso positivo | os 83,5% de 24/08 mediam **cobertura**, não corretude — ver 26/08 abaixo. As 8 pessoas em horário sem expediente têm fonte de rotação desde a migration 25, e o número volta a ser medido depois da curadoria |
+| **G4** | Falso positivo ≤5% em duas execuções de sombra | S6 | Primeiro relatório errado mata a credibilidade e não se recupera | a projeção de ≥36% de 24/08 atribuía o erro ao 12x36, e o 12x36 nunca foi a fonte dele: confiança 0 já o barra. A fonte era a virada de meia-noite, corrigida em 26/08. Segue inalcançável até o S4 rodar contra produção |
 | **G5** | Regras homologadas com cliente + jurídico/RH | envio real | Alerta nominal indevido é risco trabalhista | fora da engenharia |
 | **G6** | Cláusula de IP assinada | comercializar | Sem ela é projeto sob encomenda, não produto | fora da engenharia |
 

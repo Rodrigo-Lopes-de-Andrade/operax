@@ -308,3 +308,188 @@ def test_a_sugestao_nao_muda_entre_duas_aberturas_da_tela():
 
     assert primeira is not None and primeira.unit_id == str(UNIT_A)
     assert primeira == segunda
+
+
+# ---------------------------------------------------------------------------
+# A fila de rotação — o mesmo formato, e uma diferença que muda o escopo
+# ---------------------------------------------------------------------------
+NOTURNO = {
+    "secullum_schedule_id": 9042,
+    "cycle_length_days": 2,
+    "anchor_date": "2026-08-10",
+    "expected_entry": "19:00:00",
+    "expected_exit": "05:00:00",
+    "expected_break_minutes": 72,
+    "workload_minutes": 528,
+    "tolerance_extra_minutes": 10,
+    "tolerance_absence_minutes": 5,
+}
+
+
+def rotation_row(**overrides: Any) -> dict[str, Any]:
+    return {
+        "secullum_schedule_id": 9042,
+        "schedule": "U-042 - P01 - 19h as 7h - Impar",
+        "employees": 3,
+        "cycle_length_days": None,
+        "anchor_date": None,
+        "expected_entry": None,
+        "expected_exit": None,
+        "expected_break_minutes": None,
+        "workload_minutes": None,
+        "tolerance_extra_minutes": None,
+        "tolerance_absence_minutes": None,
+        "validated_at": None,
+        "observed_days": [],
+    } | overrides
+
+
+@pytest.fixture
+def answer_rotacao(monkeypatch: pytest.MonkeyPatch):
+    def install(
+        rows: list[dict[str, Any]] | None = None,
+        summary: dict[str, Any] | None = None,
+        admin: bool = True,
+        gravado: list[dict[str, Any]] | None = None,
+        cobertos: int = 3,
+    ) -> tuple[StubScope, StubScope]:
+        scope = StubScope({"util.is_admin": {"admin": admin}})
+        bound = StubScope(
+            {
+                "observed_days": rows if rows is not None else [rotation_row()],
+                "on_blank_schedule": summary
+                or {"on_blank_schedule": 13, "validated": 4, "provisional": 2},
+                "insert into app.schedule_rotation_map": (
+                    gravado if gravado is not None else [{"secullum_schedule_id": 9042}]
+                ),
+                "count(*)::int as employees": {"employees": cobertos},
+                "insert into app.audit_log": [],
+            }
+        )
+        monkeypatch.setattr(curadoria, "user_scope", lambda _c: StubScopeContext(scope))
+        monkeypatch.setattr(curadoria, "tenant_scope", lambda _c: StubScopeContext(bound))
+        return scope, bound
+
+    return install
+
+
+def _get_rot(client: TestClient, token: str):
+    return client.get("/curadoria/rotacoes", headers={"Authorization": f"Bearer {token}"})
+
+
+def _post_rot(client: TestClient, token: str, corpo: dict[str, Any]):
+    return client.post(
+        "/curadoria/rotacoes", json=corpo, headers={"Authorization": f"Bearer {token}"}
+    )
+
+
+def test_a_fila_de_rotacao_nao_le_o_espelho_como_o_usuario(
+    client: TestClient, issue_token, answer_rotacao
+):
+    """`secullum` não tem `usage` para `authenticated`: a leitura sai do tenant_scope.
+
+    O que a mantém honesta é a ordem — `util.is_admin` é perguntado como o
+    usuário, e só então o `service_role` abre. O teste afirma a ordem, que é o
+    que se pode afirmar sem banco.
+    """
+    scope, bound = answer_rotacao()
+
+    body = _get_rot(client, issue_token()).json()
+
+    assert any("util.is_admin" in stmt for stmt in scope.statements)
+    assert all("secullum" not in stmt for stmt in scope.statements)
+    assert any('secullum."Horario"' in stmt for stmt in bound.statements)
+    assert body["on_blank_schedule"] == 13
+
+
+def test_a_rotacao_provisoria_fica_fora_do_validado(
+    client: TestClient, issue_token, answer_rotacao
+):
+    """Aqui somar os dois é pior que na fila de unidade.
+
+    Rotação provisória o motor **não lê** — `jornada.py` exige `validated_at`.
+    Contá-la como pronta esconderia gente que segue em confiança 0, fora da
+    medição do G4 e sem ninguém saber.
+    """
+    answer_rotacao(summary={"on_blank_schedule": 13, "validated": 4, "provisional": 2})
+
+    body = _get_rot(client, issue_token()).json()
+
+    assert (body["validated"], body["provisional"]) == (4, 2)
+    assert body["validated"] + body["provisional"] < body["on_blank_schedule"]
+
+
+def test_a_fila_mostra_os_dias_batidos_e_nao_conclui_a_ancora(
+    client: TestClient, issue_token, answer_rotacao
+):
+    """O dado vai para a tela; a conclusão fica com quem cura.
+
+    Escala derivada das batidas encaixa sempre, e escala que encaixa sempre
+    nunca produz `no_punches` nem `punch_on_day_off`. Por isso a resposta tem
+    `observed_days` e não tem campo de âncora sugerida.
+    """
+    answer_rotacao(rows=[rotation_row(observed_days=["2026-08-10", "2026-08-12"])])
+
+    linha = _get_rot(client, issue_token()).json()["rows"][0]
+
+    assert linha["observed_days"] == ["2026-08-10", "2026-08-12"]
+    assert linha["anchor_date"] is None
+    assert "suggested_anchor" not in linha
+
+
+def test_quem_nao_e_admin_nao_declara_escala(client: TestClient, issue_token, answer_rotacao):
+    """403 antes de o `service_role` abrir, igual à fila de unidade."""
+    _, bound = answer_rotacao(admin=False)
+
+    response = _post_rot(client, issue_token(), NOTURNO)
+
+    assert response.status_code == 403
+    assert bound.statements == []
+
+
+def test_horario_de_outro_cliente_nao_grava_rotacao(
+    client: TestClient, issue_token, answer_rotacao
+):
+    """`secullum_schedule_id` é parte da PK e não tem FK: o join é a única guarda."""
+    answer_rotacao(gravado=[])
+
+    response = _post_rot(client, issue_token(), NOTURNO | {"secullum_schedule_id": 999})
+
+    assert response.status_code == 422
+    assert "não pertence a este cliente" in response.json()["detail"]
+
+
+def test_o_turno_que_termina_antes_de_comecar_e_aceito(
+    client: TestClient, issue_token, answer_rotacao
+):
+    """05:00 depois de 19:00 é um turno noturno, não um erro de digitação.
+
+    É como o próprio `HorarioDia` do Secullum declara a virada, e recusar aqui
+    tornaria impossível cadastrar exatamente a escala que motivou a tela.
+    """
+    answer_rotacao(cobertos=3)
+
+    body = _post_rot(client, issue_token(), NOTURNO).json()
+
+    assert body == {"secullum_schedule_id": 9042, "employees_covered": 3}
+
+
+def test_ciclo_de_um_dia_e_recusado_antes_do_banco(client: TestClient, issue_token, answer_rotacao):
+    """Ciclo 1 é "trabalha todo dia", que é semana fixa e não rotação.
+
+    O banco recusa por check; recusar no modelo devolve mensagem em vez de 500.
+    """
+    _, bound = answer_rotacao()
+
+    response = _post_rot(client, issue_token(), NOTURNO | {"cycle_length_days": 1})
+
+    assert response.status_code == 422
+    assert bound.statements == []
+
+
+def test_cada_rotacao_carimbada_deixa_trilha(client: TestClient, issue_token, answer_rotacao):
+    _, bound = answer_rotacao()
+
+    _post_rot(client, issue_token(), NOTURNO)
+
+    assert sum("app.audit_log" in stmt for stmt in bound.statements) == 1

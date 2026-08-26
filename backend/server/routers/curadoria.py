@@ -1,8 +1,21 @@
-"""Curadoria do mapa origem → unidade — Caminho 2.
+"""Curadoria do que a origem não diz — Caminho 2.
 
-Duas rotas: a fila e o botão. O que decide quem entra aqui é `util.is_admin`,
-perguntado ao banco como o usuário que perguntou — a mesma função que a policy
-`mapa_admin` chama, e não uma cópia dela em Python.
+Duas filas, cada uma com a sua fila e o seu botão: departamento → unidade, e
+horário → rotação. São o mesmo problema em dois eixos — o Secullum não carrega o
+conceito de pátio nem consegue escrever um ciclo de 48 h —, e por isso a mesma
+forma: uma linha curada por objeto do espelho, validada por gente, com carimbo
+de quem e quando.
+
+O que decide quem entra aqui é `util.is_admin`, perguntado ao banco como o
+usuário que perguntou — a mesma função que as policies `mapa_admin` e
+`rotation_map_admin` chamam, e não uma cópia dela em Python.
+
+UMA DIFERENÇA ENTRE AS DUAS FILAS, E ELA MUDA O ESCOPO DA LEITURA
+A de unidade sai de `app.department`, que é domínio nosso e tem policy: ela lê
+como o usuário. A de rotação sai de `secullum."Horario"`, e `secullum` não tem
+`usage` para `authenticated` desde a migration 01 — não é RLS que a impede, é o
+grant. Ela autoriza no `user_scope` e lê no `tenant_scope`, que é a ordem que
+`operax/motor/marcacao.py` já documenta.
 
 POR QUE A ESCRITA SAI DO `user_scope`
 `app.unit_secullum_map` e `app.employee` têm policy de escrita para admin, então
@@ -25,9 +38,13 @@ from fastapi import APIRouter, HTTPException, status
 from psycopg.types.json import Jsonb
 
 from operax.core.tenant import tenant_scope, user_scope
-from operax.motor import mapeamento
+from operax.motor import mapeamento, rotacao
 from server.deps import CurrentTenant
 from server.models import (
+    RotationApplied,
+    RotationRequest,
+    RotationRow,
+    RotationScreen,
     UnitMappingApplied,
     UnitMappingRequest,
     UnitMappingRow,
@@ -39,6 +56,11 @@ from server.models import (
 router = APIRouter(prefix="/curadoria", tags=["curadoria"])
 
 _SEM_PERMISSAO = "Curar o mapa de unidades é do administrador do cliente."
+_SEM_PERMISSAO_ROTACAO = "Declarar a escala de um horário é do administrador do cliente."
+
+#: Quantos dias de batida a fila mostra. Duas semanas e meia cobrem sete voltas de
+#: um 12x36, que é quanto basta para alguém reconhecer a escala olhando.
+_JANELA_OBSERVADA = 21
 
 
 @router.get("/unidades")
@@ -127,11 +149,90 @@ async def validate_unit_mapping(
     return UnitMappingApplied(validated=validados, employees_allocated=alocados)
 
 
-async def _require_admin(scope: Any, tenant: CurrentTenant) -> None:
+@router.get("/rotacoes")
+async def rotation_queue(tenant: CurrentTenant) -> RotationScreen:
+    """A fila: horários sem expediente declarado, ordenados por quanta gente giram.
+
+    A leitura roda sob `tenant_scope`, e não como o usuário, porque ela sai de
+    `secullum."Horario"` — e `secullum` não tem `usage` para `authenticated`
+    desde a migration 01. A autorização acontece antes, no `user_scope`, e não
+    alarga escopo nenhum: `employee_read` já devolve o tenant inteiro para quem é
+    admin, que é exatamente quem esta rota deixa entrar.
+    """
+    async with user_scope(tenant) as scope:
+        await _require_admin(scope, tenant, _SEM_PERMISSAO_ROTACAO)
+
+    async with tenant_scope(tenant) as bound:
+        await bound.execute(rotacao.ROWS_SQL, {"dias": _JANELA_OBSERVADA})
+        rows = await bound.fetchall()
+
+        await bound.execute(rotacao.SUMMARY_SQL, {})
+        summary = await bound.fetchone()
+
+    return RotationScreen(
+        rows=[RotationRow(**row) for row in rows],
+        on_blank_schedule=summary["on_blank_schedule"] if summary else 0,
+        validated=summary["validated"] if summary else 0,
+        provisional=summary["provisional"] if summary else 0,
+    )
+
+
+@router.post("/rotacoes")
+async def validate_rotation(tenant: CurrentTenant, request: RotationRequest) -> RotationApplied:
+    """Carimba a rotação de um horário, e devolve quanta gente ela tira da confiança 0."""
+    async with user_scope(tenant) as scope:
+        await _require_admin(scope, tenant, _SEM_PERMISSAO_ROTACAO)
+
+    payload = request.model_dump()
+
+    async with tenant_scope(tenant) as bound:
+        await bound.execute(rotacao.VALIDATE_SQL, {**payload, "user_id": tenant.user_id})
+        gravado = await bound.fetchall()
+
+        # Zero linha é um horário que não é deste cliente. `secullum_schedule_id`
+        # é parte da PK e não tem FK, então este join é a única coisa entre um id
+        # colado à mão e uma escala gravada sobre o horário de outro tenant.
+        if not gravado:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(f"Horário {request.secullum_schedule_id} não pertence a este cliente."),
+            )
+
+        await bound.execute(
+            rotacao.AFFECTED_SQL,
+            {"secullum_schedule_id": request.secullum_schedule_id},
+        )
+        afetados = await bound.fetchone()
+        cobertos = afetados["employees"] if afetados else 0
+
+        await bound.execute(
+            rotacao.AUDIT_SQL,
+            {
+                "user_id": tenant.user_id,
+                "entity_id": str(request.secullum_schedule_id),
+                "antes": None,
+                "depois": Jsonb(
+                    {
+                        **{
+                            chave: str(valor) if valor is not None else None
+                            for chave, valor in payload.items()
+                        },
+                        "employees_covered": cobertos,
+                    }
+                ),
+            },
+        )
+
+    return RotationApplied(
+        secullum_schedule_id=request.secullum_schedule_id, employees_covered=cobertos
+    )
+
+
+async def _require_admin(scope: Any, tenant: CurrentTenant, mensagem: str = _SEM_PERMISSAO) -> None:
     await scope.execute(mapeamento.PERMISSION_SQL, {"tenant_id": tenant.tenant_id})
     row = await scope.fetchone()
     if not (row and row["admin"]):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_SEM_PERMISSAO)
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=mensagem)
 
 
 def _row(row: dict[str, Any], units: list[dict[str, Any]]) -> UnitMappingRow:

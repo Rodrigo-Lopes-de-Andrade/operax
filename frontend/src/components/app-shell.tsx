@@ -9,7 +9,7 @@ import { UserBadge } from "@/components/user-badge";
 import { ASSISTENTE_PATH } from "@/lib/assistente/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
-import { MAPEAMENTO_PATH } from "@/lib/curadoria/url";
+import { MAPEAMENTO_PATH, ROTACOES_PATH } from "@/lib/curadoria/url";
 import { COLABORADORES_PATH, IMPORTACAO_PATH } from "@/lib/rh/url";
 import { TV_PATH } from "@/lib/tv/url";
 
@@ -74,7 +74,10 @@ export function AppShell({
             <NavLink href={COLABORADORES_PATH} label="Colaboradores" />
             <NavLink href={IMPORTACAO_PATH} label="Importação" />
             {showCuration ? (
-              <NavLink href={MAPEAMENTO_PATH} label="Mapeamento" />
+              <>
+                <NavLink href={MAPEAMENTO_PATH} label="Mapeamento" />
+                <NavLink href={ROTACOES_PATH} label="Escalas" />
+              </>
             ) : null}
           </nav>
         ) : null}

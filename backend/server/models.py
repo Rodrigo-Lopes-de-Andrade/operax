@@ -393,6 +393,86 @@ class UnitMappingApplied(BaseModel):
     employees_allocated: int
 
 
+class RotationRow(BaseModel):
+    """Um horário do espelho que não declara expediente nenhum, e o que se sabe dele.
+
+    Três estados, iguais aos do mapa de unidade:
+
+    - **sem rotação** — `cycle_length_days` nulo. Quem está aqui materializa
+      jornada com confiança 0: não gera alerta, e também não é medido;
+    - **provisória** — rotação escrita com `validated_at` nulo. `jornada.py` não
+      a lê, de propósito;
+    - **validada** — alguém carimbou, e a jornada passa a sair daqui com
+      confiança 100.
+
+    `observed_days` são os dias em que este horário de fato bateu ponto. Ele
+    existe para o curador conferir a âncora contra a realidade — e não para o
+    sistema deduzi-la: escala derivada das batidas encaixa sempre, e escala que
+    encaixa sempre nunca acusa falta.
+    """
+
+    secullum_schedule_id: int
+    schedule: str
+    #: Ativos neste horário — é o peso que ordena a fila.
+    employees: int
+    cycle_length_days: int | None = None
+    anchor_date: date | None = None
+    expected_entry: time | None = None
+    expected_exit: time | None = None
+    expected_break_minutes: int | None = None
+    workload_minutes: int | None = None
+    tolerance_extra_minutes: int | None = None
+    tolerance_absence_minutes: int | None = None
+    validated_at: datetime | None = None
+    observed_days: list[date] = Field(default_factory=list)
+
+
+class RotationScreen(BaseModel):
+    """A fila de rotação inteira, com a conta que ela fecha.
+
+    `validated` exclui o provisório pelo mesmo motivo de `UnitMappingScreen`, e
+    aqui a consequência é mais dura: rotação provisória não é lida pelo motor,
+    então contá-la como pronta esconderia gente que continua fora da medição.
+    """
+
+    rows: list[RotationRow]
+    on_blank_schedule: int
+    validated: int
+    provisional: int
+
+
+class RotationRequest(BaseModel):
+    """A rotação que o curador declara para um horário.
+
+    `expected_exit` pode ser MENOR que `expected_entry`: é assim que um turno
+    noturno se escreve, do mesmo jeito que o `HorarioDia` do Secullum o escreve.
+    Quem trata a virada é `regras.py`.
+
+    O ciclo começa em 2 porque 1 é "trabalha todo dia", que é semana fixa e não
+    rotação — e porque o banco recusa, e recusar aqui devolve mensagem em vez de
+    500.
+    """
+
+    secullum_schedule_id: int
+    cycle_length_days: int = Field(ge=2, le=31)
+    #: Um dia em que este ciclo TRABALHOU. É o que o curador confere contra
+    #: `observed_days`.
+    anchor_date: date
+    expected_entry: time
+    expected_exit: time
+    expected_break_minutes: int | None = Field(default=None, ge=0)
+    workload_minutes: int = Field(gt=0)
+    tolerance_extra_minutes: int = Field(default=0, ge=0)
+    tolerance_absence_minutes: int = Field(default=0, ge=0)
+
+
+class RotationApplied(BaseModel):
+    """O horário carimbado, e quanta gente sai da confiança 0 por causa dele."""
+
+    secullum_schedule_id: int
+    employees_covered: int
+
+
 class ImportLineError(BaseModel):
     """Por que uma linha não entra. Texto em pt-BR, chega ao usuário como está."""
 
