@@ -21,13 +21,23 @@ The mirror itself, read from production on 24/08/2026, not the field's name.
 read-only, which is worth knowing before someone builds a form for it. `ctps` is
 the exception: nothing in the mirror feeds it.
 
-THE THREE PENDING ONES
-Supervisor, acting unit and an early termination date are marked `pending`: the
-customer has not said yet whether the Secullum knows them. Until then they are
-treated as sync — the safe direction, because a field wrongly frozen is an
-annoyance and a field wrongly editable is data that disappears on the next sync.
-They keep the flag so the screen can say "pendente de confirmação" instead of
-claiming the Secullum owns something nobody checked.
+THE PENDING ONES
+Acting unit and an early termination date are marked `pending`: the customer has
+not said yet whether the Secullum knows them. Until then they are treated as
+sync — the safe direction, because a field wrongly frozen is an annoyance and a
+field wrongly editable is data that disappears on the next sync. They keep the
+flag so the screen can say "pendente de confirmação" instead of claiming the
+Secullum owns something nobody checked.
+
+`manager_employee_id` WAS the third, and measuring it settled half the question
+and moved the other half. The Secullum does know the manager — as
+`Funcionario.EstruturaId` → `Estrutura`, promoted since migration 27 into
+`app.manager` and reachable as `employee.manager_id`. What it does not know is
+which of our employees that manager IS, and no name match resolves it (zero of
+four in production, 26/08/2026). So `manager_employee_id` is no longer pending
+on the customer: it is pending on a curation nobody has needed yet, and it stays
+`SYNC` because HR filling it by hand would put a guessed hierarchy next to a read
+one with no way to tell them apart.
 """
 
 from __future__ import annotations

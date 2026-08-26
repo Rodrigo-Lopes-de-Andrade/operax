@@ -251,6 +251,39 @@ a sincronização roda a cada 30 minutos por cima de `app.employee`, e o dia em
 que alguém trocar a lista de colunas do `on conflict` por `excluded.*`, seis
 supervisores voltam para dentro do motor sem erro nenhum e sem ninguém ver.
 
+### Ainda em 26/08/2026 — o gestor estava no espelho o tempo todo
+
+O escopo pede "comparação entre equipes e gestores" (COBERTURA §4.3 item 14) e
+ele estava ❌ com a justificativa de que `employee.manager_employee_id` existe e
+nada o agrega. A justificativa estava incompleta: **nada o preenche, e nada
+pode.** Ele é FK para `app.employee`, está declarado em `ownership.py` como
+`Owner.SYNC, pending=True` e — ao contrário de todos os outros campos de sync —
+**sem `mirror=`**. Congelado como "o Secullum manda", sem coluna do Secullum
+atrás. O filtro `p_manager_id` dos quatro RPCs, entregue em 25/08, filtra por
+ele: hoje não casa com nada.
+
+**O Secullum sabe o gestor, e o repositório já sabia disso em dois lugares.** Ele
+chega como `Funcionario.EstruturaId` → `secullum."Estrutura"`, que o
+`sync-cadastro` deste repositório chama de manager (`listManagers`,
+`upsertManagers`) e que o comentário do baseline descreve como "tabela do
+gestor". Medido em produção: 4 estruturas ativas, **69 dos ~70 ativos** ligados a
+elas, `EstruturaPaiId` nulo nas quatro (hierarquia de um nível), e `Descricao`
+com duas palavras, sem dígito, cujo primeiro nome casa com alguém do quadro — é
+nome de pessoa.
+
+O que **não** dá para resolver é qual colaborador é aquele gestor: nome completo
+não casa em nenhuma das quatro, e o próprio `sync-cadastro`, que já tenta esse
+casamento para achar o e-mail do gestor, resolveu **zero de 4** em produção.
+Escrever o vínculo por semelhança de nome seria o palpite que a promoção proíbe.
+
+Então o gestor entrou como dimensão própria — `app.manager` (migration 27),
+promovida do espelho, com `fn_ranking_by_manager` e o cartão no dashboard.
+`manager_employee_id` fica intocado, respondendo à outra pergunta.
+
+⚠️ O ranking ordena por volume, e volume segue efetivo. Cada linha carrega o
+número de pessoas ao lado: sem ele a tela faria uma afirmação de desempenho que
+o dado não sustenta, sobre alguém com nome.
+
 ---
 
 ## Gates — pontos onde a sprint seguinte não começa

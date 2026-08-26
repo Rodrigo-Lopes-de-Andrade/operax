@@ -6,7 +6,7 @@ real gerado pela suíte, não de memória.
 
 Legenda: ✅ coberto · ⚠️ parcial · ❌ falta · 🔒 bloqueado por dependência externa
 
-**Resultado: 26 lacunas** (era 27; a cadência de sync fechou uma). Nove delas mudam o escopo de trabalho de forma
+**Resultado: 25 lacunas** (era 27; a cadência de sync fechou uma e a agregação por gestor, outra). Nove delas mudam o escopo de trabalho de forma
 relevante; o resto é volume.
 
 ---
@@ -50,7 +50,7 @@ dado sustenta. Faltam 2.
 | 11 | **Saldo consolidado de horas** | ❌ | Banco de horas não é modelado. Aparece também em 4.4 e 4.8 |
 | 12 | Evolução das ocorrências por período | ✅ | `vw_deviation_daily_trend` |
 | 13 | Comparação entre unidades | ✅ | `fn_ranking_by_unit` |
-| 14 | **Comparação entre equipes e gestores** | ❌ | `employee.manager_employee_id` existe; nenhuma view ou RPC agrega por gestor |
+| 14 | Comparação entre equipes e gestores | ✅ | `app.manager` + `fn_ranking_by_manager` (migration 27). **Não sai de `manager_employee_id`**: aquela coluna aponta para um colaborador e nada a preenche. O gestor vem de `Funcionario.EstruturaId` → `secullum."Estrutura"`, que cobre 69 dos ~70 ativos |
 | 15–18 | Rankings (atraso, extra, faltante, esquecimento) | ✅ | `fn_ranking_by_employee` + filtro de tipo |
 
 ### 25/08/2026 — três indicadores entregues, e por que dois não
@@ -266,7 +266,7 @@ domínio. O eixo de autorização existe protegendo o vazio.
 
 1. Saldo de horas — aparece em três seções diferentes
 2. ~~KPIs de headcount~~ — **os 5 entregues em 25/08**; os dois de marcação com o rótulo da leitura, e não como presença (A12)
-3. ~~Filtro por gestor e por departamento~~ — **entregue em 25/08** (migration 22). Falta a *agregação* por gestor (ranking de equipes)
+3. ~~Filtro por gestor e por departamento~~ — **entregue em 25/08** (migration 22); ~~agregação por gestor~~ — **entregue em 26/08** (migration 27). ⚠️ O `p_manager_id` da 22 filtra por `manager_employee_id`, que continua sem fonte: quem quiser filtrar por gestor hoje tem de usar a dimensão nova
 4. ~~Histórico de marcações na tela individual~~ — **entregue em 25/08**
 5. Catálogo dos 11 relatórios + exportação
 6. Importação do Excel do Domínio, ponta a ponta

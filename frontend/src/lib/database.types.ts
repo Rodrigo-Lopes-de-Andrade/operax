@@ -266,6 +266,8 @@ export type Database = {
           p_ate: string;
           p_company_id?: string;
           p_de: string;
+          p_department_id?: string;
+          p_manager_id?: string;
           p_unit_id?: string;
         };
         Returns: {
@@ -278,12 +280,35 @@ export type Database = {
           unidades_afetadas: number;
         }[];
       };
+      fn_pending_justification: {
+        Args: {
+          p_ate: string;
+          p_de: string;
+          p_department_id?: string;
+          p_manager_id?: string;
+          p_unit_id?: string;
+        };
+        Returns: {
+          detected_at: string;
+          deviation_event_id: string;
+          employee_id: string;
+          employee_name: string;
+          minutes: number;
+          reference_date: string;
+          type: string;
+          type_description: string;
+          unit_id: string;
+          unit_name: string;
+        }[];
+      };
       fn_ranking_by_employee: {
         Args: {
           p_ate: string;
           p_company_id?: string;
           p_de: string;
+          p_department_id?: string;
           p_limite?: number;
+          p_manager_id?: string;
           p_unit_id?: string;
         };
         Returns: {
@@ -294,12 +319,32 @@ export type Database = {
           unit_name: string;
         }[];
       };
+      fn_ranking_by_manager: {
+        Args: {
+          p_ate: string;
+          p_company_id?: string;
+          p_de: string;
+          p_department_id?: string;
+          p_limite?: number;
+          p_unit_id?: string;
+        };
+        Returns: {
+          colaboradores: number;
+          eventos: number;
+          manager_id: string;
+          manager_name: string;
+          minutes_abs: number;
+          unidades: number;
+        }[];
+      };
       fn_ranking_by_unit: {
         Args: {
           p_ate: string;
           p_company_id?: string;
           p_de: string;
+          p_department_id?: string;
           p_limite?: number;
+          p_manager_id?: string;
         };
         Returns: {
           colaboradores: number;
@@ -313,6 +358,8 @@ export type Database = {
         Args: {
           p_ate: string;
           p_de: string;
+          p_department_id?: string;
+          p_manager_id?: string;
           p_min_dias?: number;
           p_unit_id?: string;
         };

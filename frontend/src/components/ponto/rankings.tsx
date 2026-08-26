@@ -9,10 +9,18 @@ import { formatNumber } from "@/lib/ponto/format";
 import type { PontoScreen } from "@/lib/ponto/queries";
 
 /**
- * Three rankings in the handoff — unit, employee and manager. The manager one
- * is not here: the public surface exposes the manager's name on `vw_employee`
- * but no aggregate answers by manager, and inventing one would mean a new
- * object in `public`. Two rankings plus recurrence, and the gap named.
+ * The three rankings the handoff asks for — unit, employee and manager — plus
+ * recurrence. The manager one arrived last, with migration 27, and it does not
+ * come from `employee.manager_employee_id`: that column points at an employee
+ * record and nothing can fill it. It comes from `app.manager`, promoted from
+ * the mirror's `Estrutura`, which is where the Secullum actually keeps who
+ * somebody answers to.
+ *
+ * ⚠️ VOLUME SEGUE EFETIVO, E O TOPO DA LISTA NÃO É "O PIOR GESTOR"
+ * Quem tem vinte pessoas acumula mais ocorrência que quem tem três, e ordenar
+ * por contagem põe o maior time em primeiro por aritmética. Por isso cada linha
+ * carrega o número de pessoas ao lado: sem ele, a tela faria uma afirmação sobre
+ * desempenho que o dado não sustenta — e sobre alguém com nome.
  */
 export function Rankings({ screen }: { screen: PontoScreen }) {
   const unitItems: RankbarItem[] =
@@ -32,12 +40,31 @@ export function Rankings({ screen }: { screen: PontoScreen }) {
       href: colaboradorHref(row.employee_id),
     })) ?? [];
 
+  const managerItems: RankbarItem[] =
+    screen.managerRanking?.map((row) => ({
+      // `manager_id` nulo é linha legítima: o espelho não diz a quem essa gente
+      // responde. Escondê-la faria as ocorrências dela sumirem do recorte por
+      // gestor sem aparecer como zero em lugar nenhum.
+      key: row.manager_id ?? "sem-gestor",
+      label: row.manager_name ?? "Sem gestor",
+      value: row.eventos,
+      display: `${formatNumber(row.eventos)} · ${formatNumber(row.colaboradores)} ${
+        row.colaboradores === 1 ? "pessoa" : "pessoas"
+      }`,
+    })) ?? [];
+
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
+    <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
       <RankCard
         title="Unidades com mais ocorrências"
         failed={screen.unitRanking === null}
         items={unitItems}
+      />
+      <RankCard
+        title="Gestores com mais ocorrências"
+        note="Ordenado por volume — o número de pessoas está ao lado"
+        failed={screen.managerRanking === null}
+        items={managerItems}
       />
       <RankCard
         title="Colaboradores com mais ocorrências"
@@ -51,16 +78,18 @@ export function Rankings({ screen }: { screen: PontoScreen }) {
 
 function RankCard({
   title,
+  note,
   items,
   failed,
 }: {
   title: string;
+  note?: string;
   items: RankbarItem[];
   failed: boolean;
 }) {
   return (
     <Card>
-      <CardHeader title={title} />
+      <CardHeader title={title} note={note} />
       <div className="px-5 py-5">
         {failed ? (
           <EmptyState

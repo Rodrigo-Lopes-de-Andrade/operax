@@ -64,6 +64,20 @@ insert into app.employee (id, tenant_id, company_id, unit_id, name) values
   ('a0000000-0000-0000-0000-0000000000c2', 'aaaaaaaa-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000000e1', 'a0000000-0000-0000-0000-0000000000a2', 'Colab A Norte'),
   ('b0000000-0000-0000-0000-0000000000c1', 'bbbbbbbb-0000-0000-0000-000000000002', 'b0000000-0000-0000-0000-0000000000e1', 'b0000000-0000-0000-0000-0000000000a1', 'Colab B Sul');
 
+-- O gestor como dimensão (migration 27). Um por unidade em A, para o ranking
+-- ter o que separar; um em B, para provar que ele não atravessa.
+insert into app.manager (id, tenant_id, secullum_structure_id, name) values
+  ('a0000000-0000-0000-0000-0000000000f1', 'aaaaaaaa-0000-0000-0000-000000000001', 8001, 'Gestor A Centro'),
+  ('a0000000-0000-0000-0000-0000000000f2', 'aaaaaaaa-0000-0000-0000-000000000001', 8002, 'Gestor A Norte'),
+  ('b0000000-0000-0000-0000-0000000000f1', 'bbbbbbbb-0000-0000-0000-000000000002', 8003, 'Gestor B Sul');
+
+update app.employee set manager_id = 'a0000000-0000-0000-0000-0000000000f1'
+ where id = 'a0000000-0000-0000-0000-0000000000c1';
+update app.employee set manager_id = 'a0000000-0000-0000-0000-0000000000f2'
+ where id = 'a0000000-0000-0000-0000-0000000000c2';
+update app.employee set manager_id = 'b0000000-0000-0000-0000-0000000000f1'
+ where id = 'b0000000-0000-0000-0000-0000000000c1';
+
 insert into app.employee_pii (employee_id, tenant_id, cpf, rg) values
   ('a0000000-0000-0000-0000-0000000000c1', 'aaaaaaaa-0000-0000-0000-000000000001', '00000000191', 'MG-1'),
   ('b0000000-0000-0000-0000-0000000000c1', 'bbbbbbbb-0000-0000-0000-000000000002', '00000000272', 'SP-2');
@@ -109,6 +123,10 @@ do $$ begin
     (select count(*) from app.employee_pii), 1);
   perform pg_temp.assert_eq('KPI do período confere',
     (select eventos from public.fn_kpi_period('2026-08-01','2026-08-31')), 2);
+  perform pg_temp.assert_eq('owner A vê os 2 gestores dele',
+    (select count(*) from app.manager), 2);
+  perform pg_temp.assert_eq('e o ranking por gestor separa os dois',
+    (select count(*) from public.fn_ranking_by_manager('2026-08-01','2026-08-31')), 2);
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -123,6 +141,8 @@ do $$ begin
     (select count(*) from public.vw_employee where name like 'Colab A%'), 0);
   perform pg_temp.assert_eq('owner B não vê desvio de A',
     (select count(*) from public.vw_deviation_event where minutes <> -99), 0);
+  perform pg_temp.assert_eq('owner B não vê gestor de A',
+    (select count(*) from app.manager where tenant_id <> 'bbbbbbbb-0000-0000-0000-000000000002'), 0);
   perform pg_temp.assert_eq('owner B não lê PII de A',
     (select count(*) from app.employee_pii where rg = 'MG-1'), 0);
 end $$;
@@ -145,6 +165,13 @@ do $$ begin
     (select count(*) from app.employee_compensation), 0);
   perform pg_temp.assert_eq('supervisor não vê evento em mode sombra',
     (select count(*) from app.deviation_event where mode = 'shadow'), 0);
+  -- A policy do gestor tem o mesmo recorte da de unidade: ver o gestor é ver
+  -- quem responde a ele. Sem isso, a chefia das outras unidades vazaria por uma
+  -- tabela de dimensão, que é onde ninguém procura vazamento.
+  perform pg_temp.assert_eq('supervisor vê só o gestor de quem ele enxerga',
+    (select count(*) from app.manager), 1);
+  perform pg_temp.assert_eq('e o ranking por gestor devolve só a linha dele',
+    (select count(*) from public.fn_ranking_by_manager('2026-08-01','2026-08-31')), 1);
 end $$;
 
 -- ---------------------------------------------------------------------------

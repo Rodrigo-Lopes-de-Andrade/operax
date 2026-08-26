@@ -788,6 +788,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `updated_at` | timestamp with time zone | não | `now()` |  |  |
 | `hr_code` | text | sim |  |  | ID RH do cliente. Chave ALTERNATIVA — nunca composta com a matrícula: cada uma identifica sozinha, e divergência entre elas é erro de linha no import. Anulável de propósito: fica vazia até o template de vínculo voltar preenchido. |
 | `exception_tracking` | boolean | não | `false` |  | Fora do motor de detecção POR DECISÃO — "ponto por exceção", supervisão. Nasce false: quem aparece fora da medição sem alguém ter tirado é quem ninguém decidiu não medir. Quem está aqui não materializa jornada esperada e é contado à parte no monitor, separado de `unrostered`, que é falha de cobertura e tem a mesma aparência. |
+| `manager_id` | uuid | sim |  | `app.manager` | A quem esta pessoa responde, promovido de `Funcionario.EstruturaId`. NÃO confundir com `manager_employee_id`, que aponta para um `app.employee` e continua sem fonte: o espelho diz o NOME do gestor, não qual colaborador ele é. |
 
 **Restrições**
 
@@ -807,6 +808,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 - `employee_departamento_idx` — `app.employee USING btree (department_id)`
 - `employee_empresa_idx` — `app.employee USING btree (company_id)`
 - `employee_gestor_idx` — `app.employee USING btree (manager_employee_id)`
+- `employee_manager_idx` — `app.employee USING btree (manager_id)`
 - `employee_tenant_unidade_idx` — `app.employee USING btree (tenant_id, unit_id) WHERE (status <> 'desligado'::text)`
 - `employee_unit_id_fkidx` — `app.employee USING btree (unit_id)`
 - `UNIQUE employee_hr_code_unique` — `app.employee USING btree (tenant_id, hr_code) WHERE (hr_code IS NOT NULL)`
@@ -1292,6 +1294,37 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 - `leave_period_periodo_idx` — `app.leave_period USING btree (employee_id, start_date, end_date)`
 - `leave_period_tenant_id_fkidx` — `app.leave_period USING btree (tenant_id)`
+
+</details>
+
+
+## `app.manager`
+
+> O gestor como o espelho o declara: `secullum."Estrutura"`, alcançada por `Funcionario.EstruturaId`. É dimensão de agregação, NÃO vínculo com um registro de colaborador — resolver qual colaborador é este gestor exigiria casar nome, e a medição de 26/08 mostrou que o casamento falha nas quatro estruturas de produção.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `secullum_structure_id` | bigint | não |  |  |  |
+| `name` | text | não |  |  | Vem de "Estrutura"."Descricao". Nome de pessoa, e é assim que o Secullum o guarda. |
+| `active` | boolean | não | `true` |  |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+| `updated_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `manager_read` | SELECT | `(util.is_admin(tenant_id) OR (EXISTS ( SELECT 1` | `` |
+| `manager_write` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+
+<details><summary>Índices</summary>
+
+- `manager_tenant_idx` — `app.manager USING btree (tenant_id) WHERE active`
+- `UNIQUE manager_tenant_id_secullum_structure_id_key` — `app.manager USING btree (tenant_id, secullum_structure_id)`
 
 </details>
 
@@ -2898,6 +2931,13 @@ Desvio ativo, de tipo que exige justificativa, sem nenhuma justificativa aceita.
 ```sql
 public.fn_ranking_by_employee(p_de date, p_ate date, p_company_id uuid DEFAULT NULL::uuid, p_unit_id uuid DEFAULT NULL::uuid, p_limite integer DEFAULT 20, p_department_id uuid DEFAULT NULL::uuid, p_manager_id uuid DEFAULT NULL::uuid)
   returns TABLE(employee_id uuid, employee_name text, unit_name text, eventos bigint, minutes_abs bigint)
+```
+
+### `fn_ranking_by_manager`
+
+```sql
+public.fn_ranking_by_manager(p_de date, p_ate date, p_company_id uuid DEFAULT NULL::uuid, p_unit_id uuid DEFAULT NULL::uuid, p_limite integer DEFAULT 20, p_department_id uuid DEFAULT NULL::uuid)
+  returns TABLE(manager_id uuid, manager_name text, eventos bigint, minutes_abs bigint, colaboradores bigint, unidades bigint)
 ```
 
 ### `fn_ranking_by_unit`

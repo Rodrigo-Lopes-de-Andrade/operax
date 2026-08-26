@@ -24,12 +24,25 @@ pending queue, which is the S1 acceptance criterion ("zero colaborador ativo sem
 unidade, **ou fila de pendência de mapeamento visível**"). Guessing a unit would
 turn curation work into silent data.
 
-THE MIRROR CARRIES NO MANAGER, SO NEITHER DOES THIS
-`app.employee.manager_employee_id` stays null here. `secullum."Funcionario"` has
-no column for a supervisor — checked against the production baseline, not
-assumed — and it is one of the three fields `ownership.MATRIX` marks `pending`:
-treated as the sync's until the customer says where it comes from. Filling it by
-guessing the department's head would invent a hierarchy the source never claimed.
+THE MIRROR DOES CARRY A MANAGER — JUST NOT AS A LINK TO AN EMPLOYEE
+This used to read "the mirror carries no manager". That was wrong, and it was
+wrong because it looked for a column named after a supervisor.
+`secullum."Funcionario"."EstruturaId"` points at `secullum."Estrutura"`, which
+this repository's own `sync-cadastro` calls the manager (`listManagers`,
+`upsertManagers`) and whose baseline comment names "tabela do gestor".
+
+Measured against production on 2026-08-26: four structures, all active, covering
+69 of ~70 active people; `EstruturaPaiId` null on all four, so the hierarchy is
+one level; and `Descricao` is two words, no digits, with a first name that
+matches somebody on the payroll. It is a person's name.
+
+So the manager is promoted, as `app.manager` (migration 27), and every person
+points at it. What is NOT promoted is which EMPLOYEE that manager is:
+`manager_employee_id` stays null. Full-name matching resolves zero of the four,
+and `sync-cadastro` — which already attempts exactly that match to find the
+manager's e-mail — also resolved zero in production. Writing that link from a
+name would be the guess this module refuses everywhere else, and the data says
+the guess would miss.
 
 STATUS COMES FROM THE TERMINATION DATE, AND ONLY FROM IT
 `Demissao` filled means `desligado`. Vacation and leave are day facts, not roster
@@ -84,18 +97,35 @@ on conflict (tenant_id, secullum_department_id) do update set
     active     = excluded.active
 """
 
+#: O gestor, promovido do espelho ANTES das pessoas, porque elas apontam para ele.
+#: `secullum."Estrutura"` é a tabela que o `sync-cadastro` deste repositório chama
+#: de manager, e a `Descricao` dela é nome de pessoa — medido contra produção em
+#: 26/08: quatro estruturas, duas palavras cada, sem dígito, e o primeiro nome das
+#: quatro casa com o primeiro nome de alguém do quadro.
+_MANAGERS_SQL = """
+insert into app.manager (tenant_id, secullum_structure_id, name, active)
+select %(tenant_id)s::uuid, e."EstruturaId", e."Descricao", e.ativo
+from secullum."Estrutura" e
+where e.tenant_id = %(tenant_id)s
+on conflict (tenant_id, secullum_structure_id) do update set
+    name       = excluded.name,
+    active     = excluded.active,
+    updated_at = now()
+"""
+
 #: ⛔ `company_id` sai de `Funcionario.empresa_id`. Trocar por
 #:    `Departamento -> Empresa` põe cerca de um quarto da folha na empresa errada,
 #:    de forma consistente e invisível — é a regra 5 do projeto.
 _EMPLOYEES_SQL = """
 insert into app.employee (
-    tenant_id, company_id, unit_id, department_id, secullum_employee_id,
+    tenant_id, company_id, unit_id, department_id, manager_id, secullum_employee_id,
     registration_number, name, cargo, hired_on, terminated_on, status
 )
 select %(tenant_id)s::uuid,
        c.id,
        m.unit_id,
        dep.id,
+       g.id,
        f."FuncionarioId",
        f."NumeroFolha",
        f."Nome",
@@ -115,11 +145,18 @@ left join app.department dep
 left join app.unit_secullum_map m
        on m.tenant_id = %(tenant_id)s
       and m.secullum_department_id = d."DepartamentoId"
+left join app.manager g
+       on g.tenant_id = %(tenant_id)s
+      and g.secullum_structure_id = f."EstruturaId"
 left join secullum."Funcao" fu on fu.id = f.funcao_id and fu.tenant_id = %(tenant_id)s
 where f.tenant_id = %(tenant_id)s and f."FuncionarioId" is not null
 on conflict (tenant_id, secullum_employee_id) do update set
     company_id          = excluded.company_id,
     department_id       = excluded.department_id,
+    -- Sem `coalesce`, ao contrário de `unit_id`: o gestor é fato do espelho e não
+    -- curadoria humana. Se a origem deixou de declará-lo, ele deixou de valer —
+    -- preservá-lo manteria no ar uma chefia que a fonte já desfez.
+    manager_id          = excluded.manager_id,
     registration_number = excluded.registration_number,
     name                = excluded.name,
     cargo               = excluded.cargo,
@@ -190,6 +227,7 @@ async def promote(context: SystemContext) -> Promotion:
     async with tenant_scope(context) as scope:
         await scope.execute(_COMPANIES_SQL, {})
         await scope.execute(_DEPARTMENTS_SQL, {})
+        await scope.execute(_MANAGERS_SQL, {})
         await scope.execute(_EMPLOYEES_SQL, {})
         await scope.execute(_TOTALS_SQL, {})
         totais = await scope.fetchone()

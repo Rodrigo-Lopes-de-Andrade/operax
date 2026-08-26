@@ -34,7 +34,13 @@ TENANT = "ffffffff-0000-0000-0000-000000000001"
 def instrucoes() -> dict[str, str]:
     fonte = (RAIZ / "backend" / "operax" / "motor" / "cadastro.py").read_text()
     achadas = dict(re.findall(r'^(_[A-Z][A-Z_]*_SQL) = """(.*?)"""', fonte, re.S | re.M))
-    for nome in ("_COMPANIES_SQL", "_DEPARTMENTS_SQL", "_EMPLOYEES_SQL", "_PENDING_SQL"):
+    for nome in (
+        "_COMPANIES_SQL",
+        "_DEPARTMENTS_SQL",
+        "_MANAGERS_SQL",
+        "_EMPLOYEES_SQL",
+        "_PENDING_SQL",
+    ):
         if nome not in achadas:
             sys.exit(f"não encontrei {nome} em backend/operax/motor/cadastro.py")
     return {n: s.replace("%(tenant_id)s", f"'{TENANT}'") for n, s in achadas.items()}
@@ -67,30 +73,43 @@ insert into secullum."Departamento" (id, "DepartamentoId", empresa_id, "Descrica
 insert into secullum."Funcao" (id, "FuncaoId", "Descricao", tenant_id) values
   ('ffffffff-0000-0000-0000-0000000000fa', 7201, 'Manobrista', '{TENANT}');
 
+-- O gestor, como o Secullum o guarda: uma "Estrutura" cuja Descricao é nome de
+-- pessoa. Duas delas, e a segunda existe para provar que cada um vai para a
+-- estrutura DELE e não para a primeira que aparecer.
+insert into secullum."Estrutura"
+  (id, "EstruturaId", "EstruturaPaiId", departamento_id, "Descricao", ativo, tenant_id) values
+  ('ffffffff-0000-0000-0000-00000000e5a1', 7401, null,
+   'ffffffff-0000-0000-0000-0000000000d1', 'Helena Prado', true, '{TENANT}'),
+  ('ffffffff-0000-0000-0000-00000000e5a2', 7402, null,
+   'ffffffff-0000-0000-0000-0000000000d2', 'Ivo Ramalho', true, '{TENANT}');
+
 -- F2 é o caso que a regra 5 existe para pegar: o departamento é da Empresa A e
 -- a pessoa é da Empresa B.
 insert into secullum."Funcionario"
   (id, "FuncionarioId", "Nome", "NumeroFolha", "Admissao", "Demissao",
-   empresa_id, departamento_id, funcao_id, tenant_id)
+   empresa_id, departamento_id, funcao_id, "EstruturaId", tenant_id)
 values
   ('ffffffff-0000-0000-0000-0000000000a1', 7301, 'Alice Mapeada', '00001', '2024-03-01', null,
    'ffffffff-0000-0000-0000-0000000000e1', 'ffffffff-0000-0000-0000-0000000000d1',
-   'ffffffff-0000-0000-0000-0000000000fa', '{TENANT}'),
+   'ffffffff-0000-0000-0000-0000000000fa', 7401, '{TENANT}'),
   ('ffffffff-0000-0000-0000-0000000000a2', 7302, 'Bruno Empresa B', '00002', '2024-04-01', null,
    'ffffffff-0000-0000-0000-0000000000e2', 'ffffffff-0000-0000-0000-0000000000d1',
-   null, '{TENANT}'),
+   null, 7402, '{TENANT}'),
+  -- Sem estrutura no espelho: o Secullum não diz a quem ela responde, e o
+  -- ranking por gestor tem de mostrá-la como "sem gestor" em vez de escondê-la.
   ('ffffffff-0000-0000-0000-0000000000a3', 7303, 'Carla Sem Mapa', '00003', '2024-05-01', null,
    'ffffffff-0000-0000-0000-0000000000e1', 'ffffffff-0000-0000-0000-0000000000d2',
-   null, '{TENANT}'),
+   null, null, '{TENANT}'),
   ('ffffffff-0000-0000-0000-0000000000a4', 7304, 'Davi Desligado', '00004', '2023-01-01', '2026-06-30',
    'ffffffff-0000-0000-0000-0000000000e1', 'ffffffff-0000-0000-0000-0000000000d2',
-   null, '{TENANT}');
+   null, null, '{TENANT}');
 
 -- ---------------------------------------------------------------------------
 -- Primeira promoção: ainda sem unidade nenhuma cadastrada
 -- ---------------------------------------------------------------------------
 {COMPANIES};
 {DEPARTMENTS};
+{MANAGERS};
 {EMPLOYEES};
 
 do $$ begin
@@ -137,9 +156,35 @@ do $$ begin
   perform pg_temp.assert_eq('a função do espelho vira o cargo',
     (select cargo from app.employee
       where tenant_id = '{TENANT}' and secullum_employee_id = 7301), 'Manobrista');
-  perform pg_temp.assert_eq('o gestor não é inventado: o espelho não tem essa coluna',
+  -- ⛔ `manager_employee_id` aponta para um `app.employee`, e o espelho não diz
+  --    QUAL colaborador é o gestor — só o nome dele. Casar nome resolveu zero de
+  --    quatro em produção, e um vínculo adivinhado não se distingue de um lido.
+  perform pg_temp.assert_eq('qual colaborador É o gestor continua sem resposta',
     (select count(*)::text from app.employee
       where tenant_id = '{TENANT}' and manager_employee_id is not null), '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- B2) o gestor que o espelho DE FATO tem: "Estrutura"
+-- ---------------------------------------------------------------------------
+do $$ begin
+  perform pg_temp.assert_eq('as duas estruturas viram gestores, com o nome do espelho',
+    (select string_agg(name, ', ' order by name) from app.manager
+      where tenant_id = '{TENANT}'), 'Helena Prado, Ivo Ramalho');
+  -- Cada um vai para a estrutura DELE. Se o join caísse na primeira que
+  -- aparecesse, os dois teriam a mesma chefia e o ranking somaria errado.
+  perform pg_temp.assert_eq('cada pessoa responde à estrutura dela',
+    (select g.name from app.employee e join app.manager g on g.id = e.manager_id
+      where e.tenant_id = '{TENANT}' and e.secullum_employee_id = 7301), 'Helena Prado');
+  perform pg_temp.assert_eq('e a outra, à outra',
+    (select g.name from app.employee e join app.manager g on g.id = e.manager_id
+      where e.tenant_id = '{TENANT}' and e.secullum_employee_id = 7302), 'Ivo Ramalho');
+  -- Sem estrutura no espelho é nulo, não é a estrutura do departamento: derivar
+  -- a chefia do departamento inventaria uma hierarquia que a origem não afirmou.
+  perform pg_temp.assert_eq('sem estrutura no espelho, sem gestor',
+    (select count(*)::text from app.employee
+      where tenant_id = '{TENANT}' and secullum_employee_id = 7303
+        and manager_id is null), '1');
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -195,6 +240,7 @@ update app.employee set exception_tracking = true
 
 {COMPANIES};
 {DEPARTMENTS};
+{MANAGERS};
 {EMPLOYEES};
 
 do $$ begin
@@ -227,6 +273,7 @@ def main() -> None:
     for marca, nome in (
         ("{COMPANIES}", "_COMPANIES_SQL"),
         ("{DEPARTMENTS}", "_DEPARTMENTS_SQL"),
+        ("{MANAGERS}", "_MANAGERS_SQL"),
         ("{EMPLOYEES}", "_EMPLOYEES_SQL"),
         ("{PENDING}", "_PENDING_SQL"),
     ):

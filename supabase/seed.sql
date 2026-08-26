@@ -205,6 +205,28 @@ update app.employee c
    and c.id <> md5('operax-dev-employee-' || g.n)::uuid
    and c.manager_employee_id is distinct from md5('operax-dev-employee-' || g.n)::uuid;
 
+-- E o gestor como DIMENSÃO (migration 27), que é de onde o ranking sai. São
+-- coisas diferentes de propósito: `manager_employee_id` diz qual colaborador é o
+-- gestor e em produção ninguém consegue preenchê-lo; `manager_id` diz a quem a
+-- pessoa responde, e é isso que o espelho de fato carrega. Quatro gestores, como
+-- em produção, e duas unidades sem gestor para a linha "Sem gestor" existir no
+-- seed — ela é a que some se alguém trocar o `left join` do RPC por `join`.
+insert into app.manager (id, tenant_id, secullum_structure_id, name)
+select md5('operax-dev-manager-' || g.n)::uuid,
+       'dede0000-0000-0000-0000-000000000001',
+       8000 + g.n,
+       (array['Helena Prado','Ivo Ramalho','Lúcia Bastos','Otávio Meireles'])[g.n]
+from generate_series(1, 4) g(n)
+on conflict (id) do nothing;
+
+update app.employee c
+   set manager_id = md5('operax-dev-manager-' || g.n)::uuid
+  from generate_series(1, 4) g(n)
+ where c.tenant_id = 'dede0000-0000-0000-0000-000000000001'
+   and c.unit_id = (array['dede0000-0000-0000-0000-0000000000a1','dede0000-0000-0000-0000-0000000000a2',
+                          'dede0000-0000-0000-0000-0000000000a3','dede0000-0000-0000-0000-0000000000a4'])[g.n]::uuid
+   and c.manager_id is distinct from md5('operax-dev-manager-' || g.n)::uuid;
+
 -- ---------------------------------------------------------------------------
 -- Política de tipos de desvio do tenant
 -- ---------------------------------------------------------------------------

@@ -42,6 +42,13 @@ export type UnitRank = Functions["fn_ranking_by_unit"]["Returns"][number];
 export type EmployeeRank =
   Functions["fn_ranking_by_employee"]["Returns"][number];
 export type Recurrence = Functions["fn_recurrence"]["Returns"][number];
+/**
+ * O gestor vem de `app.manager`, promovido de `secullum."Estrutura"` — e não de
+ * `employee.manager_employee_id`, que aponta para um colaborador e continua sem
+ * fonte. `manager_id` nulo é uma linha legítima: quem o espelho não diz a quem
+ * responde tem de aparecer como "sem gestor", não sumir do ranking.
+ */
+export type ManagerRank = Functions["fn_ranking_by_manager"]["Returns"][number];
 
 export type Occurrence = {
   eventoId: string;
@@ -138,6 +145,7 @@ export type PontoScreen = Resolved & {
   byTypeTruncated: boolean;
   unitRanking: UnitRank[] | null;
   employeeRanking: EmployeeRank[] | null;
+  managerRanking: ManagerRank[] | null;
   recurrence: Recurrence[] | null;
 };
 
@@ -223,6 +231,7 @@ export async function loadPontoScreen(
     typeResult,
     unitRankResult,
     employeeRankResult,
+    managerRankResult,
     recurrenceResult,
     selectedResult,
   ] = await Promise.all([
@@ -301,6 +310,13 @@ export async function loadPontoScreen(
       p_unit_id: unitId,
       p_limite: 6,
     }),
+    supabase.rpc("fn_ranking_by_manager", {
+      p_de: range.de,
+      p_ate: range.ate,
+      p_company_id: companyId,
+      p_unit_id: unitId,
+      p_limite: 6,
+    }),
     supabase.rpc("fn_recurrence", {
       p_de: range.de,
       p_ate: range.ate,
@@ -350,6 +366,9 @@ export async function loadPontoScreen(
     employeeRanking: employeeRankResult.error
       ? null
       : (employeeRankResult.data ?? []),
+    managerRanking: managerRankResult.error
+      ? null
+      : (managerRankResult.data ?? []),
     recurrence: recurrenceResult.error ? null : (recurrenceResult.data ?? []),
   };
 }
