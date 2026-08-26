@@ -47,7 +47,8 @@ ROWS_SQL = """
                h."Descricao" as schedule,
                f.id          as mirror_id,
                e.id          as employee_id,
-               e.status
+               e.status,
+               e.exception_tracking
         from secullum."Horario" h
         left join escala esc on esc.horario_id = h.id
         join secullum."Funcionario" f
@@ -74,6 +75,11 @@ ROWS_SQL = """
     select p.secullum_schedule_id,
            p.schedule,
            count(*) filter (where p.status <> 'desligado')::int as employees,
+           -- A outra resposta possível para um horário em branco: não é que
+           -- falte a rotação, é que ninguém deve jornada a essa gente.
+           count(*) filter (
+               where p.status <> 'desligado' and p.exception_tracking
+           )::int as out_of_engine,
            r.cycle_length_days,
            r.anchor_date,
            r.expected_entry,
@@ -179,5 +185,32 @@ AUDIT_SQL = """
       (tenant_id, user_id, action, entity, entity_id, antes, depois)
     values
       (%(tenant_id)s, %(user_id)s, 'update', 'schedule_rotation_map',
+       %(entity_id)s, %(antes)s, %(depois)s)
+"""
+
+#: ⛔ Escreve na pessoa, e o horário só a alcança por join contra o espelho DESTE
+#:    tenant. Estar fora do motor é do papel e não do horário — mover alguém de
+#:    horário não pode ligar nem desligar a medição —, mas quem cura pensa por
+#:    horário: "essa turma toda é supervisão". Então o alvo é o conjunto, e o
+#:    fato continua gravado em cada pessoa.
+EXCEPTION_SQL = """
+    update app.employee e
+       set exception_tracking = %(exception_tracking)s, updated_at = now()
+      from secullum."Funcionario" f
+      join secullum."Horario" h on h.id = f.horario_id
+     where e.tenant_id = %(tenant_id)s
+       and f.tenant_id = e.tenant_id
+       and f."FuncionarioId" = e.secullum_employee_id
+       and h."HorarioId" = %(secullum_schedule_id)s
+       and e.status <> 'desligado'
+       and e.exception_tracking is distinct from %(exception_tracking)s
+    returning e.id
+"""
+
+EXCEPTION_AUDIT_SQL = """
+    insert into app.audit_log
+      (tenant_id, user_id, action, entity, entity_id, antes, depois)
+    values
+      (%(tenant_id)s, %(user_id)s, 'update', 'employee.exception_tracking',
        %(entity_id)s, %(antes)s, %(depois)s)
 """

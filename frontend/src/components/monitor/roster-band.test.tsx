@@ -18,6 +18,7 @@ function monitor(overrides: Partial<DailyMonitor> = {}): DailyMonitor {
     on_leave: 1,
     day_off: 7,
     unrostered: 3,
+    exception_tracking: 0,
     off_roster: 11,
     units: [],
     rows: [],
@@ -38,6 +39,7 @@ describe("RosterBand", () => {
       "Afastados",
       "Folga",
       "Sem jornada",
+      "Fora do motor",
     ]) {
       expect(screen.getByText(rotulo)).toBeInTheDocument();
     }
@@ -54,7 +56,30 @@ describe("RosterBand", () => {
   it("cala a ressalva quando não há ninguém sem jornada", () => {
     render(<RosterBand monitor={monitor({ unrostered: 0 })} />);
 
-    expect(screen.queryByText(/sem jornada prevista para o dia —/)).toBeNull();
+    expect(screen.queryByText(/sem jornada prevista para o dia/)).toBeNull();
+  });
+
+  it("separa quem está fora do motor de quem o motor não cobriu", () => {
+    // Antes da migration 26 os dois estavam no mesmo número, e a ressalva dizia
+    // "pode ser desenho, pode ser cobertura do motor". Uma falha de cobertura se
+    // escondia ali dentro parecendo decisão de alguém.
+    render(
+      <RosterBand
+        monitor={monitor({
+          active: 30,
+          scheduled: 18,
+          on_vacation: 2,
+          on_leave: 1,
+          day_off: 4,
+          unrostered: 2,
+          exception_tracking: 3,
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/2 sem jornada prevista para o dia/)).toBeVisible();
+    expect(screen.getByText(/é cobertura do motor/)).toBeVisible();
+    expect(screen.getByText("Fora do motor")).toBeInTheDocument();
   });
 
   it("não chama nada de presença", () => {

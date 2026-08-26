@@ -352,6 +352,7 @@ def answer_rotacao(monkeypatch: pytest.MonkeyPatch):
         admin: bool = True,
         gravado: list[dict[str, Any]] | None = None,
         cobertos: int = 3,
+        fora: int = 3,
     ) -> tuple[StubScope, StubScope]:
         scope = StubScope({"util.is_admin": {"admin": admin}})
         bound = StubScope(
@@ -363,6 +364,7 @@ def answer_rotacao(monkeypatch: pytest.MonkeyPatch):
                     gravado if gravado is not None else [{"secullum_schedule_id": 9042}]
                 ),
                 "count(*)::int as employees": {"employees": cobertos},
+                "set exception_tracking": [{"id": uuid4()} for _ in range(fora)],
                 "insert into app.audit_log": [],
             }
         )
@@ -493,3 +495,61 @@ def test_cada_rotacao_carimbada_deixa_trilha(client: TestClient, issue_token, an
     _post_rot(client, issue_token(), NOTURNO)
 
     assert sum("app.audit_log" in stmt for stmt in bound.statements) == 1
+
+
+# ---------------------------------------------------------------------------
+# A outra resposta para um horário em branco
+# ---------------------------------------------------------------------------
+def test_tirar_do_motor_escreve_na_pessoa_e_alcanca_pelo_horario(
+    client: TestClient, issue_token, answer_rotacao
+):
+    """Estar fora do motor é do papel; o horário é só como se chega ao conjunto.
+
+    Se o fato ficasse no horário, mover um supervisor para um horário declarado
+    o devolveria à medição sem ninguém ter decidido isso.
+    """
+    _, bound = answer_rotacao(fora=6)
+
+    body = client.post(
+        "/curadoria/fora-do-motor",
+        json={"secullum_schedule_id": 9042, "exception_tracking": True},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    ).json()
+
+    assert body == {"secullum_schedule_id": 9042, "employees_changed": 6}
+    escrita = next(stmt for stmt in bound.statements if "exception_tracking" in stmt)
+    assert "update app.employee" in escrita
+    assert 'h."HorarioId" = %(secullum_schedule_id)s' in escrita
+
+
+def test_nada_a_mudar_nao_e_erro(client: TestClient, issue_token, answer_rotacao):
+    """Zero linha aqui é "já estavam", e transformar isso em 422 seria mentira.
+
+    Diferente da gravação da rotação: lá zero linha só acontece com um horário
+    de outro cliente, e é recusa. Aqui os dois casos deixam o banco igual.
+    """
+    answer_rotacao(fora=0)
+
+    response = client.post(
+        "/curadoria/fora-do-motor",
+        json={"secullum_schedule_id": 9042, "exception_tracking": True},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["employees_changed"] == 0
+
+
+def test_quem_nao_e_admin_nao_tira_ninguem_do_motor(
+    client: TestClient, issue_token, answer_rotacao
+):
+    _, bound = answer_rotacao(admin=False)
+
+    response = client.post(
+        "/curadoria/fora-do-motor",
+        json={"secullum_schedule_id": 9042, "exception_tracking": True},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    )
+
+    assert response.status_code == 403
+    assert bound.statements == []

@@ -188,6 +188,11 @@ update app.employee set unit_id = 'ffffffff-0000-0000-0000-00000000ac01'
  where tenant_id = '{TENANT}' and secullum_employee_id = 7303;
 delete from app.unit_secullum_map where tenant_id = '{TENANT}' and secullum_department_id = 7101;
 
+-- E alguém tirou o Bruno do motor: supervisão, ponto por exceção. É decisão
+-- humana, e a sincronização roda a cada 30 minutos por cima dela.
+update app.employee set exception_tracking = true
+ where tenant_id = '{TENANT}' and secullum_employee_id = 7302;
+
 {COMPANIES};
 {DEPARTMENTS};
 {EMPLOYEES};
@@ -202,6 +207,14 @@ do $$ begin
     (select unit_id::text from app.employee
       where tenant_id = '{TENANT}' and secullum_employee_id = 7303),
     'ffffffff-0000-0000-0000-00000000ac01');
+  -- ⛔ O `do update set` da promoção lista as colunas uma a uma, então uma coluna
+  --    nova sobrevive sozinha. Isso é propriedade do SQL de hoje e não do
+  --    schema: no dia em que alguém trocar a lista por `excluded.*`, a
+  --    sincronização passa a repor seis supervisores dentro do motor a cada
+  --    trinta minutos, sem erro nenhum e sem ninguém ver.
+  perform pg_temp.assert_eq('quem foi tirado do motor continua fora depois da promoção',
+    (select exception_tracking::text from app.employee
+      where tenant_id = '{TENANT}' and secullum_employee_id = 7302), 'true');
 end $$;
 
 rollback;

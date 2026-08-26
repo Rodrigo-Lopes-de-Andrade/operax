@@ -41,6 +41,8 @@ from operax.core.tenant import tenant_scope, user_scope
 from operax.motor import mapeamento, rotacao
 from server.deps import CurrentTenant
 from server.models import (
+    ExceptionTrackingApplied,
+    ExceptionTrackingRequest,
     RotationApplied,
     RotationRequest,
     RotationRow,
@@ -225,6 +227,55 @@ async def validate_rotation(tenant: CurrentTenant, request: RotationRequest) -> 
 
     return RotationApplied(
         secullum_schedule_id=request.secullum_schedule_id, employees_covered=cobertos
+    )
+
+
+@router.post("/fora-do-motor")
+async def set_exception_tracking(
+    tenant: CurrentTenant, request: ExceptionTrackingRequest
+) -> ExceptionTrackingApplied:
+    """Tira do motor — ou devolve a ele — todo mundo de um horário.
+
+    É a outra resposta possível para um horário que não declara expediente: não
+    é que falte a rotação, é que não há jornada devida. Quem está aqui deixa de
+    materializar `app.expected_workday` e passa a ser contado à parte no monitor,
+    separado de `unrostered`, que é falha de cobertura e tem a mesma aparência.
+    """
+    async with user_scope(tenant) as scope:
+        await _require_admin(scope, tenant, _SEM_PERMISSAO_ROTACAO)
+
+    async with tenant_scope(tenant) as bound:
+        await bound.execute(
+            rotacao.EXCEPTION_SQL,
+            {
+                "secullum_schedule_id": request.secullum_schedule_id,
+                "exception_tracking": request.exception_tracking,
+            },
+        )
+        mudados = await bound.fetchall()
+
+        # Zero linha aqui NÃO é recusa: pode ser um horário de outro cliente e
+        # pode ser todo mundo já do lado pedido. A diferença não muda o que o
+        # sistema faz — nada foi alterado nos dois casos — e inventar um 422
+        # para o segundo transformaria "já estava assim" em erro.
+        await bound.execute(
+            rotacao.EXCEPTION_AUDIT_SQL,
+            {
+                "user_id": tenant.user_id,
+                "entity_id": str(request.secullum_schedule_id),
+                "antes": None,
+                "depois": Jsonb(
+                    {
+                        "exception_tracking": request.exception_tracking,
+                        "employees_changed": len(mudados),
+                    }
+                ),
+            },
+        )
+
+    return ExceptionTrackingApplied(
+        secullum_schedule_id=request.secullum_schedule_id,
+        employees_changed=len(mudados),
     )
 
 

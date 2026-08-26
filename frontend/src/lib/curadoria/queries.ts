@@ -81,6 +81,12 @@ export type RotationRow = {
   secullum_schedule_id: number;
   schedule: string;
   employees: number;
+  /**
+   * Quantos desses já estão fora do motor por decisão. Um horário em branco tem
+   * duas respostas possíveis, e esta é a outra: não falta rotação, não há
+   * jornada devida.
+   */
+  out_of_engine: number;
   cycle_length_days: number | null;
   anchor_date: string | null;
   expected_entry: string | null;

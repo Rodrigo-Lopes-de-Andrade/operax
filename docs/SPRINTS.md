@@ -230,9 +230,26 @@ O que entrou:
   deduz a âncora das batidas: escala derivada de batida encaixa sempre, e escala
   que encaixa sempre nunca produz `no_punches` nem `punch_on_day_off`.
 
-O que fica aberto: as 6 pessoas da administração (`U-000 … (Supervisão)`)
-continuam dentro do denominador do G4 — a decisão de tirá-las do motor foi
-tomada em 26/08 e ainda não foi implementada.
+**E a administração saiu do motor**, decisão do Rodrigo em 26/08. As 6 pessoas
+de `U-000 … (Supervisão)` têm horário em branco por desenho — os horários irmãos
+se chamam "Ponto por exceção" e "Marcação Supervisor" — e mediram-se contra uma
+jornada que ninguém lhes deve. `app.employee.exception_tracking` (migration 26)
+é a decisão escrita: quem a carrega não materializa jornada e é contado à parte
+no monitor.
+
+O ponto não é economizar seis linhas: é que `unrostered` juntava **decisão** e
+**falha de cobertura** no mesmo número, e as duas têm a mesma aparência na tela.
+Enquanto dividiam um balde, uma falha de cobertura se escondia lá dentro
+parecendo intenção de alguém. Agora o quadro do dia tem as duas faixas, e a
+ressalva que dizia "pode ser desenho, pode ser cobertura do motor" virou uma
+afirmação.
+
+A marca nasce `false` para todos, pelo mesmo motivo de `triggers_alert`: quem
+aparece fora da medição sem alguém ter tirado é quem ninguém decidiu não medir.
+E `scripts/92_teste_cadastro.py` passou a afirmar que ela sobrevive à promoção —
+a sincronização roda a cada 30 minutos por cima de `app.employee`, e o dia em
+que alguém trocar a lista de colunas do `on conflict` por `excluded.*`, seis
+supervisores voltam para dentro do motor sem erro nenhum e sem ninguém ver.
 
 ---
 

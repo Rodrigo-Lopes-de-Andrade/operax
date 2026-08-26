@@ -61,6 +61,40 @@ export function RotationQueue({ screen }: { screen: RotationScreen }) {
     }));
   }
 
+  async function setOutOfEngine(row: RotationRow, out: boolean) {
+    setSaving(row.secullum_schedule_id);
+    setError(null);
+    setApplied(null);
+
+    try {
+      const result = await requestApiAsUser<{
+        secullum_schedule_id: number;
+        employees_changed: number;
+      }>("/curadoria/fora-do-motor", {
+        method: "POST",
+        body: {
+          secullum_schedule_id: row.secullum_schedule_id,
+          exception_tracking: out,
+        },
+      });
+
+      setApplied(
+        out
+          ? `${formatNumber(result.employees_changed)} fora do motor — deixam de ter jornada esperada`
+          : `${formatNumber(result.employees_changed)} de volta ao motor`,
+      );
+      router.refresh();
+    } catch (caught) {
+      setError(
+        caught instanceof ApiError && caught.detail
+          ? caught.detail
+          : "Não foi possível gravar agora. Nada foi alterado.",
+      );
+    } finally {
+      setSaving(null);
+    }
+  }
+
   async function declare(row: RotationRow) {
     const form = current(row);
     const load = workload(form);
@@ -150,6 +184,28 @@ export function RotationQueue({ screen }: { screen: RotationScreen }) {
               </div>
               <State row={row} />
             </header>
+
+            {/* Um horário em branco tem duas respostas, e esta é a outra: não
+                é que falte a rotação, é que não há jornada devida. Quem cura
+                precisa das duas no mesmo lugar, senão a segunda nunca acontece
+                e essa gente fica em "sem escala" para sempre. */}
+            <p className="text-ink-faint text-xs text-pretty">
+              {row.out_of_engine > 0
+                ? `${formatNumber(row.out_of_engine)} de ${formatNumber(row.employees)} já estão fora do motor — supervisão, ponto por exceção.`
+                : "Se essa turma é supervisão e não tem jornada a cumprir, ela não precisa de escala:"}{" "}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() =>
+                  void setOutOfEngine(row, row.out_of_engine < row.employees)
+                }
+                className="text-ink-muted hover:text-ink font-semibold underline underline-offset-2"
+              >
+                {row.out_of_engine < row.employees
+                  ? "não medir este horário"
+                  : "voltar a medir este horário"}
+              </button>
+            </p>
 
             <Observed
               row={row}

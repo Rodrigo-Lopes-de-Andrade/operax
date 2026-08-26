@@ -81,13 +81,19 @@ _SEVERITY_ORDER: dict[Severity, int] = {"critical": 0, "attention": 1, "watch": 
 # engine never materialised simply did not exist on this screen: not scheduled,
 # not off, not counted. Six people at the anchor client are in exactly that
 # state on purpose — their schedules are "Ponto por exceção" and they belong
-# outside the engine — and there is no way to tell them apart from a coverage
-# failure by looking. Starting from the active headcount makes the difference a
-# number (`unrostered`) instead of an absence, and a unit whose whole team is off
-# stops disappearing from the list.
+# outside the engine. Starting from the active headcount made the difference a
+# number instead of an absence, and a unit whose whole team is off stopped
+# disappearing from the list.
+#
+# Since migration 26 that number is TWO numbers. `unrostered` kept its meaning —
+# the engine owed this person a day and did not produce one — and
+# `exception_tracking` carries whoever a person deliberately took out of the
+# engine. Folding them back together would restore the original problem in a
+# subtler form: a coverage failure hiding inside a count that looks intentional.
 _UNITS_SQL = """
     with roster as (
         select c.id as employee_id, w.day_type, c.unit_id, u.name as unit_name,
+               c.exception_tracking,
                c.id = any (%(punched)s::uuid[]) as punched
         from app.employee c
         left join app.unit u on u.id = c.unit_id
@@ -121,7 +127,10 @@ _UNITS_SQL = """
            count(*) filter (
                where r.day_type in ('day_off', 'holiday', 'compensated')
            ) as day_off,
-           count(*) filter (where r.day_type is null) as unrostered,
+           count(*) filter (
+               where r.day_type is null and not r.exception_tracking
+           ) as unrostered,
+           count(*) filter (where r.exception_tracking) as exception_tracking,
            count(*) filter (
                where r.day_type is not null and r.day_type <> 'work'
            ) as off_roster
@@ -214,6 +223,7 @@ async def daily_monitor(
         day_off=sum(unit.day_off for unit in units),
         unrostered=sum(unit.unrostered for unit in units),
         off_roster=sum(unit.off_roster for unit in units),
+        exception_tracking=sum(unit.exception_tracking for unit in units),
         units=units,
         rows=rows[:_MAX_ROWS],
         truncated=len(rows) > _MAX_ROWS,

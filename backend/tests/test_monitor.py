@@ -43,6 +43,7 @@ def unit_row(**overrides: Any) -> dict[str, Any]:
         "day_off": 4,
         "unrostered": 3,
         "off_roster": 7,
+        "exception_tracking": 0,
     } | overrides
 
 
@@ -523,3 +524,48 @@ def test_sem_o_espelho_no_banco_a_tela_responde_em_vez_de_quebrar(
     # ninguém bateu quando o que houve foi não haver o que ler.
     assert response.json()["punches_read_at"] is None
     assert not any("from app.batida_marcacao m" in stmt for stmt in bound.statements)
+
+
+def test_quem_esta_fora_do_motor_por_decisao_nao_conta_como_falha_de_cobertura(
+    client: TestClient, issue_token, answer
+):
+    """As duas situações têm a mesma aparência e significam o oposto.
+
+    `unrostered` é o motor devendo um dia e não o tendo produzido — bug. Quem
+    carrega `exception_tracking` foi tirado da medição por uma pessoa: ninguém
+    lhe deve jornada. Enquanto os dois dividiam um número, uma falha de
+    cobertura se escondia dentro dele parecendo decisão.
+    """
+    answer(
+        [
+            unit_row(
+                active=30,
+                scheduled=20,
+                on_vacation=2,
+                on_leave=1,
+                day_off=4,
+                unrostered=1,
+                exception_tracking=2,
+            )
+        ],
+        [],
+    )
+
+    body = client.get(
+        "/monitor/diario",
+        params={"dia": DAY.isoformat()},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    ).json()
+
+    assert (body["unrostered"], body["exception_tracking"]) == (1, 2)
+    # A conta continua fechando com o efetivo — é ela que torna a diferença
+    # visível em vez de virar gente que some da tela.
+    unidade = body["units"][0]
+    assert (
+        unidade["scheduled"]
+        + unidade["on_vacation"]
+        + unidade["on_leave"]
+        + unidade["day_off"]
+        + unidade["unrostered"]
+        + unidade["exception_tracking"]
+    ) == unidade["active"]

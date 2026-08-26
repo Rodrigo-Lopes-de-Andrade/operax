@@ -192,10 +192,11 @@ class MonitorUnitRow(BaseModel):
     entirely off today reports zero and still appears — "nobody was scheduled"
     and "nothing was read" are different answers and the screen shows both.
 
-    `active` is the headcount, and the five counts below it partition exactly:
-    `scheduled + on_vacation + on_leave + day_off + unrostered = active`. That
-    identity is the reason `unrostered` exists — without it the difference
-    between the headcount and the roster is a number nobody can see.
+    `active` is the headcount, and the six counts below it partition exactly:
+    `scheduled + on_vacation + on_leave + day_off + unrostered +
+    exception_tracking = active`. That identity is the reason `unrostered`
+    exists — without it the difference between the headcount and the roster is a
+    number nobody can see.
 
     `with_punch + without_punch = scheduled`, over the same rows as
     `with_indication + clear`. Two partitions of one population, answering two
@@ -216,11 +217,15 @@ class MonitorUnitRow(BaseModel):
     on_vacation: int
     on_leave: int
     day_off: int
-    #: Ativo e sem jornada prevista para o dia. Pode ser desenho (o "ponto por
-    #: exceção" da administração) ou falha de cobertura do motor, e as duas
-    #: precisam ser contáveis para serem distinguíveis.
+    #: Ativo e sem jornada prevista para o dia, sem ninguém ter decidido isso —
+    #: ou seja, falha de cobertura do motor. Desde a migration 26 o desenho tem
+    #: contagem própria: ver `exception_tracking`. Enquanto os dois dividiam um
+    #: número, uma falha de cobertura se escondia dentro dele parecendo decisão.
     unrostered: int
     off_roster: int
+    #: Fora do motor por decisão — "ponto por exceção", supervisão. Não tem
+    #: jornada esperada porque ninguém lhe deve uma.
+    exception_tracking: int = 0
 
 
 class MonitorRow(BaseModel):
@@ -294,6 +299,9 @@ class DailyMonitor(BaseModel):
     day_off: int
     unrostered: int
     off_roster: int
+    #: Ver `MonitorUnitRow.exception_tracking`: quem foi tirado do motor por
+    #: decisão, separado de quem o motor deixou de cobrir.
+    exception_tracking: int = 0
     units: list[MonitorUnitRow]
     rows: list[MonitorRow]
     truncated: bool = False
@@ -415,6 +423,10 @@ class RotationRow(BaseModel):
     schedule: str
     #: Ativos neste horário — é o peso que ordena a fila.
     employees: int
+    #: Quantos desses já estão fora do motor por decisão. Um horário em branco
+    #: tem duas respostas possíveis, e esta é a outra: não falta rotação, não há
+    #: jornada devida.
+    out_of_engine: int = 0
     cycle_length_days: int | None = None
     anchor_date: date | None = None
     expected_entry: time | None = None
@@ -464,6 +476,25 @@ class RotationRequest(BaseModel):
     workload_minutes: int = Field(gt=0)
     tolerance_extra_minutes: int = Field(default=0, ge=0)
     tolerance_absence_minutes: int = Field(default=0, ge=0)
+
+
+class ExceptionTrackingRequest(BaseModel):
+    """Tirar do motor, ou devolver a ele, todo mundo de um horário.
+
+    O alvo é o horário porque é assim que quem cura pensa — "essa turma toda é
+    supervisão" —, e o fato é gravado em cada pessoa porque estar fora do motor
+    é do papel: mover alguém de horário não pode ligar nem desligar a medição.
+    """
+
+    secullum_schedule_id: int
+    exception_tracking: bool
+
+
+class ExceptionTrackingApplied(BaseModel):
+    """Quantas pessoas mudaram de lado. Zero é resposta válida: já estavam."""
+
+    secullum_schedule_id: int
+    employees_changed: int
 
 
 class RotationApplied(BaseModel):

@@ -30,6 +30,7 @@ function screenData(overrides: Partial<RotationScreen> = {}): RotationScreen {
         secullum_schedule_id: 9042,
         schedule: "U-042 - P01 - 19h as 7h - Impar",
         employees: 3,
+        out_of_engine: 0,
         cycle_length_days: null,
         anchor_date: null,
         expected_entry: null,
@@ -192,5 +193,42 @@ describe("a gravação", () => {
         tolerance_absence_minutes: 5,
       },
     });
+  });
+});
+
+describe("a outra resposta para um horário em branco", () => {
+  it("oferece tirar do motor no mesmo cartão da escala", async () => {
+    // Se a segunda resposta morasse noutra tela, ela nunca aconteceria e essa
+    // gente ficaria em "sem escala" para sempre — sem indício e sem medição.
+    const user = userEvent.setup();
+    post.mockResolvedValue({
+      secullum_schedule_id: 9042,
+      employees_changed: 3,
+    });
+    render(<RotationQueue screen={screenData()} />);
+
+    await user.click(
+      screen.getByRole("button", { name: "não medir este horário" }),
+    );
+
+    expect(post).toHaveBeenCalledWith("/curadoria/fora-do-motor", {
+      method: "POST",
+      body: { secullum_schedule_id: 9042, exception_tracking: true },
+    });
+  });
+
+  it("quando já estão fora, o convite vira o caminho de volta", () => {
+    render(
+      <RotationQueue
+        screen={screenData({
+          rows: [{ ...screenData().rows[0], out_of_engine: 3 }],
+        })}
+      />,
+    );
+
+    expect(screen.getByText(/3 de 3 já estão fora do motor/)).toBeTruthy();
+    expect(
+      screen.getByRole("button", { name: "voltar a medir este horário" }),
+    ).toBeTruthy();
   });
 });

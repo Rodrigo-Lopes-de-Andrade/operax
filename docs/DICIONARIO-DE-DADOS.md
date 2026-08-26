@@ -787,6 +787,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
 | `updated_at` | timestamp with time zone | não | `now()` |  |  |
 | `hr_code` | text | sim |  |  | ID RH do cliente. Chave ALTERNATIVA — nunca composta com a matrícula: cada uma identifica sozinha, e divergência entre elas é erro de linha no import. Anulável de propósito: fica vazia até o template de vínculo voltar preenchido. |
+| `exception_tracking` | boolean | não | `false` |  | Fora do motor de detecção POR DECISÃO — "ponto por exceção", supervisão. Nasce false: quem aparece fora da medição sem alguém ter tirado é quem ninguém decidiu não medir. Quem está aqui não materializa jornada esperada e é contado à parte no monitor, separado de `unrostered`, que é falha de cobertura e tem a mesma aparência. |
 
 **Restrições**
 

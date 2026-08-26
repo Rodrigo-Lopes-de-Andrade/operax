@@ -48,7 +48,13 @@ export function RosterBand({ monitor }: { monitor: DailyMonitor }) {
       label: "Sem jornada",
       value: monitor.unrostered,
       tone: "bg-line-subtle",
-      note: "Ativo e sem jornada prevista para o dia",
+      note: "Ativo e sem jornada prevista — o motor deve este dia",
+    },
+    {
+      label: "Fora do motor",
+      value: monitor.exception_tracking,
+      tone: "bg-ink-faint/40",
+      note: "Ponto por exceção: ninguém lhe deve jornada",
     },
   ];
 
@@ -66,10 +72,14 @@ export function RosterBand({ monitor }: { monitor: DailyMonitor }) {
             </span>
           </p>
         </div>
+        {/* Antes da migration 26 esta frase terminava em "pode ser desenho,
+            pode ser cobertura do motor", porque os dois estavam no mesmo
+            número. Agora quem é desenho tem faixa própria, e o que sobra aqui é
+            só a pergunta que precisa de resposta. */}
         {monitor.unrostered > 0 ? (
           <p className="text-ink-muted max-w-xs text-xs text-pretty">
-            {formatNumber(monitor.unrostered)} sem jornada prevista para o dia —
-            pode ser desenho, pode ser cobertura do motor.
+            {formatNumber(monitor.unrostered)} sem jornada prevista para o dia,
+            e ninguém decidiu isso — é cobertura do motor.
           </p>
         ) : null}
       </div>

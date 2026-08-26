@@ -159,7 +159,8 @@ from (values
   ('c0000000-0000-0000-0000-0000000000a5'::uuid, 9105, 'Sem Hora',         'c0000000-0000-0000-0000-0000000000f3'::uuid),
   ('c0000000-0000-0000-0000-0000000000a7'::uuid, 9107, 'Noturno',          'c0000000-0000-0000-0000-0000000000f4'::uuid),
   ('c0000000-0000-0000-0000-0000000000a8'::uuid, 9108, 'Rotacao Curada',   'c0000000-0000-0000-0000-0000000000f5'::uuid),
-  ('c0000000-0000-0000-0000-0000000000a9'::uuid, 9109, 'Rotacao Provisoria','c0000000-0000-0000-0000-0000000000f6'::uuid)
+  ('c0000000-0000-0000-0000-0000000000a9'::uuid, 9109, 'Rotacao Provisoria','c0000000-0000-0000-0000-0000000000f6'::uuid),
+  ('c0000000-0000-0000-0000-0000000000aa'::uuid, 9110, 'Ponto Por Excecao', 'c0000000-0000-0000-0000-0000000000f6'::uuid)
 ) as f(id, num, nome, horario);
 
 insert into app.company (id, tenant_id, legal_name, trade_name) values
@@ -177,6 +178,13 @@ insert into app.employee (id, tenant_id, company_id, unit_id, secullum_employee_
   ('c0000000-0000-0000-0000-0000000000c7', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9107, 'Noturno'),
   ('c0000000-0000-0000-0000-0000000000c8', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9108, 'Rotacao Curada'),
   ('c0000000-0000-0000-0000-0000000000c9', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9109, 'Rotacao Provisoria');
+
+-- Supervisão: horário em branco por desenho, tirada do motor por uma pessoa.
+-- Ela usa o MESMO horário da rotação provisória de propósito — o que a separa
+-- daquela não é o horário, é a decisão.
+insert into app.employee
+  (id, tenant_id, company_id, unit_id, secullum_employee_id, name, exception_tracking) values
+  ('c0000000-0000-0000-0000-0000000000ca', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9110, 'Ponto Por Excecao', true);
 
 -- ---------------------------------------------------------------------------
 -- A rotação curada. Ciclo de 2 dias ancorado numa segunda: trabalha 10, 12, 14 e
@@ -322,6 +330,24 @@ do $$ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
+-- C4) quem está fora do motor não ganha dia nenhum
+-- ---------------------------------------------------------------------------
+do $$ begin
+  -- Zero linha, e não sete linhas de confiança 0. A diferença é o ponto: linha
+  -- com confiança 0 é o motor dizendo "não sei", e não saber é indistinguível
+  -- de falha de cobertura. Não escrever é o que faz a ausência querer dizer
+  -- algo — o monitor a conta à parte de `unrostered`.
+  perform pg_temp.assert_eq('fora do motor é zero dia materializado',
+    (select count(*)::text from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000ca'), '0');
+  -- Mesmo horário da linha de cima, e ela continua materializando: o que separa
+  -- as duas é a decisão registrada na pessoa, não o horário.
+  perform pg_temp.assert_eq('e o colega do mesmo horário continua materializando',
+    (select count(*)::text from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c9'), '7');
+end $$;
+
+-- ---------------------------------------------------------------------------
 -- D) precedência: afastamento > folga > jornada
 -- ---------------------------------------------------------------------------
 do $$ begin
@@ -382,6 +408,7 @@ end $$;
 -- G) a janela inteira, e o corte de cobertura do S3
 -- ---------------------------------------------------------------------------
 do $$ begin
+  -- Dez pessoas no cenário e nove materializadas: a décima está fora do motor.
   perform pg_temp.assert_eq('9 pessoas x 7 dias',
     (select count(*)::text from app.expected_workday where tenant_id='{TENANT}'), '63');
   perform pg_temp.assert_eq('5 de 9 com confiança >= 80',

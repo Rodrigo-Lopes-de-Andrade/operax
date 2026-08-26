@@ -19,6 +19,7 @@ function monitor(overrides: Partial<DailyMonitor> = {}): DailyMonitor {
     on_leave: 1,
     day_off: 7,
     unrostered: 3,
+    exception_tracking: 0,
     off_roster: 11,
     units: [],
     rows: [],

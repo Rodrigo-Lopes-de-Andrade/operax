@@ -66,8 +66,11 @@ day off and not knowing look identical and only one of them may be claimed.
 So this module does not guess. A schedule that declares no expediente produces
 `confidence = 0`, and the coverage report groups those rows **by schedule
 description** so a person can see which of the two problems they are looking at.
-Deciding that supervisors leave the engine's scope is a product call; encoding a
-regex over schedule names here would have made it a silent one.
+Deciding that supervisors leave the engine's scope was a product call, taken on
+2026-08-26 and written down as `app.employee.exception_tracking` (migration 26).
+Nobody here reads a schedule name to guess it: the column is set by a person,
+and this module only refuses to materialise a day for whoever carries it. A
+regex over schedule names would have taken the same decision in silence.
 
 CONFIDENCE IS A LADDER OF THREE, NOT A CURVE
 Inventing intermediate values would be false precision over a source that is
@@ -150,6 +153,11 @@ pessoa as (
           and rot.secullum_schedule_id = h."HorarioId"
           and rot.validated_at is not null
     where e.tenant_id = %(tenant_id)s
+      -- Fora do motor por decisão (migration 26). Materializar um dia para quem
+      -- não tem jornada a cumprir escreveria `work` sem hora com confiança 0 —
+      -- indistinguível de falha de cobertura, que é o que a coluna existe para
+      -- separar. Não escrever é a única forma de a ausência querer dizer algo.
+      and not e.exception_tracking
 ),
 afastamento as (
     -- The label is read to choose between two day types and is never stored:
