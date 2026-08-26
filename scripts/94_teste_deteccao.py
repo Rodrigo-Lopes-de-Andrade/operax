@@ -66,6 +66,9 @@ def sql_do_motor(run_id: str = RUN, mode: str = "shadow") -> str:
 # 08:00 às 18:00 com uma hora de intervalo dá 540 minutos de carga. O número tem
 # de fechar com as batidas do dia certo, ou o dia certo vira jornada excedida.
 TRABALHO = ("work", "'08:00'", "'18:00'", "60", "540", "10", "5", "100")
+# A saída é ANTES da entrada porque cai no dia seguinte. É assim que a fonte
+# declara — seis horários em produção, em todos os dias de semana que declaram.
+NOTURNO = ("work", "'19:00'", "'05:00'", "72", "528", "10", "5", "100")
 PESSOAS = [
     (1, "Pontual", *TRABALHO),
     (2, "Entrada Atrasada", *TRABALHO),
@@ -83,6 +86,14 @@ PESSOAS = [
     (13, "Jornada Excedida", *TRABALHO),
     (14, "Afastado", "leave_period", "null", "null", "null", "null", "0", "0", "100"),
     (15, "Desconsiderada", *TRABALHO),
+    # O turno noturno de verdade, copiado de `U-075 - P05` em produção: entra
+    # 19:00, sai para o intervalo 22:48, VOLTA 00:00 e sai 05:00 do dia seguinte.
+    # 228 + 300 fecha a carga de 528, e o intervalo de 72 min cruza a meia-noite
+    # sozinho. Lido como `time`, esse dia inteiro anda para trás.
+    (16, "Noturno Pontual", *NOTURNO),
+    (17, "Noturno Sem Fonte", *NOTURNO),
+    # Direto, sem intervalo: 19:00 às 05:00 dá 600 de carga.
+    (18, "Noturno Atrasado", "work", "'19:00'", "'05:00'", "null", "600", "10", "5", "100"),
 ]
 
 #: (n, tipo_coluna, indice, hora ou null, memoria ou null, desconsiderada)
@@ -134,6 +145,18 @@ BATIDAS = [
     (15, "Entrada", 2, "'13:00'", "null", "false"),
     (15, "Saida", 2, "'18:00'", "null", "false"),
     (15, "Saida", 3, "'23:59'", "null", "true"),
+    # O mesmo dia, duas vezes: a 16 com `FonteDados` e a 17 sem ele.
+    (16, "Entrada", 1, "'19:00'", "null", "false"),
+    (16, "Saida", 1, "'22:48'", "null", "false"),
+    (16, "Entrada", 2, "'00:00'", "null", "false"),
+    (16, "Saida", 2, "'05:00'", "null", "false"),
+    (17, "Entrada", 1, "'19:00'", "null", "false"),
+    (17, "Saida", 1, "'22:48'", "null", "false"),
+    (17, "Entrada", 2, "'00:00'", "null", "false"),
+    (17, "Saida", 2, "'05:00'", "null", "false"),
+    # 26 minutos além da tolerância de falta de 5 — do outro lado da meia-noite.
+    (18, "Entrada", 1, "'19:26'", "null", "false"),
+    (18, "Saida", 1, "'05:00'", "null", "false"),
 ]
 
 
@@ -170,6 +193,16 @@ returns text language sql as $$
       where employee_id = md5('det-c' || $1)::uuid and type = $2
         and status = 'active' and mode = 'shadow'),
     '(nenhum)');
+$$;
+
+-- Todos os tipos que sobraram para uma pessoa, ou '(nenhum)'. Um dia certo tem
+-- de sair vazio, e afirmar isso tipo a tipo envelhece a cada tipo novo.
+create or replace function pg_temp.tipos(p_n int)
+returns text language sql as $$
+  select coalesce(string_agg(type, ',' order by type), '(nenhum)')
+  from app.deviation_event
+  where employee_id = md5('det-c' || $1)::uuid
+    and status = 'active' and mode = 'shadow';
 $$;
 
 insert into app.tenant (id, slug, name) values ('{TENANT}', 'deteccao-teste', 'Detecção')
@@ -237,6 +270,20 @@ insert into app.batida_marcacao
 select md5('det-b' || m.n)::uuid, md5('det-f' || m.n)::uuid, '{DIA}', m.tipo, m.idx,
        m.hora, m.memoria, (m.n * 100 + m.idx)::bigint, m.desconsiderada, '{TENANT}'
 from marcacao m;
+
+-- Só a 16 recebe `FonteDados` — o caminho autoritativo, que produção tem em 100%
+-- das batidas hoje. A 17 repete o mesmo dia sem ele: quem tem de chegar à mesma
+-- resposta lá é a rede, o degrau na ordem posicional. Duas pessoas iguais e um
+-- só caminho de diferença é o que separa "funciona" de "funciona por acaso".
+insert into secullum."BatidaFonteDados"
+  (batida_marcacao_id, batida_id, "FonteDadosId", "Hora", "Data", "Tipo", tenant_id)
+select m.id, m.batida_id, m."FonteDadosId", m.hora,
+       -- Depois da meia-noite a data real é a do dia seguinte, e o registro-dia
+       -- continua sendo o da entrada. É exatamente essa diferença que se mede.
+       m.data + (case when m.hora < time '12:00' then 1 else 0 end),
+       0, '{TENANT}'
+from app.batida_marcacao m
+where m.tenant_id = '{TENANT}' and m.funcionario_id = md5('det-f16')::uuid;
 
 -- ---------------------------------------------------------------------------
 -- Primeira execução
@@ -308,6 +355,30 @@ do $$ begin
     pg_temp.minutos(12, 'incomplete_punches'), '0');
   perform pg_temp.assert_eq('jornada de 720 contra 540+10 é excedente de 170',
     pg_temp.minutos(13, 'workday_exceeded'), '170');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- D2) a virada de meia-noite, que é o dia inteiro andando para trás
+--
+-- Antes disto o dia da 16 saía com `early_entry` de 19 h (a saída das 05:00 era
+-- lida como a PRIMEIRA batida do dia), `late_exit` de 14 h e um intervalo de
+-- menos 22 horas. Três indícios errados por noite, contra quatro pessoas que
+-- pontuam confiança 100 — as que o gate de 80 deixa passar.
+-- ---------------------------------------------------------------------------
+do $$ begin
+  perform pg_temp.assert_eq('o turno noturno certo não gera indício nenhum',
+    pg_temp.tipos(16), '(nenhum)');
+  perform pg_temp.assert_eq('e sem FonteDados a rede chega à mesma resposta',
+    pg_temp.tipos(17), '(nenhum)');
+  -- 26 minutos, e não 1414 do outro lado do relógio.
+  perform pg_temp.assert_eq('entrada 26 min atrasada no noturno é faltante de 26',
+    pg_temp.minutos(18, 'late_entry'), '-26');
+  perform pg_temp.assert_eq('e não vira entrada adiantada de um dia inteiro',
+    pg_temp.minutos(18, 'early_entry'), '(nenhum)');
+  perform pg_temp.assert_eq('a saída das 05h não é saída antecipada',
+    pg_temp.minutos(18, 'early_exit'), '(nenhum)');
+  perform pg_temp.assert_eq('nem jornada excedida: 574 trabalhados contra 600',
+    pg_temp.minutos(18, 'workday_exceeded'), '(nenhum)');
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -443,16 +514,17 @@ end $$;
 -- J) o total do cenário
 -- ---------------------------------------------------------------------------
 do $$ begin
-  perform pg_temp.assert_eq('15 pessoas no cenário, 11 com indício em sombra',
+  perform pg_temp.assert_eq('18 pessoas no cenário, 12 com indício em sombra',
     (select count(distinct employee_id)::text from app.deviation_event
-      where tenant_id = '{TENANT}' and mode = 'shadow' and status = 'active'), '11');
-  -- As quatro que não têm indício são as quatro que não podem ter: o dia certo,
-  -- a escala cega, o afastamento e a batida desconsiderada.
-  perform pg_temp.assert_eq('e as quatro sem indício são as quatro certas',
+      where tenant_id = '{TENANT}' and mode = 'shadow' and status = 'active'), '12');
+  -- As seis que não têm indício são as seis que não podem ter: o dia certo, a
+  -- escala cega, o afastamento, a batida desconsiderada e as DUAS noites certas
+  -- — uma por cada caminho de data.
+  perform pg_temp.assert_eq('e as seis sem indício são as seis certas',
     (select string_agg(c.nome, ', ' order by c.nome) from cenario c
       where not exists (select 1 from app.deviation_event d
                          where d.employee_id = md5('det-c' || c.n)::uuid)),
-    'Afastado, Desconsiderada, Escala Cega, Pontual');
+    'Afastado, Desconsiderada, Escala Cega, Noturno Pontual, Noturno Sem Fonte, Pontual');
 end $$;
 
 """

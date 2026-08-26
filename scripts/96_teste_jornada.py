@@ -81,7 +81,8 @@ insert into secullum."Departamento" (id, "DepartamentoId", empresa_id, "Descrica
 insert into secullum."Horario" (id, "HorarioId", "Numero", "Descricao", ativo, tenant_id) values
   ('c0000000-0000-0000-0000-0000000000f1', 9001, 9001, 'Seg a Sex 08:00 as 18:00', true, '{TENANT}'),
   ('c0000000-0000-0000-0000-0000000000f2', 9002, 9002, 'U-999 - P01 - 06h as 18h - Par', true, '{TENANT}'),
-  ('c0000000-0000-0000-0000-0000000000f3', 9003, 9003, 'Seg a Sex sem hora de entrada', true, '{TENANT}');
+  ('c0000000-0000-0000-0000-0000000000f3', 9003, 9003, 'Seg a Sex sem hora de entrada', true, '{TENANT}'),
+  ('c0000000-0000-0000-0000-0000000000f4', 9004, 9004, 'U-999 - P05 - Seg a Sex - 19:00h ás 07:00h', true, '{TENANT}');
 
 -- Semana fixa: expediente de segunda(0) a sexta(4), folga sábado(5) e domingo(6).
 insert into secullum."HorarioDia"
@@ -105,6 +106,23 @@ insert into secullum."HorarioDia"
 select gen_random_uuid(), 'c0000000-0000-0000-0000-0000000000f2', 1, d, 0, 10, 5, true, '{TENANT}'
 from generate_series(0, 6) d;
 
+-- Turno noturno, copiado de `U-075 - P05` em produção: entra 19:00, sai para o
+-- intervalo 22:48, VOLTA 00:00 e encerra 05:00 do dia seguinte. Duas viradas num
+-- dia só — a do intervalo e a da saída — e a fonte declara as duas escrevendo
+-- uma hora MENOR. Ele conta como semana fixa e pontua 100: é a escala que o
+-- portão de 80 deixa passar, e por isso a que não pode estar errada.
+insert into secullum."HorarioDia"
+  (id, horario_id, "HorarioDiaId", "DiaSemana", "Entrada1", "Saida1", "Entrada2", "Saida2",
+   "Carga", "ToleranciaExtra", "ToleranciaFalta", sem_expediente, tenant_id)
+select gen_random_uuid(), 'c0000000-0000-0000-0000-0000000000f4', 1, d,
+       '19:00', '22:48', '00:00', '05:00', 528, 10, 5, false, '{TENANT}'
+from generate_series(0, 4) d;
+insert into secullum."HorarioDia"
+  (id, horario_id, "HorarioDiaId", "DiaSemana", "Carga", "ToleranciaExtra", "ToleranciaFalta",
+   sem_expediente, tenant_id)
+select gen_random_uuid(), 'c0000000-0000-0000-0000-0000000000f4', 1, d, 0, 10, 5, true, '{TENANT}'
+from generate_series(5, 6) d;
+
 -- Expediente declarado sem hora de entrada: sabe-se que trabalha, não quando.
 insert into secullum."HorarioDia"
   (id, horario_id, "HorarioDiaId", "DiaSemana", "Carga", "ToleranciaExtra", "ToleranciaFalta",
@@ -126,7 +144,8 @@ from (values
   ('c0000000-0000-0000-0000-0000000000a2'::uuid, 9102, 'Doze Por Trinta',  'c0000000-0000-0000-0000-0000000000f2'::uuid),
   ('c0000000-0000-0000-0000-0000000000a3'::uuid, 9103, 'De Ferias',        'c0000000-0000-0000-0000-0000000000f1'::uuid),
   ('c0000000-0000-0000-0000-0000000000a4'::uuid, 9104, 'Atestado',         'c0000000-0000-0000-0000-0000000000f1'::uuid),
-  ('c0000000-0000-0000-0000-0000000000a5'::uuid, 9105, 'Sem Hora',         'c0000000-0000-0000-0000-0000000000f3'::uuid)
+  ('c0000000-0000-0000-0000-0000000000a5'::uuid, 9105, 'Sem Hora',         'c0000000-0000-0000-0000-0000000000f3'::uuid),
+  ('c0000000-0000-0000-0000-0000000000a7'::uuid, 9107, 'Noturno',          'c0000000-0000-0000-0000-0000000000f4'::uuid)
 ) as f(id, num, nome, horario);
 
 insert into app.company (id, tenant_id, legal_name, trade_name) values
@@ -140,7 +159,8 @@ insert into app.employee (id, tenant_id, company_id, unit_id, secullum_employee_
   ('c0000000-0000-0000-0000-0000000000c3', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9103, 'De Ferias'),
   ('c0000000-0000-0000-0000-0000000000c4', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9104, 'Atestado No Fim De Semana'),
   ('c0000000-0000-0000-0000-0000000000c5', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9105, 'Sem Hora De Entrada'),
-  ('c0000000-0000-0000-0000-0000000000c6', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', null, 'Sem Espelho');
+  ('c0000000-0000-0000-0000-0000000000c6', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', null, 'Sem Espelho'),
+  ('c0000000-0000-0000-0000-0000000000c7', '{TENANT}', 'c0000000-0000-0000-0000-0000000000e1', 'c0000000-0000-0000-0000-00000000ac01', 9107, 'Noturno');
 
 -- Férias cobrindo a semana inteira; atestado só no sábado, sobre a folga.
 insert into secullum."FuncionarioAfastamento"
@@ -212,6 +232,25 @@ do $$ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
+-- C2) o turno noturno: a saída é MENOR que a entrada, e não é erro
+-- ---------------------------------------------------------------------------
+do $$ begin
+  perform pg_temp.assert_eq('a saída do noturno sai como veio, 05:00',
+    (select expected_entry::text||' '||expected_exit::text from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c7' and reference_date='2026-08-10'),
+    '19:00:00 05:00:00');
+  -- 00:00 menos 22:48 dá menos 1368. O detector leria isso como o intervalo que
+  -- a pessoa não tirou, todas as noites.
+  perform pg_temp.assert_eq('o intervalo que cruza a meia-noite é 72, não -1368',
+    (select expected_break_minutes::text from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c7' and reference_date='2026-08-10'),
+    '72');
+  perform pg_temp.assert_eq('o noturno é semana fixa e pontua 100',
+    (select min(confidence)::text from app.expected_workday
+      where employee_id='c0000000-0000-0000-0000-0000000000c7'), '100');
+end $$;
+
+-- ---------------------------------------------------------------------------
 -- D) precedência: afastamento > folga > jornada
 -- ---------------------------------------------------------------------------
 do $$ begin
@@ -272,12 +311,12 @@ end $$;
 -- G) a janela inteira, e o corte de cobertura do S3
 -- ---------------------------------------------------------------------------
 do $$ begin
-  perform pg_temp.assert_eq('6 pessoas x 7 dias',
-    (select count(*)::text from app.expected_workday where tenant_id='{TENANT}'), '42');
-  perform pg_temp.assert_eq('3 de 6 com confiança >= 80',
+  perform pg_temp.assert_eq('7 pessoas x 7 dias',
+    (select count(*)::text from app.expected_workday where tenant_id='{TENANT}'), '49');
+  perform pg_temp.assert_eq('4 de 7 com confiança >= 80',
     (select count(*)::text from (
        select employee_id from app.expected_workday
-        where tenant_id='{TENANT}' group by 1 having min(confidence) >= 80) t), '3');
+        where tenant_id='{TENANT}' group by 1 having min(confidence) >= 80) t), '4');
 end $$;
 
 rollback;

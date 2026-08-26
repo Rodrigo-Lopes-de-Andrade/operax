@@ -26,6 +26,23 @@ Measured against production on 2026-08-24, over 11–24/08:
     is blank by design (the sibling schedules are literally named "Ponto por
     exceção" and "Marcação Supervisor").
 
+⚠️ THAT MEASUREMENT ASKED THE WRONG QUESTION, AND 2026-08-26 FOUND OUT
+"Trustworthy" above means the schedule DECLARES the weekday, which is coverage.
+It says nothing about whether what it declares describes the shift. Six schedules
+in production declare `Entrada1` after their own last `Saida` — 19:00 to 05:00 —
+and four active people are on them, on a fixed week, scoring 100 here. They were
+inside the 66.
+
+Read as `time`, that exit lands fourteen hours before the entry, and the detector
+was handed a whole night backwards. Over 11–26/08, 61 of 682 worked days (8.9%)
+cross midnight and 39 of them belong to those four. The 12x36 people are the
+OTHER half, and they were never the ones raising alerts: confidence 0 already
+stops them at the gate.
+
+The fix is arithmetic, not data — `regras.py` normalises both sides onto a
+continuous timeline, and the source already carries everything it needs. This
+module's part is only the break: see `break_minutes` below.
+
 So this module does not guess. A schedule that declares no expediente produces
 `confidence = 0`, and the coverage report groups those rows **by schedule
 description** so a person can see which of the two problems they are looking at.
@@ -127,8 +144,15 @@ bruto as (
            hd."Entrada1"     as entry_at,
            coalesce(hd."Saida5", hd."Saida4", hd."Saida3",
                     hd."Saida2", hd."Saida1") as exit_at,
+           -- ⛔ The break crosses midnight too, and one schedule in production
+           --    does it: `U-075 - P05` leaves at 22:48 and returns at 00:00.
+           --    Plain subtraction calls that minus twenty-two hours, and the
+           --    detector would read every one of those nights as a break the
+           --    person never took.
            case when hd."Saida1" is not null and hd."Entrada2" is not null
-                then (extract(epoch from (hd."Entrada2" - hd."Saida1")) / 60)::int
+                then (extract(epoch from (hd."Entrada2" - hd."Saida1"
+                       + case when hd."Entrada2" < hd."Saida1"
+                              then interval '1 day' else interval '0' end)) / 60)::int
            end as break_minutes,
            hd."Carga"           as workload_minutes,
            hd."ToleranciaExtra" as tolerance_extra,

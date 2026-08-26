@@ -13,6 +13,24 @@ SQL that cannot be checked against a real schema is SQL that only fails in
 production.
 
 `%%` is psycopg's escape for a literal percent; the test script undoes it.
+
+A DAY IS NOT A CLOCK FACE, AND THE SOURCE ALREADY KNEW
+A night shift belongs to the day it started: Secullum keeps the whole journey on
+one day-record, so grouping by `data` is right. What is wrong is subtracting one
+`time` from another across it — 05:00 minus 19:00 is not minus fourteen hours,
+it is plus ten.
+
+So every punch becomes an instant before anything compares it, and the offset has
+two sources. `secullum."BatidaFonteDados"."Data"` is the date the equipment
+recorded and is the rule; the backwards step in positional order is the fallback,
+for the punch whose `FonteDados` is missing (1:1 OPTIONAL, ADR-007). Measured
+over production on 2026-08-26 the fallback agreed on all 79 real crossings and
+invented 4 more, on days whose punches are merely out of order — which is why it
+is second and why it is capped at one day. A day wrongly shifted 24 h is not a
+small error: it is a full-day `workday_exceeded` against somebody.
+
+`app.deviation_event.expected_time` and `actual_time` stay `time`. The grain does
+not move; only the arithmetic that feeds it.
 """
 
 from __future__ import annotations
@@ -25,6 +43,15 @@ with dia as (
     -- (SPEC §3.1) and a day somebody did not owe has no deviation to compute.
     select w.employee_id, w.reference_date, w.day_type,
            w.expected_entry, w.expected_exit, w.expected_break_minutes,
+           -- A shift that ends before it starts ends on the NEXT day, and the
+           -- source declares it that way: six schedules in production carry
+           -- `Entrada1` 19:00 with the last `Saida` at 05:00, on every weekday
+           -- they declare. Compared as `time`, that exit reads as fourteen hours
+           -- EARLY instead of ten hours later.
+           (w.reference_date + w.expected_entry) as expected_entry_at,
+           (w.reference_date + w.expected_exit
+            + case when w.expected_exit < w.expected_entry
+                   then interval '1 day' else interval '0' end) as expected_exit_at,
            w.workload_minutes, w.tolerance_extra_minutes, w.tolerance_absence_minutes,
            e.company_id, e.unit_id, f.id as mirror_id
     from app.expected_workday w
@@ -40,31 +67,65 @@ coluna as (
     -- Every mirrored column of the day, punch or not. `desconsiderada` stays
     -- recorded for traceability and never becomes a deviation.
     select m.funcionario_id, m.data, m.tipo_coluna, m.indice_coluna,
-           m.hora, m."Memoria" as memoria, m."FonteDadosId" as fonte_id
+           m.hora, m."Memoria" as memoria, m."FonteDadosId" as fonte_id,
+           -- The calendar date the equipment recorded, which is NOT the day of
+           -- the day-record when the shift crosses midnight: `Batida."Data"`
+           -- keeps the whole journey on the day it started. 1:1 and OPTIONAL
+           -- (ADR-007), so it is a source, not the only one.
+           (fd."Data" - m.data) as offset_real
     from app.batida_marcacao m
+    left join secullum."BatidaFonteDados" fd on fd.batida_marcacao_id = m.id
     where m.tenant_id = %(tenant_id)s
       and m.data between %(start)s::date and %(end)s::date
       and not m.desconsiderada
 ),
-batida as (
+recuo as (
     -- A row with no `hora` is not a punch: the dictionary says so, and counting
     -- it would make an unfilled column look like somebody clocking in.
-    select * from coluna where hora is not null
+    --
+    -- `recuou` is the fallback for a punch whose `FonteDados` is missing: read in
+    -- positional order, the clock only goes backwards when the day crossed
+    -- midnight. It is a fallback and not the rule because it is the one that
+    -- LIES — measured against production it agreed on all 79 real crossings and
+    -- invented 4 more, on days whose punches are merely out of order. A day
+    -- shifted 24 h that did not cross is a full-day `workday_exceeded`.
+    select c.*,
+           case when c.hora < lag(c.hora) over (
+                       partition by c.funcionario_id, c.data
+                       order by c.indice_coluna,
+                                case c.tipo_coluna when 'Entrada' then 0 else 1 end)
+                then 1 else 0 end as recuou
+    from coluna c
+    where c.hora is not null
+),
+batida as (
+    select r.funcionario_id, r.data, r.tipo_coluna, r.indice_coluna, r.hora,
+           r.memoria, r.fonte_id,
+           -- The instant, not the clock face. Everything downstream subtracts.
+           r.data + r.hora + (coalesce(
+             r.offset_real,
+             least(sum(r.recuou) over (
+                     partition by r.funcionario_id, r.data
+                     order by r.indice_coluna,
+                              case r.tipo_coluna when 'Entrada' then 0 else 1 end
+                     rows between unbounded preceding and current row), 1)
+           ) * interval '1 day') as at
+    from recuo r
 ),
 par as (
     -- Entrada and Saída of the SAME index are a pair. The payload is positional,
     -- and pairing by time order would invent a pair where one side is missing.
     select b.funcionario_id, b.data, b.indice_coluna,
-           max(b.hora) filter (where b.tipo_coluna = 'Entrada') as entrada,
-           max(b.hora) filter (where b.tipo_coluna = 'Saida')   as saida
+           max(b.at) filter (where b.tipo_coluna = 'Entrada') as entrada,
+           max(b.at) filter (where b.tipo_coluna = 'Saida')   as saida
     from batida b
     group by 1, 2, 3
 ),
 resumo as (
     select b.funcionario_id, b.data,
            count(*)   as punches,
-           min(b.hora) as first_punch,
-           max(b.hora) as last_punch,
+           min(b.at) as first_punch_at,
+           max(b.at) as last_punch_at,
            coalesce(
              array_agg(b.fonte_id order by b.fonte_id) filter (where b.fonte_id is not null),
              '{}'::bigint[]
@@ -84,7 +145,7 @@ intervalo as (
     -- `jornada.py` uses for `expected_break_minutes`. Both sides of a comparison
     -- have to measure the same thing.
     select s.funcionario_id, s.data,
-           (extract(epoch from (e2.hora - s.hora)) / 60)::int as break_minutes
+           (extract(epoch from (e2.at - s.at)) / 60)::int as break_minutes
     from batida s
     join batida e2
       on e2.funcionario_id = s.funcionario_id and e2.data = s.data
@@ -94,7 +155,9 @@ intervalo as (
 fato as (
     select d.*,
            coalesce(r.punches, 0) as punches,
-           r.first_punch, r.last_punch,
+           r.first_punch_at, r.last_punch_at,
+           r.first_punch_at::time as first_punch,
+           r.last_punch_at::time  as last_punch,
            coalesce(r.punch_ids, '{}'::bigint[]) as punch_ids,
            coalesce(t.worked_minutes, 0) as worked_minutes,
            i.break_minutes,
@@ -150,49 +213,49 @@ evento as (
     union all
     select f.employee_id, f.reference_date, f.company_id, f.unit_id, f.punch_ids,
            'late_entry',
-           -(extract(epoch from (f.first_punch - f.expected_entry)) / 60)::int,
+           -(extract(epoch from (f.first_punch_at - f.expected_entry_at)) / 60)::int,
            f.expected_entry, f.first_punch
     from fato f
     left join cfg c on c.code = 'late_entry'
     where coalesce(c.active, true) and f.day_type = 'work'
-      and f.punches > 0 and f.expected_entry is not null
-      and extract(epoch from (f.first_punch - f.expected_entry)) / 60
+      and f.punches > 0 and f.expected_entry_at is not null
+      and extract(epoch from (f.first_punch_at - f.expected_entry_at)) / 60
           > coalesce(c.tolerance_absence_minutes, f.tolerance_absence_minutes)
 
     union all
     select f.employee_id, f.reference_date, f.company_id, f.unit_id, f.punch_ids,
            'early_entry',
-           -(extract(epoch from (f.first_punch - f.expected_entry)) / 60)::int,
+           -(extract(epoch from (f.first_punch_at - f.expected_entry_at)) / 60)::int,
            f.expected_entry, f.first_punch
     from fato f
     left join cfg c on c.code = 'early_entry'
     where coalesce(c.active, true) and f.day_type = 'work'
-      and f.punches > 0 and f.expected_entry is not null
-      and extract(epoch from (f.first_punch - f.expected_entry)) / 60
+      and f.punches > 0 and f.expected_entry_at is not null
+      and extract(epoch from (f.first_punch_at - f.expected_entry_at)) / 60
           < -coalesce(c.tolerance_extra_minutes, f.tolerance_extra_minutes)
 
     union all
     select f.employee_id, f.reference_date, f.company_id, f.unit_id, f.punch_ids,
            'early_exit',
-           (extract(epoch from (f.last_punch - f.expected_exit)) / 60)::int,
+           (extract(epoch from (f.last_punch_at - f.expected_exit_at)) / 60)::int,
            f.expected_exit, f.last_punch
     from fato f
     left join cfg c on c.code = 'early_exit'
     where coalesce(c.active, true) and f.day_type = 'work'
-      and f.punches > 1 and f.expected_exit is not null
-      and extract(epoch from (f.last_punch - f.expected_exit)) / 60
+      and f.punches > 1 and f.expected_exit_at is not null
+      and extract(epoch from (f.last_punch_at - f.expected_exit_at)) / 60
           < -coalesce(c.tolerance_absence_minutes, f.tolerance_absence_minutes)
 
     union all
     select f.employee_id, f.reference_date, f.company_id, f.unit_id, f.punch_ids,
            'late_exit',
-           (extract(epoch from (f.last_punch - f.expected_exit)) / 60)::int,
+           (extract(epoch from (f.last_punch_at - f.expected_exit_at)) / 60)::int,
            f.expected_exit, f.last_punch
     from fato f
     left join cfg c on c.code = 'late_exit'
     where coalesce(c.active, true) and f.day_type = 'work'
-      and f.punches > 1 and f.expected_exit is not null
-      and extract(epoch from (f.last_punch - f.expected_exit)) / 60
+      and f.punches > 1 and f.expected_exit_at is not null
+      and extract(epoch from (f.last_punch_at - f.expected_exit_at)) / 60
           > coalesce(c.tolerance_extra_minutes, f.tolerance_extra_minutes)
 
     union all
