@@ -111,7 +111,7 @@ for t in 97_teste_regras_alerta 98_teste_isolamento_tenant 99_verificacao_rls 98
   case "$saida" in \[*) echo "ok";; *) echo "FALHOU"; echo "$saida" | head -c 500; falhou=1;; esac
 done
 
-passo "7. o catálogo renomeado é o das 17 migrations?"
+passo "7. o catálogo renomeado é o do alvo (todas as migrations)?"
 if [ -r scripts/_alvo_en.json ]; then
   python3 scripts/introspeccao_nuvem.py "$STG" --out /dev/null --json "$TMP/depois.json" >/dev/null 2>&1
   python3 scripts/comparar_catalogos.py "$TMP/depois.json" scripts/_alvo_en.json || falhou=1

@@ -460,7 +460,30 @@ E o que já estava provado sem as chaves continua valendo: `db_schema` é
 que o PostgREST entrega o claim (`auth.uid()` é um `coalesce` de dois braços, e
 as suítes só dirigiam o braço que produção não usa).
 
-### Re-ensaio da Fase 2 — 27/08/2026, contra a pilha atual ❌ VERMELHO
+### Re-ensaio da Fase 2 — 27/08/2026 ✅ VERDE depois de duas correções
+
+**Resultado final, contra o staging com o schema de produção:**
+
+| Passo | |
+|---|---|
+| 3. cópia fiel da origem | ✅ **A CÓPIA É FIEL** — 15 espécies |
+| 4. linhas de configuração | ✅ |
+| 5. limpeza pré-lote + **18 migrations** | ✅ todas |
+| 6. suítes | **97 ✅ · 98 ✅ · 99 ✅ · 98_postgrest ✅** |
+| 7. catálogo × alvo | ✗ **só** `app.job_execucao` — ver decisão abaixo |
+| 8. fronteira por HTTP | ⚠️ pulado, faltam as chaves do staging |
+
+A suíte 98 passa nas **duas** formas de claim: a achatada
+(`request.jwt.claim.sub`) e a que o PostgREST real entrega
+(`request.jwt.claims`, JSON). É o braço que produção usa e que o ensaio local não
+alcança.
+
+O relato abaixo é como o ensaio estava **antes** das correções, e fica porque é
+o que justifica as duas.
+
+---
+
+### Como ele estava antes ❌
 
 O ensaio anterior validou **11b + 12–15**. O repositório passou de 15 e a janela
 vai aplicar **17 migrations**; os dois scripts de ensaio ainda carregavam o glob
@@ -520,8 +543,38 @@ A única, e não é defeito do rename: produção tem `app.job_execucao` (`job`,
 `host`, `status`, `iniciado_em`, `finalizado_em`, `erro`, `resumo`) e nenhuma
 migration deste repositório a cria. É o diário do runner da Vercel — ver §0.
 
-**As duas correções são mudança de policy de RLS, que é parada obrigatória do
-`CLAUDE.md`. Não seguem sem decisão do dono.**
+#### As duas correções, e o que sobrou depois delas
+
+| Bloqueio | Correção | Onde vive |
+|---|---|---|
+| 24 aborta com 2 policies | remover a duplicata `<tabela>_tenant_leitura` | `scripts/janela_pre_migrations.sql`, antes do lote |
+| `deviation_read` com `'producao'` | reescrever a policy com `'production'` | **migration 28** |
+
+Nenhuma das duas é regra nova. A primeira remove uma cópia com predicado
+idêntico (`util.has_tenant(tenant_id)`, mesmo comando, mesmo papel — e policies
+são combinadas por OR); a segunda é cópia fiel do texto da migration 05.
+
+**Re-ensaio local depois das correções (27/08):** as **18** migrations aplicam em
+sequência, e as três suítes passam **no banco renomeado** — inclusive a 98, que
+era onde o supervisor via zero. Catálogo: funções 26×26, views 9×9, **policies
+67×67**, triggers 8×8, enums 2×2, RLS 48/48.
+
+**Sobra uma divergência, e ela não é do rename:** `app.job_execucao` existe em
+produção e nenhuma migration daqui a cria. É o diário do runner da Vercel (§0).
+
+⚠️ **Decisão pendente sobre ela**, e não é urgente para a janela:
+
+- **(a) trazê-la para o repositório** — tabela nova em `app` com policy nova, que
+  é parada obrigatória, e exige saber o que o `kastropark-jobs` espera dela;
+- **(b) declará-la fora do repositório**, de propriedade do serviço da Vercel, e
+  ensinar a comparação a ignorá-la.
+
+Enquanto a Vercel não é lida, **(b)** é o único caminho honesto: (a) obriga a
+afirmar sobre um contrato que ninguém conferiu.
+
+⚠️ O passo 8 continua pulado por falta de `SUPABASE_PUBLISHABLE_KEY` e
+`SUPABASE_SECRET_KEY` do staging — e é justamente ele que exercita o PostgREST
+real, onde a policy do bloqueio 2 se manifesta.
 
 ---
 
