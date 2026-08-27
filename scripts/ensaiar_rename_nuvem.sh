@@ -57,6 +57,9 @@ psql -q -f scripts/_config_nuvem.sql >/dev/null 2>&1
 #    escrito à mão, senão o ensaio congela no lote que existia quando alguém o
 #    escreveu.
 passo "4. aplicando o rename e TODAS as migrations a partir dele"
+# A mesma limpeza que a janela faz antes do lote — ver scripts/janela_pre_migrations.sql.
+psql -q -v ON_ERROR_STOP=1 -f scripts/janela_pre_migrations.sql >/dev/null 2>&1 \
+  && echo "  ok janela_pre_migrations.sql" || { echo "  FALHOU janela_pre_migrations.sql"; falhou=1; }
 for f in $(ls supabase/migrations/*.sql | sed -n '/11b/,$p'); do
   saida=$(psql -q -v ON_ERROR_STOP=1 -f "$f" 2>&1 | grep -E '^psql.*(ERROR|FATAL)')
   if [ -n "$saida" ]; then echo "  FALHOU $(basename "$f"): $saida"; falhou=1

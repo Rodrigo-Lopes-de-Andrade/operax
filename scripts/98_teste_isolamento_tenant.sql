@@ -157,6 +157,14 @@ do $$ begin
     (select count(*) from public.vw_unit), 1);
   perform pg_temp.assert_eq('supervisor vê só o employee da unit dele',
     (select count(*) from public.vw_employee), 1);
+  -- ⛔ ESTA É A ASSERÇÃO QUE FALTAVA, E A AUSÊNCIA DELA CUSTOU CARO.
+  --    Todas as asserções de supervisor sobre desvio eram `= 0` — "não vê a
+  --    outra unidade", "não vê sombra". Nenhuma exigia que ele VISSE algo, e por
+  --    isso o rename pôde deixar `mode = 'producao'` dentro de `deviation_read`
+  --    (migration 28) sem que nada ficasse vermelho: um supervisor que não vê
+  --    NADA passa em todo teste que só verifica o que ele não deve ver.
+  perform pg_temp.assert_eq('supervisor VÊ o desvio da unidade dele',
+    (select count(*) from public.vw_deviation_event), 1);
   perform pg_temp.assert_eq('supervisor não vê desvio da unit A Norte',
     (select count(*) from public.vw_deviation_event where unit_name = 'A Norte'), 0);
   perform pg_temp.assert_eq('supervisor NÃO lê PII (ver unit não basta)',

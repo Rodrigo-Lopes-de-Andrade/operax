@@ -5,7 +5,7 @@ desatualizada em dois pontos que mudam a operação inteira:
 
 | | Fase 3, como escrita | Hoje |
 |---|---|---|
-| Migrations a aplicar | **5** (11b, 12–15) | **17** (11b, 12–27) |
+| Migrations a aplicar | **5** (11b, 12–15) | **18** (11b, 12–28), mais a limpeza do passo 2a |
 | Teto de parada | **48 h**, imposto pelo código | Não é mais o código que impõe — ver §5 |
 | Natureza da janela | rename | **release de convergência**: schema + Edge Functions + backend |
 
@@ -80,20 +80,41 @@ passo 6 precisa cobrir.
 Depois da parada, não antes: um restore point tirado com a sincronização
 correndo restaura para um estado que já mudou.
 
-### Passo 2 — as 17 migrations, uma chamada por migration
+### Passo 2a — a limpeza que precede o lote
+
+```
+scripts/sb_sql.sh nklobmlxyidqxarzisph -f scripts/janela_pre_migrations.sql
+```
+
+Remove a policy duplicada `<tabela>_tenant_leitura` das quatro tabelas de
+ingestão. **Sem isto a migration 24 aborta** com `app.batida_marcacao tem 2
+policies, esperava 1`, no passo 14 de 17 — descoberto pelo re-ensaio de 27/08.
+
+Não há mudança de autorização: as duas policies têm o mesmo comando, o mesmo
+papel e o mesmo predicado (`util.has_tenant(tenant_id)`), e policies são
+combinadas por OR. Se a janela abortar entre este passo e a 24, as quatro ficam
+com RLS e zero policy — que nega tudo. Falha fechada, não aberta.
+
+### Passo 2b — as migrations, uma chamada por migration
 
 ```
 scripts/sb_sql.sh nklobmlxyidqxarzisph -f supabase/migrations/<arquivo>.sql
 ```
 
 Na ordem: `11b` · `12` · `13` · `14` · `15` · `16` · `17` · `18` · `19` · `20` ·
-`21` · `22` · `23` · `24` · `25` · `26` · `27`.
+`21` · `22` · `23` · `24` · `25` · `26` · `27` · **`28`**.
+
+⛔ **A 28 não é opcional e não pode ficar para depois.** Ela reescreve
+`deviation_read`, que o 11b renomeia sem traduzir o literal `'producao'` de
+dentro da expressão. Enquanto ela não rodar, **todo não-admin vê zero desvios** —
+sem erro e sem log. Aplicar o lote sem a 28 entrega um sistema que parece pronto
+e mostra o painel vazio para o supervisor de unidade.
 
 Cada chamada é atômica em si. **Entre elas não há atomicidade** — se a 19 falhar,
 as anteriores estão aplicadas. É por isso que o ponto de restauração vem antes,
 e não porque o rename possa ficar pela metade.
 
-### Passo 3 — registrar as 17 em `supabase_migrations.schema_migrations`
+### Passo 3 — registrar as 18 em `supabase_migrations.schema_migrations`
 
 Sem isso, o próximo `supabase db push` tenta aplicá-las de novo.
 
@@ -185,7 +206,10 @@ Rodar de novo **depois** do backfill do passo 6.
 - [ ] Um ciclo completo de cada job sem erro (15 min e 30 min)
 - [ ] `fn_data_freshness` sem `is_stale` — limiar de 25 min para `Batida`
 - [ ] O painel abre contra produção e lista unidade e ocorrência
-- [ ] `select count(*) from supabase_migrations.schema_migrations` = 40 (23 + 17)
+- [ ] `select count(*) from supabase_migrations.schema_migrations` = 41 (23 + 18)
+- [ ] **Um supervisor de unidade vê os desvios da unidade dele.** É o que a 28
+      conserta, e o que nenhum teste pegava: um usuário que não vê NADA passa em
+      todo teste que só verifica o que ele não deve ver
 
 ---
 

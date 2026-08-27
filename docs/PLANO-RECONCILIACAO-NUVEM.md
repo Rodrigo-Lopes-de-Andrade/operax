@@ -1,6 +1,6 @@
 # OperaX — plano de reconciliação do projeto na nuvem
 
-<!-- verificar-docs: inexistentes-de-proposito public.fn_kpi_periodo -->
+<!-- verificar-docs: inexistentes-de-proposito public.fn_kpi_periodo app.job_execucao app.sync_execucao secullum.departamento_gestor secullum.estrutura_evento_titular -->
 
 **Decisão de 22/08/2026:** reconciliar o projeto Supabase do cliente com este
 repositório, em vez de tratá-lo como sistema legado.

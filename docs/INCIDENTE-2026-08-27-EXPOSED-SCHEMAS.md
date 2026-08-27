@@ -1,3 +1,5 @@
+<!-- verificar-docs: inexistentes-de-proposito app.job_execucao app.sync_execucao -->
+
 # Incidente — 27/08/2026, 17:30: corrigir os exposed schemas derrubou a sync
 
 **Duração:** um ciclo (17:30 → 17:45). **Perda permanente:** nenhuma.

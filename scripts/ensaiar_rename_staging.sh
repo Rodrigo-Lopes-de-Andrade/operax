@@ -71,6 +71,12 @@ sql -f "$TMP/config.sql" >/dev/null && echo "  ok" || falhou=1
 #    presente. Daqui em diante ele aplica tudo da 11b para a frente, e cresce
 #    sozinho quando uma migration nova entra.
 passo "5. aplicando o rename e TODAS as migrations a partir dele"
+# A limpeza que a janela também faz. Sem ela a migration 24 aborta sobre um banco
+# que já tem as quatro tabelas de ingestão — e o ensaio provaria um caminho que a
+# janela não percorre.
+printf '  %-56s ' "janela_pre_migrations.sql"
+saida=$(sql -f scripts/janela_pre_migrations.sql 2>&1)
+case "$saida" in \[*) echo "ok";; *) echo "FALHOU"; echo "$saida" | head -c 300; falhou=1;; esac
 LOTE=$(ls supabase/migrations/*.sql | sed -n '/11b/,$p')
 echo "  $(printf '%s\n' "$LOTE" | wc -l) migrations no lote"
 for f in $LOTE; do
