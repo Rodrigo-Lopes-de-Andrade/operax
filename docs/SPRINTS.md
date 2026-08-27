@@ -284,6 +284,36 @@ promovida do espelho, com `fn_ranking_by_manager` e o cartão no dashboard.
 número de pessoas ao lado: sem ele a tela faria uma afirmação de desempenho que
 o dado não sustenta, sobre alguém com nome.
 
+### Ainda em 26/08/2026 — `rejected` ganhou quem o produzisse
+
+A migration 23 fechou `app.justification.status` em `accepted` e `rejected` e
+registrou, no cabeçalho dela, o que ficava faltando: *"Não há tela que aceite ou
+rejeite. `rejected` existe no domínio e não tem quem o produza; enquanto isso não
+existir, 'aceita' e 'escrita' são a mesma coisa na prática."*
+
+Entrou a porta, e **sem migration nenhuma** — a coluna, a policy de escrita e o
+grant existiam desde a 05 e a 23. `POST /ocorrencias/{id}/justificativa`, com o
+veredito no drawer da ocorrência.
+
+**Quem pode não é `is_admin`.** `justification_write` é `for insert` com check
+`util.can_see_employee(employee_id)`, e esse recorte é diferente do da curadoria
+de propósito: o supervisor responde pelo desvio da unidade dele. Então a
+autorização é ler o evento **como o usuário** — se a RLS o devolve, o veredito
+pode ser escrito. Nada de regra nova em Python.
+
+Três decisões que o código carrega:
+
+- **Insert, nunca update.** A policy só concede insert, e isso é a semântica: um
+  veredito é fato datado com autor. Mudar de ideia escreve outra linha.
+- **A pessoa e a data saem do evento, nunca do corpo do pedido.** O cliente manda
+  texto e veredito; sobre quem o veredito recai, quem responde é o banco.
+- **O veredito é escolhido antes de ser gravado.** Dois botões lado a lado numa
+  ação irreversível é um clique errado a um pixel de distância.
+
+⚠️ Falta a *fila*: `fn_pending_justification` existe desde a 23 e nenhuma tela
+ainda a lê. O cartão do dashboard continua mostrando "pendentes de ciclo", que é
+outro número e está rotulado como tal.
+
 ---
 
 ## Gates — pontos onde a sprint seguinte não começa

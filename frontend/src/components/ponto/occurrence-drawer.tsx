@@ -3,6 +3,7 @@ import Link from "next/link";
 
 import { colaboradorHref } from "@/lib/colaborador/url";
 
+import { JustificationVerdict } from "@/components/ponto/justification-verdict";
 import { Badge } from "@/components/ui/badge";
 import { Drawer } from "@/components/ui/drawer";
 import { SignedMinutes } from "@/components/ui/signed-minutes";
@@ -121,6 +122,16 @@ export function OccurrenceDrawer({
             minutos depois do fato.
           </p>
         </section>
+
+        {/* O veredito mora aqui e não numa fila própria: quem decide precisa
+            dos dois horários lado a lado, e eles estão logo acima. As
+            justificativas já escritas ficam na tela do colaborador, que o
+            rodapé deste drawer linka — repeti-las aqui duplicaria a leitura sem
+            mudar a decisão. */}
+        <JustificationVerdict
+          deviationEventId={occurrence.eventoId}
+          employeeName={occurrence.employeeName}
+        />
       </div>
     </Drawer>
   );

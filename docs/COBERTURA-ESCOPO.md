@@ -46,7 +46,7 @@ dado sustenta. Faltam 2.
 | 7 | Marcação incompleta | ✅ | `incomplete_punches` |
 | 8 | Com horas extras | ✅ | direção `surplus` |
 | 9 | Com horas faltantes | ✅ | direção `shortfall` |
-| 10 | Ocorrências pendentes de justificativa | ✅ | `deviation_type_config.requires_justification` + `justification.status` + `fn_pending_justification` (migration 23) |
+| 10 | Ocorrências pendentes de justificativa | ✅ | `deviation_type_config.requires_justification` + `justification.status` + `fn_pending_justification` (migration 23). O veredito ganhou produtor em 26/08 — `POST /ocorrencias/{id}/justificativa`, autorizado pela policy `justification_write` (quem enxerga a pessoa), não por `is_admin` |
 | 11 | **Saldo consolidado de horas** | ❌ | Banco de horas não é modelado. Aparece também em 4.4 e 4.8 |
 | 12 | Evolução das ocorrências por período | ✅ | `vw_deviation_daily_trend` |
 | 13 | Comparação entre unidades | ✅ | `fn_ranking_by_unit` |
@@ -271,7 +271,7 @@ domínio. O eixo de autorização existe protegendo o vazio.
 5. Catálogo dos 11 relatórios + exportação
 6. Importação do Excel do Domínio, ponta a ponta
 7. Mapa de código de evento de folha → categoria
-8. ~~Ocorrências pendentes de justificativa~~ — **entregue em 25/08** (migration 23). Sem tela que aceite ou rejeite: hoje "aceita" e "escrita" são a mesma coisa
+8. ~~Ocorrências pendentes de justificativa~~ — **entregue em 25/08** (migration 23); ~~sem tela que aceite ou rejeite~~ — **entregue em 26/08**: `POST /ocorrencias/{id}/justificativa` e o veredito no drawer da ocorrência. "Aceita" e "escrita" deixaram de ser a mesma coisa. Falta a *fila*: `fn_pending_justification` existe e nenhuma tela ainda a lê
 9. Tabela de ocorrência disciplinar
 
 **Volume, sem risco técnico (5)**

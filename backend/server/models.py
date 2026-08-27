@@ -101,6 +101,31 @@ class JustificationRow(BaseModel):
     source: str
 
 
+class JustificationVerdict(BaseModel):
+    """O veredito de quem explica um desvio.
+
+    `status` é fechado em dois valores porque o banco fecha nos mesmos desde a
+    migration 23 — recusar aqui devolve mensagem em vez de 500. Não existe
+    "pendente" como valor: pendente é a AUSÊNCIA de linha aceita, e é assim que
+    `fn_pending_justification` a calcula. Um terceiro estado gravado faria a
+    mesma pergunta ter duas respostas.
+
+    `text` é obrigatório nos dois vereditos, e no rejeitado também: uma rejeição
+    sem motivo é a decisão sem a parte que a pessoa afetada precisa ler.
+    """
+
+    text: str = Field(min_length=3, max_length=2000)
+    status: Literal["accepted", "rejected"]
+
+
+class JustificationApplied(BaseModel):
+    justification_id: UUID
+    deviation_event_id: UUID
+    employee_name: str
+    reference_date: date
+    status: str
+
+
 class CompensationBand(BaseModel):
     """Sensitive: `compensation` domain."""
 
