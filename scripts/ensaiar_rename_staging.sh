@@ -64,10 +64,16 @@ passo "4. carregando as linhas de configuração da origem"
 python3 scripts/extrair_config_nuvem.py "$ORIG" > "$TMP/config.sql"
 sql -f "$TMP/config.sql" >/dev/null && echo "  ok" || falhou=1
 
-passo "5. aplicando o rename e as migrations 12 a 15"
-for f in supabase/migrations/20260815101150_*.sql \
-         supabase/migrations/2026081510120*.sql supabase/migrations/2026081510130*.sql \
-         supabase/migrations/2026081510140*.sql supabase/migrations/20260822160000*.sql; do
+# ⛔ A lista sai de `ls`, e não de um glob escrito à mão. O glob anterior
+#    nomeava 11b e 12–15; o repositório passou de 15 e o ensaio continuou
+#    provando cinco migrations enquanto a janela ia aplicar dezessete. Um
+#    ensaio que não acompanha o repositório prova o passado com cara de
+#    presente. Daqui em diante ele aplica tudo da 11b para a frente, e cresce
+#    sozinho quando uma migration nova entra.
+passo "5. aplicando o rename e TODAS as migrations a partir dele"
+LOTE=$(ls supabase/migrations/*.sql | sed -n '/11b/,$p')
+echo "  $(printf '%s\n' "$LOTE" | wc -l) migrations no lote"
+for f in $LOTE; do
   printf '  %-56s ' "$(basename "$f")"
   saida=$(sql -f "$f" 2>&1)
   case "$saida" in \[*) echo "ok";; *) echo "FALHOU"; echo "$saida" | head -c 400; falhou=1;; esac

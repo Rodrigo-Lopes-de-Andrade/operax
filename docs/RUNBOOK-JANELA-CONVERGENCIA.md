@@ -97,16 +97,28 @@ e não porque o rename possa ficar pela metade.
 
 Sem isso, o próximo `supabase db push` tenta aplicá-las de novo.
 
-### Passo 4 — Edge Functions blindadas
+### Passo 4 — o runner da sincronização
 
-⛔ **Só depois do passo 2, nunca antes.** As funções do P1 gravam
-`app.sync_run.scope` e `records_skipped`, colunas que **a migration 21 cria**.
-Subi-las contra o schema antigo quebra toda execução; deixá-las de fora depois do
-rename também quebra, porque as funções velhas escrevem nos nomes em português
-que o 11b renomeou.
+⛔ **ESTE PASSO ESTÁ INCOMPLETO E BLOQUEIA A JANELA.** Ele dizia "deploy das Edge
+Functions blindadas". Medido em 27/08: **produção não roda Edge Function
+nenhuma.** `GET /v1/projects/<ref>/functions` devolve `[]`, e os dois jobs de
+`pg_cron` chamam o serviço **`kastropark-jobs` na Vercel**
+(`vercel_jobs_base_url` no Vault). O código dele não está neste repositório e
+ainda não foi lido.
 
-Ou seja: entre o passo 2 e o fim do passo 4, **não existe sincronização
-funcional**. Esse intervalo é a janela real.
+O que continua verdadeiro e decide a ordem: o runner tem de ser atualizado
+**depois** do passo 2 e nunca antes. Quem grava `app.sync_run.scope` e
+`records_skipped` depende da migration 21; e o runner antigo escreve nos nomes em
+português que o 11b renomeia. Entre o passo 2 e o fim do passo 4 **não existe
+sincronização funcional** — esse intervalo é a janela real.
+
+⛔ **Além disso, o `kastropark-jobs` fala com o banco por PostgREST** — provado
+em 27/08 quando remover `app`/`secullum` dos exposed schemas o derrubou com
+`FUNCTION_INVOCATION_FAILED` (ver `INCIDENTE-2026-08-27-EXPOSED-SCHEMAS.md`).
+Então **a correção dos exposed schemas é item DESTA janela**, junto com um runner
+que não dependa mais deles. Nunca como mudança avulsa de painel.
+
+Este passo só fica escrevível depois da leitura do `kastropark-jobs`.
 
 ### Passo 5 — backend no Railway
 
@@ -128,13 +140,29 @@ Redeploy apontando para produção. Não é aqui que ele nasce (ver §2).
 
 ### Passo 7 — verificar que RELIGOU, não que respondeu
 
+**Primeiro, o que a chamada de fato respondeu:**
+
+```sql
+select to_char(created at time zone 'America/Sao_Paulo','HH24:MI:SS') as quando,
+       status_code, left(content, 90) as corpo
+from net._http_response
+where created > now() - interval '1 hour'
+order by created desc;
+```
+
+⛔ **`cron.job_run_details` NÃO serve de evidência.** Ele marca `succeeded` por
+ter entregado o `net.http_get` — as duas execuções que derrubaram a sync em
+27/08 aparecem como sucesso ali. Quem guarda o resultado é `net._http_response`,
+com `status_code` e `content`.
+
+**Depois, que a ingestão voltou:**
+
 ```
 python3 scripts/90_reconciliar_sync.py --dias 2
 ```
 
-⛔ **HTTP 200 não é critério.** O `pg_cron` registra sucesso por ter entregado o
-POST: do lado dele, um 500 e um 200 são iguais. O script afirma três coisas, e a
-terceira é a que não se deduz de relatório nenhum:
+⛔ **E nem 200 basta.** O script afirma três coisas, e a terceira é a que não se
+deduz de relatório nenhum:
 
 1. a última execução de `Batida` terminou `completed`;
 2. ela gravou linha (`records_written > 0`);
@@ -151,6 +179,8 @@ Rodar de novo **depois** do backfill do passo 6.
 
 ## 4. Critério de saída
 
+- [ ] `net._http_response` com `status_code = 200` nos ciclos após religar —
+      **não** `cron.job_run_details`
 - [ ] `90_reconciliar_sync.py` verde, duas vezes: após religar e após o backfill
 - [ ] Um ciclo completo de cada job sem erro (15 min e 30 min)
 - [ ] `fn_data_freshness` sem `is_stale` — limiar de 25 min para `Batida`

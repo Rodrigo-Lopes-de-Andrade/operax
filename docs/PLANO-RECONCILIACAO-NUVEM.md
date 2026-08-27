@@ -10,6 +10,42 @@ foi descoberto sondando o projeto se perde se ficar só numa conversa.
 
 ---
 
+## ⛔ 0. O runner de produção não é a Edge Function (medido em 27/08/2026)
+
+Boa parte deste documento foi escrita assumindo que a sincronização roda em Edge
+Functions do Supabase. **Não roda mais**, e isso muda o que várias seções aqui
+provam.
+
+- `GET /v1/projects/nklobmlxyidqxarzisph/functions` → **HTTP 200 com `[]`**.
+  Nenhuma Edge Function publicada. Nem em staging.
+- Os dois jobs de `pg_cron` seguem ativos e chamam `net.http_get` para o serviço
+  **`kastropark-jobs` na Vercel**, com a URL vinda dos segredos
+  `vercel_jobs_base_url` e `vercel_cron_secret` do Vault — ambos criados em
+  **25/08/2026 17:48**, uma hora depois de o commit `81039b9` (P1) blindar as
+  Edge Functions.
+- **O código do `kastropark-jobs` não está neste repositório e ainda não foi
+  lido.**
+
+**Como ler o resto deste documento:** onde estiver escrito "Edge Function", leia
+"o runner deste repositório". Ele descreve `supabase/functions/`, que é código
+vivo aqui e não publicado lá. Qualquer afirmação de risco fechado nele **não vale
+para produção** até a leitura da Vercel.
+
+Duas diferenças entre os dois runners já são fato, não hipótese:
+
+1. **O `kastropark-jobs` fala com o banco por PostgREST**, e não por conexão
+   direta. Provado em 27/08 quando remover `app`/`secullum` dos exposed schemas o
+   derrubou com `FUNCTION_INVOCATION_FAILED` — ver
+   `INCIDENTE-2026-08-27-EXPOSED-SCHEMAS.md`.
+2. **Ele escreve o diário em `app.job_execucao`**, não em `app.sync_run` — tabela
+   que existe em produção e que nenhuma migration deste repositório cria. É a
+   única divergência de catálogo do ensaio de 27/08.
+
+Também são dele, e igualmente ausentes daqui: `secullum.departamento_gestor` e
+`secullum.estrutura_evento_titular`.
+
+---
+
 ## 1. O que o projeto na nuvem é hoje
 
 > **Nota para quem editar:** os identificadores da nuvem aparecem aqui **sem
@@ -424,6 +460,71 @@ E o que já estava provado sem as chaves continua valendo: `db_schema` é
 que o PostgREST entrega o claim (`auth.uid()` é um `coalesce` de dois braços, e
 as suítes só dirigiam o braço que produção não usa).
 
+### Re-ensaio da Fase 2 — 27/08/2026, contra a pilha atual ❌ VERMELHO
+
+O ensaio anterior validou **11b + 12–15**. O repositório passou de 15 e a janela
+vai aplicar **17 migrations**; os dois scripts de ensaio ainda carregavam o glob
+de cinco escrito à mão. Corrigido: a lista agora sai de `ls ... | sed -n
+'/11b/,$p'`, então cresce sozinha com o repositório.
+
+`scripts/ensaiar_rename_staging.sh wbzaqjlfpqteesehapnn nklobmlxyidqxarzisph`
+
+| Passo | Resultado |
+|---|---|
+| 3. cópia fiel da origem | ✅ **A CÓPIA É FIEL** — 15 espécies conferidas, 980 colunas, 361 constraints, 278 índices, 66 policies, 71 tabelas |
+| 5. as 17 migrations | ❌ **16 ok, a 24 falhou** |
+| 6. suítes | 97 ✅ · 98 ❌ · 99 ✅ · 98_postgrest ❌ |
+| 7. catálogo × alvo | ❌ tabelas 48 vs 47, colunas 550 vs 542 |
+| 8. fronteira HTTP | pulado (faltam as duas chaves do staging) |
+
+#### ⛔ Bloqueio 1 — a migration 24 não aplica sobre produção
+
+    app.batida_marcacao tem 2 policies, esperava 1
+
+`app.batida_marcacao` **já existe em produção** com policy própria
+(`batida_marcacao_tenant_leitura`, `util.has_tenant`), criada pelas migrations
+anteriores a este repositório. A 24 acrescenta a dela e a própria guarda da
+migration derruba a aplicação. É o passo 14 de 17 — a janela pararia no meio.
+
+#### ⛔ Bloqueio 2 — o rename deixa um literal em português dentro de uma policy
+
+    deviation_read:  ((mode = 'producao'::text) OR util.is_admin(tenant_id)) AND ...
+
+O 11b traduz as seis views, as check constraints e o default da coluna, e
+**renomeia** a policy (`deviation_leitura` → `deviation_read`) — mas renomear não
+reescreve a expressão. O literal `'producao'` sobrevive enquanto todo o resto
+passa a escrever `'production'`.
+
+**Consequência: depois da janela, todo não-admin vê zero desvios.** Admin vê
+tudo, porque o `OR util.is_admin(tenant_id)` o salva. O supervisor de unidade —
+que é a pessoa para quem o produto existe — abre o painel vazio, sem erro.
+
+Medido no staging renomeado, como o supervisor de A Centro:
+
+| | |
+|---|---|
+| unidades / colaboradores | 1 / 1 ✅ |
+| `vw_deviation_event` | **0** |
+| `fn_ranking_by_unit` / `_employee` / `_manager` | **0 / 0 / 0** |
+
+A varredura de literais achou **exatamente uma** policy afetada. As demais estão
+limpas.
+
+⚠️ A suíte 98 nunca pegou isto porque toda asserção de supervisor sobre desvio
+era `= 0` — "não vê a outra unidade", "não vê sombra". A asserção do ranking por
+gestor (migration 27) foi a primeira a exigir que ele **visse** algo, e caiu.
+
+#### Divergência de catálogo: `app.job_execucao`
+
+A única, e não é defeito do rename: produção tem `app.job_execucao` (`job`,
+`host`, `status`, `iniciado_em`, `finalizado_em`, `erro`, `resumo`) e nenhuma
+migration deste repositório a cria. É o diário do runner da Vercel — ver §0.
+
+**As duas correções são mudança de policy de RLS, que é parada obrigatória do
+`CLAUDE.md`. Não seguem sem decisão do dono.**
+
+---
+
 ### Fase 3 — janela
 
 O que a Fase 2 mudou aqui: **a aplicação em si deixou de ser o risco.** A
@@ -474,6 +575,13 @@ existe agora: destrava a fase 2 inteira sem depender da senha de produção.
 ---
 
 ## 4b. Riscos da sincronização que já existem hoje — sem rename nenhum
+
+⚠️ **Levantados contra o código das Edge Functions — que não é o que roda em
+produção desde 25/08 (ver §0).** Os quatro riscos continuam descritos com
+precisão, e o P1 os corrigiu em `supabase/functions/`. **Se o `kastropark-jobs`
+os tem, ninguém verificou.** Um deles já se manifestou nele: o risco 4 ("não há
+alarme"), porque `app.job_execucao` registra o que terminou e não o que caiu — a
+queda de 27/08 às 17:30 aparece como ausência de linha, não como erro.
 
 Levantados em 22/08/2026 por revisão adversarial das Edge Functions e
 **conferidos um a um contra o código**. Nenhum depende da reconciliação: valem

@@ -6,9 +6,9 @@
 # Monta dois bancos descartáveis no Postgres apontado por PG* e confronta um com
 # o outro:
 #
-#   alvo_en   — o que as 16 migrations deste repositório produzem.
+#   alvo_en   — o que TODAS as migrations deste repositório produzem.
 #   ensaio_pt — o schema real da nuvem, em português, com as linhas de
-#               configuração; depois a migration de rename e as migrations 12 a 15.
+#               configuração; depois o rename e todas as migrations a partir dele.
 #
 # O ensaio passa quando os dois catálogos ficam idênticos E as três suítes de
 # comportamento (97, 98, 99) passam no banco renomeado. Igualdade de catálogo
@@ -29,7 +29,7 @@ passo "1. lendo o schema da nuvem"
 python3 scripts/introspeccao_nuvem.py "$REF" \
   --out scripts/_producao.sql --json scripts/_producao.json || exit 1
 
-passo "2. montando o alvo (as 16 migrations deste repositório)"
+passo "2. montando o alvo (todas as migrations deste repositório)"
 psql -q -d postgres -c "drop database if exists alvo_en;" -c "create database alvo_en;" >/dev/null
 PGDATABASE=alvo_en psql -q -v ON_ERROR_STOP=1 -f scripts/_test_stub_supabase.sql >/dev/null 2>&1
 for f in supabase/migrations/*.sql; do
@@ -53,10 +53,11 @@ echo "  schema aplicado com $erros erro(s)"
 python3 scripts/extrair_config_nuvem.py "$REF" > scripts/_config_nuvem.sql
 psql -q -f scripts/_config_nuvem.sql >/dev/null 2>&1
 
-passo "4. aplicando o rename e as migrations 12 a 15"
-for f in supabase/migrations/20260815101150_*.sql \
-         supabase/migrations/2026081510120*.sql supabase/migrations/2026081510130*.sql \
-         supabase/migrations/2026081510140*.sql supabase/migrations/20260822160000*.sql; do
+# ⛔ Mesma correção do ensaio de staging: a lista sai de `ls`, nunca de um glob
+#    escrito à mão, senão o ensaio congela no lote que existia quando alguém o
+#    escreveu.
+passo "4. aplicando o rename e TODAS as migrations a partir dele"
+for f in $(ls supabase/migrations/*.sql | sed -n '/11b/,$p'); do
   saida=$(psql -q -v ON_ERROR_STOP=1 -f "$f" 2>&1 | grep -E '^psql.*(ERROR|FATAL)')
   if [ -n "$saida" ]; then echo "  FALHOU $(basename "$f"): $saida"; falhou=1
   else echo "  ok $(basename "$f")"; fi

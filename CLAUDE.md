@@ -63,9 +63,11 @@ Convenções não-óbvias (o resto está em `package.json` / `pyproject.toml`):
 
 - FastAPI servindo três coisas: API do painel para dado individual e sensível, o assistente de IA, e os endpoints administrativos. Motor e sender rodam agendados no mesmo container. **A sincronização não** — ver abaixo.
 - Agente LangChain 1.x com `create_agent` — multi-provider (OpenAI / Anthropic / Google GenAI). **Sem text-to-SQL:** o agente escolhe do catálogo `app.metric` e devolve `{metrica, parametros}`; quem executa é o backend, como o usuário que perguntou.
-- **A sincronização com o Secullum é Edge Function, não worker Python.** Vive no projeto Supabase, em Deno: `sync-cadastro`, `sync-batidas` e `secullum-test-auth`. Decisão de 22/08/2026, tomada depois que elas já estavam entregando dado — dado chegando vale mais que arquitetura simétrica. `backend/operax/sync/` **não existe e não deve ser criado**.
-  A regra que continua valendo é a que importa: trocar de sistema de ponto mexe num lugar só. Esse lugar agora é a Edge Function.
-  A origem autentica com usuário, senha e `client_id` (secrets `SECULLUM_USERNAME`, `SECULLUM_PASSWORD`, `SECULLUM_CLIENT_ID` da função).
+- **A sincronização com o Secullum não é worker Python.** `backend/operax/sync/` **não existe e não deve ser criado**. A regra que continua valendo é a que importa: trocar de sistema de ponto mexe num lugar só.
+  ⛔ **Mas esse lugar não é mais a Edge Function — e o repositório não tem o código dele.** Medido em produção em 27/08/2026: `GET /v1/projects/<ref>/functions` devolve `[]`, e os dois jobs de `pg_cron` chamam o serviço **`kastropark-jobs` na Vercel**, com a URL vinda dos segredos `vercel_jobs_base_url` e `vercel_cron_secret` do Vault. A troca aconteceu em 25/08, uma hora depois de o P1 blindar as Edge Functions.
+  Então: `supabase/functions/` (Deno: `sync-cadastro`, `sync-batidas`, `secullum-test-auth`) é **o runner deste repositório**, não o de produção. Afirmação sobre risco fechado ali **não vale para produção** até alguém ler o código da Vercel — ver `docs/PLANO-RECONCILIACAO-NUVEM.md` e `docs/INCIDENTE-2026-08-27-EXPOSED-SCHEMAS.md`.
+  E há uma diferença já provada, na marra: o `kastropark-jobs` fala com o banco **por PostgREST**, enquanto as Edge Functions deste repo usam conexão direta. Foi o que derrubou a sync em 27/08.
+  A origem autentica com usuário, senha e `client_id` (secrets `SECULLUM_USERNAME`, `SECULLUM_PASSWORD`, `SECULLUM_CLIENT_ID`). Eles **não estão no Vault de produção** — devem viver no projeto da Vercel.
 - Motor de detecção conforme `docs/SPEC-TECNICA.md` §3. Roda em `modo='sombra'` até o falso positivo cair abaixo de 5%.
 - Sender de alertas consome `app.alert_queue` com `for update skip locked`. **O motor nunca envia** — enfileira.
 - Streaming SSE real para as respostas do assistente.
@@ -361,6 +363,18 @@ make sender                 # consome a fila de alertas
 
 Se uma tarefa parecer exigir violar alguma destas, **pare e pergunte**. É sinal de
 que o desenho está errado, não a regra.
+
+**Regra 0 — autorização de produção é condicionada às premissas escritas nela.**
+Toda autorização do dono para mexer em produção vale enquanto as premissas
+declaradas nela continuarem verdadeiras. Premissa derrubada pela própria
+investigação = **autorização revogada na hora**: voltar e perguntar, com o que
+mudou na mão. A revogação é automática e reconhecê-la é obrigação de quem
+executa — não é preciso que o dono a anuncie. Nasceu de
+`docs/INCIDENTE-2026-08-27-EXPOSED-SCHEMAS.md`, em que uma autorização válida foi
+executada minutos depois de a investigação derrubar a premissa dela, e derrubou
+a sincronização de produção.
+**Em 27/08/2026 todas as autorizações anteriores foram revogadas**, por terem
+sido dadas sob a arquitetura "a sync roda em Edge Functions".
 
 1. Nenhuma tabela em `public`. Tabela vai para `app` ou `secullum`.
 2. Toda view de `public` com `security_invoker = on`.
