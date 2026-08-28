@@ -6,10 +6,11 @@ real gerado pela suíte, não de memória.
 
 Legenda: ✅ coberto · ⚠️ parcial · ❌ falta · 🔒 bloqueado por dependência externa
 
-**Resultado: 22 lacunas** (era 27). Fecharam: a cadência de sync, a agregação
-por gestor, a fila de pendentes de justificativa (27/08), e os itens 21 e 22 —
-que **já estavam aplicados no PRD** e continuavam contados aqui. Nove delas
-mudam o escopo de trabalho de forma relevante; o resto é volume.
+**Resultado: 21 lacunas** (era 27). Fecharam: a cadência de sync, a agregação
+por gestor, a fila de pendentes de justificativa (27/08), as duas métricas que o
+assistente não alcançava (28/08), e os itens 21 e 22 — que **já estavam
+aplicados no PRD** e continuavam contados aqui. Nove delas mudam o escopo de
+trabalho de forma relevante; o resto é volume.
 
 ---
 
@@ -176,16 +177,21 @@ Onze tipos de alerta. Dez cobertos pelo catálogo `app.deviation_type` + regras.
 
 ## 4.8 Assistente de IA — 3 das 9 perguntas-exemplo não têm métrica
 
-O catálogo tem **9** métricas — contadas em `app.metric` em 27/08/2026, não de
-memória: `deviations_total`, `deviations_minutes`, `ranking_by_unit`,
-`ranking_by_employee`, `daily_trend`, `recurrence`, `documents_expiring`,
-`payroll_summary` e **`data_freshness`**, que este documento vinha omitindo.
+O catálogo tem **11** métricas: `deviations_total`, `deviations_minutes`,
+`ranking_by_unit`, `ranking_by_employee`, `daily_trend`, `recurrence`,
+`documents_expiring`, `payroll_summary`, `data_freshness` — este documento vinha
+omitindo o nono — e, desde **28/08/2026**, `ranking_by_manager` e
+`pending_justification`.
 
-⚠️ E duas leituras que existem no banco **não estão no catálogo**, então o
-assistente não as alcança: `fn_ranking_by_manager` (migration 27) e
-`fn_pending_justification` (migration 23, com tela desde 27/08). Nenhuma das duas
-exige dado novo — exige linha em `app.metric`, que é migration com `make db-test`
-verde, no mesmo PR. É este o conteúdo concreto do item 27 da lista de lacunas.
+✅ **As duas leituras que o banco tinha e o assistente não alcançava entraram**
+pela migration 29. `fn_ranking_by_manager` (27) e `fn_pending_justification` (23)
+já eram `security invoker` e já tinham `execute` para `authenticated` — faltava a
+linha em `app.metric`, e nada de novo foi exposto para criá-la. Duas decisões
+ficaram registradas na migration: `manager` é dimensão de **saída** no ranking,
+como `unit` em `ranking_by_unit`; e `pending_justification` **não** declara
+gestor, porque o `p_manager_id` da função filtra `manager_employee_id`, a coluna
+que nada preenche — um filtro que devolve zero em silêncio responderia "nenhuma
+pendência" sobre uma fila cheia.
 
 | Pergunta do escopo | Métrica | Status |
 |---|---|---|
@@ -331,9 +337,9 @@ domínio. O eixo de autorização existe protegendo o vazio.
 24. SPEC: rever a pendência do monitor diário
 25. SPRINTS: Fase 3 não depende mais de acesso externo
 26. SPRINTS: sprint novo de importação
-27. Métricas do assistente no catálogo `app.metric` — concretamente:
-    `ranking_by_manager` e `pending_justification`, as duas leituras que existem
-    no banco e o assistente não alcança. Ver §4.8
+27. ~~Métricas do assistente no catálogo `app.metric`~~ — **entregue em 28/08**
+    (migration 29): `ranking_by_manager` e `pending_justification`, as duas
+    leituras que existiam no banco e o assistente não alcançava. Ver §4.8
 
 ---
 

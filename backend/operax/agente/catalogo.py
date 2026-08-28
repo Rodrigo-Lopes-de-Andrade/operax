@@ -8,8 +8,8 @@ WHY A CATALOGUE AND NOT A CLEVER PROMPT
 A model asked to write SQL against a schema it was shown will, eventually, write
 a query that is syntactically fine and semantically wrong — joining department to
 company, say, which is the 26% mistake the whole data model is shaped around. A
-model asked to pick from nine named metrics can only be wrong in one way: picking
-the wrong one of nine, which a person reads on screen and corrects. That is the
+model asked to pick from eleven named metrics can only be wrong in one way: picking
+the wrong one of eleven, which a person reads on screen and corrects. That is the
 trade, and it is why the refusal is a first-class answer.
 
 FIVE REASONS TO REFUSE HERE, AND ALL OF THEM NAME THE PROBLEM
@@ -171,10 +171,29 @@ BINDINGS: dict[str, dict[str, Binding]] = {
         "unit": Binding(argument=None),
         "company": Binding(argument="p_company_id"),
     },
+    "fn_ranking_by_manager": {
+        **_PERIODO_FN,
+        # Mesma razão das duas acima: a função ordena gestores, então `manager`
+        # é a dimensão da SAÍDA. Ela também aceita `p_department_id`, e ele não
+        # está aqui porque o prompt lista unidades e não lista departamentos —
+        # um identificador que o modelo não tem de onde tirar só entra inventado.
+        "manager": Binding(argument=None),
+        "unit": Binding(argument="p_unit_id"),
+        "company": Binding(argument="p_company_id"),
+    },
     "fn_recurrence": {
         **_PERIODO_FN,
         "unit": Binding(argument="p_unit_id"),
         "employee": Binding(argument=None),
+    },
+    "fn_pending_justification": {
+        **_PERIODO_FN,
+        "unit": Binding(argument="p_unit_id"),
+        # ⚠️ `p_manager_id` existe na função e **não** é ligado: ele filtra por
+        # `employee.manager_employee_id`, a coluna que nada preenche e que é a
+        # razão de a migration 27 ter criado a dimensão de gestor de verdade.
+        # Um filtro que devolve zero em silêncio responde "nenhuma pendência"
+        # sobre uma fila cheia, que é pior do que não filtrar.
     },
     "fn_data_freshness": {
         # `entity` descreve a saída (uma linha por origem de dado), não a
@@ -207,6 +226,7 @@ TYPES: dict[str, Literal["date", "uuid", "int", "text"]] = {
     "unit": "uuid",
     "company": "uuid",
     "employee": "uuid",
+    "manager": "uuid",
     "type": "text",
     "payroll_period": "text",
     "entity": "text",

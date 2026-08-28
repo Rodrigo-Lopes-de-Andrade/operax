@@ -7,7 +7,7 @@ desatualizada em dois pontos que mudam a operação inteira:
 
 | | Fase 3, como escrita | Hoje |
 |---|---|---|
-| Migrations a aplicar | **5** (11b, 12–15) | **18** (11b, 12–28), mais a limpeza do passo 2a |
+| Migrations a aplicar | **5** (11b, 12–15) | **19** (11b, 12–29), mais a limpeza do passo 2a |
 | Teto de parada | **48 h**, imposto pelo código | **48 h ainda**, agora medido no runner da Vercel — ver §5 |
 | Natureza da janela | rename | **release de convergência**: schema + Edge Functions + backend |
 
@@ -26,7 +26,7 @@ Nenhum destes é passo da janela. São condições para ela existir.
    `scripts/ensaiar_rename_staging.sh` e `scripts/comparar_catalogos.py` — e o
    mesmo formato de resultado: catálogo comparado e suítes verdes.
    ⚠️ O ensaio que temos validou **11b + 12–15**. O que foi provado não é mais o
-   que vai rodar: são 17 migrations agora, e as 16–27 nunca correram contra o
+   que vai rodar: são 19 migrations agora, e as 16–29 nunca correram contra o
    schema de produção.
 3. Só com os dois verdes é que a data é marcada com o cliente.
 
@@ -105,7 +105,7 @@ scripts/sb_sql.sh nklobmlxyidqxarzisph -f supabase/migrations/<arquivo>.sql
 ```
 
 Na ordem: `11b` · `12` · `13` · `14` · `15` · `16` · `17` · `18` · `19` · `20` ·
-`21` · `22` · `23` · `24` · `25` · `26` · `27` · **`28`**.
+`21` · `22` · `23` · `24` · `25` · `26` · `27` · **`28`** · `29`.
 
 ⛔ **A 28 não é opcional e não pode ficar para depois.** Ela reescreve
 `deviation_read`, que o 11b renomeia sem traduzir o literal `'producao'` de
@@ -117,7 +117,7 @@ Cada chamada é atômica em si. **Entre elas não há atomicidade** — se a 19 
 as anteriores estão aplicadas. É por isso que o ponto de restauração vem antes,
 e não porque o rename possa ficar pela metade.
 
-### Passo 3 — registrar as 18 em `supabase_migrations.schema_migrations`
+### Passo 3 — registrar as 19 em `supabase_migrations.schema_migrations`
 
 Sem isso, o próximo `supabase db push` tenta aplicá-las de novo.
 
@@ -308,7 +308,7 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
       `select entity, max(finished_at) from app.sync_run group by 1` antes de
       culpar a sync
 - [ ] O painel abre contra produção e lista unidade e ocorrência
-- [ ] `select count(*) from supabase_migrations.schema_migrations` = 41 (23 + 18)
+- [ ] `select count(*) from supabase_migrations.schema_migrations` = 42 (23 + 19)
 - [ ] **Um supervisor de unidade vê os desvios da unidade dele.** É o que a 28
       conserta, e o que nenhum teste pegava: um usuário que não vê NADA passa em
       todo teste que só verifica o que ele não deve ver

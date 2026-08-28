@@ -834,6 +834,13 @@ com nome de pessoa na saída), e isso **não** foi decidido aqui: fica anotado
 como pergunta em aberto, porque a resposta certa pode ser projetar a saída antes
 de mandar, e isso muda o que a UI recebe.
 
+⚠️ **Em 28/08 viraram três, e a terceira é a mais nominal das três.** A migration
+29 pôs `pending_justification` no catálogo, e a fila é uma linha por ocorrência —
+nome, dia, tipo e minutos — não um agregado. Ela fecha o item 27 da
+`COBERTURA-ESCOPO.md`, e por isso entrou; mas ela é o caso que torna a pergunta
+em aberto acima concreta, e não mais hipotética. Se a resposta for "projetar a
+saída antes de mandar", é esta métrica que decide o formato.
+
 **O que continua fora.** Thread de conversa — cada pergunta é um turno só, sem
 histórico. Não é limitação de fiação: é escopo que ninguém pediu, e um histórico
 enviado a cada turno multiplica o custo por token sem que ninguém tenha pedido a
