@@ -302,13 +302,17 @@ domínio. O eixo de autorização existe protegendo o vazio.
 
 **Bloqueiam entrega do escopo contratado (9)**
 
-1. Saldo de horas — aparece em três seções diferentes
+1. Saldo de horas — aparece em três seções diferentes. **Decidido em 28/08: o
+   OperaX calcula**, não espelha (ver abaixo)
 2. ~~KPIs de headcount~~ — **os 5 entregues em 25/08**; os dois de marcação com o rótulo da leitura, e não como presença (A12)
 3. ~~Filtro por gestor e por departamento~~ — **entregue em 25/08** (migration 22); ~~agregação por gestor~~ — **entregue em 26/08** (migration 27). ⚠️ O `p_manager_id` da 22 filtra por `manager_employee_id`, que continua sem fonte: quem quiser filtrar por gestor hoje tem de usar a dimensão nova
 4. ~~Histórico de marcações na tela individual~~ — **entregue em 25/08**
-5. Catálogo dos 11 relatórios + exportação
+5. Catálogo dos 11 relatórios + exportação — **formato decidido em 28/08: Excel
+   *e* PDF**
 6. Importação do Excel do Domínio, ponta a ponta
-7. Mapa de código de evento de folha → categoria
+7. Mapa de código de evento de folha → categoria — **a tabela existe desde
+   28/08** (`app.payroll_event_map`, migration 30); falta a curadoria, que é
+   atividade de implantação com a contabilidade
 8. ~~Ocorrências pendentes de justificativa~~ — **entregue em 25/08** (migration 23); ~~sem tela que aceite ou rejeite~~ — **entregue em 26/08**: `POST /ocorrencias/{id}/justificativa` e o veredito no drawer da ocorrência. "Aceita" e "escrita" deixaram de ser a mesma coisa. ~~Falta a *fila*~~ — **entregue em 27/08**: `/dashboard/justificativas`. Item fechado
 9. Tabela de ocorrência disciplinar
 
@@ -343,24 +347,33 @@ domínio. O eixo de autorização existe protegendo o vazio.
 
 ---
 
-## O que precisa de decisão antes de eu mexer
+## As três decisões que faltavam — tomadas em 28/08/2026
 
-**Saldo de horas.** É o item que mais aparece no escopo e o que tem mais risco
-de virar cálculo próprio divergente do oficial. O Secullum tem `NBanco` em
-`Batida` e um bloco inteiro de compensação em `HorariosOpcoes`. A pergunta é se
-o saldo vem espelhado de lá ou se o OperaX calcula. **Espelhar é a única resposta
-que não recria a exposição jurídica que o resto do desenho evita.**
+**Saldo de horas: o OperaX calcula.** Decisão do dono, contra a recomendação
+registrada aqui, que era espelhar `NBanco` do Secullum. Fica escrito o que a
+recomendação dizia, porque é o risco que o trabalho passa a carregar: o registro
+oficial da jornada é o sistema de ponto, e um saldo calculado aqui **vai
+divergir** do dele em algum momento — arredondamento, regra de compensação,
+feriado municipal. Quando divergir, quem vale é o Secullum, e a diferença aparece
+numa tela que um gestor mostra para uma pessoa. Duas consequências práticas para
+quem for implementar:
 
-**Mapa de código de evento de folha.** Sem ele metade do dashboard financeiro não
-existe. É trabalho de curadoria com a contabilidade, igual ao mapa de unidades —
-e precisa estar dimensionado como atividade de implantação, não absorvido.
+- a regra de compensação precisa ser **escrita e versionada** antes do primeiro
+  número (banco de horas tem prazo, teto e forma de quitação — nada disso é
+  derivável das batidas);
+- o vocabulário da regra do CLAUDE.md passa a valer em dobro: o que a tela mostra
+  é **indício** e **saldo apurado pelo OperaX**, nunca "banco de horas oficial".
 
-⚠️ **A ferramenta dele está a uma decisão de distância, e a decisão é sua.** A
-tela de curadoria origem → unidade entrou em 25/08 e não precisou de migration
-nenhuma: `app.unit_secullum_map` já existia, com `validated_by` e `validated_at`.
-O mapa de eventos não existe como tabela, e criá-lo é **tabela nova em `app` com
-policy nova** — uma das três paradas obrigatórias do CLAUDE.md. Está descrito e
-parado nisso, de propósito.
+**Exportação: Excel e PDF, os dois.** O sprint de relatórios cresce — são dois
+geradores e dois layouts, e o PDF é o que exige decisão de leiaute (cabeçalho,
+marca do tenant, paginação). O catálogo dos 11 relatórios continua sendo o
+pré-requisito de ambos.
 
-**Exportação.** O escopo exige, meu PRD excluía. Confirmar formato (Excel, PDF ou
-os dois) muda o esforço do sprint de relatórios.
+**Mapa de código de evento: a tabela foi criada.** `app.payroll_event_map`
+(migration 30), com o mesmo desenho de `app.unit_secullum_map` — chave
+`(tenant_id, code)`, nove categorias, `validated_by`/`validated_at`, RLS de
+admin. Isso destrava o caminho, **não os indicadores**: eles precisam da
+curadoria com a contabilidade, que continua sendo atividade de implantação e
+precisa estar dimensionada como tal. Linha sem `validated_at` é provisória, e a
+tela tem de mostrar isso como faixa própria — somar provisório com confirmado faz
+a curadoria parecer terminada com metade do trabalho por fazer.

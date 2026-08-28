@@ -1546,6 +1546,39 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.payroll_event_map`
+
+> Código de evento da folha do cliente -> categoria do produto. Linha sem validated_at = mapeamento provisório, sinalizar na UI. Sem este mapa, metade do dashboard financeiro não existe — e com ele adivinhado, existe errado.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `tenant_id` 🔑 | uuid | não |  | `app.tenant` |  |
+| `code` 🔑 | text | não |  |  |  |
+| `category` | text | não |  |  |  |
+| `label` | text | sim |  |  |  |
+| `validated_by` | uuid | sim |  | `auth.users` |  |
+| `validated_at` | timestamp with time zone | sim |  |  |  |
+| `notes` | text | sim |  |  |  |
+
+**Restrições**
+
+- `CHECK ((category = ANY (ARRAY['base_salary'::text, 'overtime'::text, 'vacation'::text, 'thirteenth'::text, 'termination'::text, 'benefit'::text, 'charge'::text, 'deduction'::text, 'other'::text])))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `payroll_event_map_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+
+<details><summary>Índices</summary>
+
+- `payroll_event_map_categoria_idx` — `app.payroll_event_map USING btree (tenant_id, category)`
+
+</details>
+
+
 ## `app.payroll_period`
 
 *tabela — RLS ligada*
