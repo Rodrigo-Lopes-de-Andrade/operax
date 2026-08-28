@@ -562,15 +562,53 @@ era onde o supervisor via zero. Catálogo: funções 26×26, views 9×9, **polic
 **Sobra uma divergência, e ela não é do rename:** `app.job_execucao` existe em
 produção e nenhuma migration daqui a cria. É o diário do runner da Vercel (§0).
 
-⚠️ **Decisão pendente sobre ela**, e não é urgente para a janela:
+#### E ela não é cosmética: são **dois diários**, não uma tabela velha
 
-- **(a) trazê-la para o repositório** — tabela nova em `app` com policy nova, que
-  é parada obrigatória, e exige saber o que o `kastropark-jobs` espera dela;
-- **(b) declará-la fora do repositório**, de propriedade do serviço da Vercel, e
-  ensinar a comparação a ignorá-la.
+A leitura errada dessa divergência é "produção usa o nome antigo, o repositório
+usa o novo". Não é isso, e a diferença decide o que a janela precisa fazer.
 
-Enquanto a Vercel não é lida, **(b)** é o único caminho honesto: (a) obriga a
-afirmar sobre um contrato que ninguém conferiu.
+**São duas linhagens distintas:**
+
+| | Cria | Nome em produção hoje | Vira, na 11b | Quem escreve |
+|---|---|---|---|---|
+| `app.sync_run` | migration **09** | `app.sync_execucao` | `app.sync_run` | o runner **deste repositório** |
+| `app.job_execucao` | **nenhuma migration daqui** | `app.job_execucao` | não é tocada | o runner da **Vercel** |
+
+Três fatos que sustentam isso, todos conferíveis no repositório:
+
+1. A migration 09 cria `app.sync_run`; a linha 88 da 11b é
+   `('app', 'sync_execucao', 'sync_run')` — ou seja, produção tem **a mesma
+   tabela**, com o nome em português, esperando o rename.
+2. `grep job_execucao supabase/migrations/` devolve **zero**. Ela nunca foi
+   antecessora de `sync_run`; nasceu fora daqui.
+3. A migration 12 **não migra nada** para `sync_run`: ela cria um índice, a
+   função `fn_data_freshness` e uma linha em `app.metric`.
+
+**Por que isso importa.** `fn_data_freshness` lê `app.sync_run`, e ela é o
+deadman de frescor: o painel a consome em `frontend/src/lib/freshness.ts` e o
+assistente a expõe como métrica. Se depois da janela o runner de produção seguir
+escrevendo só em `app.job_execucao`, o deadman fica **cego** — vai reportar toda
+entidade como obsoleta sem que a sincronização esteja quebrada. É a mesma forma
+do bloqueio 2: sobe verde e mente em silêncio.
+
+⚠️ **Medição que falta, e é uma query só.** O `ERROR: relation "app.sync_run"
+does not exist` colhido em produção em 27/08 prova apenas que o rename está
+pendente — **não** prova que a tabela está vazia. O nome a consultar lá é o
+português:
+
+    select 'sync_execucao' as diario, count(*), max(terminado_em) from app.sync_execucao
+    union all
+    select 'job_execucao', count(*), max(finalizado_em) from app.job_execucao;
+
+Até ela existir, a cisão de diário é **inferência estrutural** — forte, mas não
+medida. Se `sync_execucao` tiver histórico que para em 25/08, a cisão fica
+datada na migração para a Vercel.
+
+⚠️ **A decisão sobre adotar `app.job_execucao` no repositório continua parada**,
+esperando a leitura da Vercel: trazê-la é tabela nova em `app` com policy nova —
+parada obrigatória — e exige saber o que o `kastropark-jobs` espera dela. O que
+mudou é que ensiná-la a ser ignorada **deixou de ser inócuo**: era a opção que
+teria enterrado este achado.
 
 #### O passo 8 fechou — e ele é o que exercita o PostgREST real
 

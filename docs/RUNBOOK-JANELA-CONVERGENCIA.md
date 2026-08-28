@@ -139,7 +139,29 @@ em 27/08 quando remover `app`/`secullum` dos exposed schemas o derrubou com
 Então **a correção dos exposed schemas é item DESTA janela**, junto com um runner
 que não dependa mais deles. Nunca como mudança avulsa de painel.
 
-Este passo só fica escrevível depois da leitura do `kastropark-jobs`.
+⛔ **E ele escreve o diário errado.** O runner deste repositório grava em
+`app.sync_run`; o `kastropark-jobs` grava em `app.job_execucao`, que **nenhuma
+migration daqui cria**. Quem lê `app.sync_run` é `fn_data_freshness` — o deadman
+de frescor, consumido pelo painel (`frontend/src/lib/freshness.ts`) e exposto
+como métrica do assistente. Se o runner sair da janela ainda escrevendo só em
+`job_execucao`, o deadman sobe **cego**: reporta toda entidade obsoleta sem que a
+sincronização esteja quebrada.
+
+Não se conserta com migration — a 12 não migra nada, ela só cria a função, o
+índice e a linha de `app.metric`; e a 09 já cria a tabela, que em produção espera
+o rename da 11b sob o nome `app.sync_execucao`. **É o runner que tem de mudar de
+diário**, e por isso o requisito entra aqui e não no passo 2:
+
+- [ ] o runner atualizado grava em `app.sync_run`, com `entity`, `scope`,
+      `records_skipped` e `finished_at` — os campos que a 21 acrescentou e que
+      `fn_data_freshness` agrupa
+- [ ] uma execução real depois de religar aparece em `app.sync_run`, não só em
+      `app.job_execucao`
+
+Este passo só fica escrevível depois da leitura do `kastropark-jobs` — e a
+leitura precisa responder **se ele consegue escrever em `app.sync_run`**, o que
+depende de (b) da ordem fixada: por PostgREST, `app` teria de continuar exposto,
+que é justamente o que esta janela remove.
 
 ### Passo 5 — backend no Railway
 
@@ -204,7 +226,12 @@ Rodar de novo **depois** do backfill do passo 6.
       **não** `cron.job_run_details`
 - [ ] `90_reconciliar_sync.py` verde, duas vezes: após religar e após o backfill
 - [ ] Um ciclo completo de cada job sem erro (15 min e 30 min)
-- [ ] `fn_data_freshness` sem `is_stale` — limiar de 25 min para `Batida`
+- [ ] `fn_data_freshness` sem `is_stale` — limiar de 25 min para `Batida`.
+      ⚠️ Este é o item que pega a **cisão de diário**: se ele acusar tudo
+      obsoleto com a sincronização visivelmente rodando, o runner ficou gravando
+      em `app.job_execucao` e o passo 4 não fechou. Conferir com
+      `select entity, max(finished_at) from app.sync_run group by 1` antes de
+      culpar a sync
 - [ ] O painel abre contra produção e lista unidade e ocorrência
 - [ ] `select count(*) from supabase_migrations.schema_migrations` = 41 (23 + 18)
 - [ ] **Um supervisor de unidade vê os desvios da unidade dele.** É o que a 28
