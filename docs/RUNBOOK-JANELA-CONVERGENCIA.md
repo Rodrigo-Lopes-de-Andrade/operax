@@ -7,7 +7,7 @@ desatualizada em dois pontos que mudam a operação inteira:
 
 | | Fase 3, como escrita | Hoje |
 |---|---|---|
-| Migrations a aplicar | **5** (11b, 12–15) | **21** (11b, 12–31), mais a limpeza do passo 2a |
+| Migrations a aplicar | **5** (11b, 12–15) | **22** (11b, 12–32), mais a limpeza do passo 2a |
 | Teto de parada | **48 h**, imposto pelo código | **48 h até a troca do runner, 7 dias depois dela** — ver §5 |
 | Natureza da janela | rename | **release de convergência**: schema + Edge Functions + backend |
 
@@ -26,7 +26,7 @@ Nenhum destes é passo da janela. São condições para ela existir.
    `scripts/ensaiar_rename_staging.sh` e `scripts/comparar_catalogos.py` — e o
    mesmo formato de resultado: catálogo comparado e suítes verdes.
    ⚠️ O ensaio que temos validou **11b + 12–15**. O que foi provado não é mais o
-   que vai rodar: são 21 migrations agora, e as 16–31 nunca correram contra o
+   que vai rodar: são 22 migrations agora, e as 16–32 nunca correram contra o
    schema de produção.
 3. Só com os dois verdes é que a data é marcada com o cliente.
 
@@ -160,7 +160,7 @@ scripts/sb_sql.sh nklobmlxyidqxarzisph -f supabase/migrations/<arquivo>.sql
 ```
 
 Na ordem: `11b` · `12` · `13` · `14` · `15` · `16` · `17` · `18` · `19` · `20` ·
-`21` · `22` · `23` · `24` · `25` · `26` · `27` · **`28`** · `29` · `30` · **`31`**.
+`21` · `22` · `23` · `24` · `25` · `26` · `27` · **`28`** · `29` · `30` · **`31`** · `32`.
 
 ⛔ **A 28 não é opcional e não pode ficar para depois.** Ela reescreve
 `deviation_read`, que o 11b renomeia sem traduzir o literal `'producao'` de
@@ -181,7 +181,7 @@ Cada chamada é atômica em si. **Entre elas não há atomicidade** — se a 19 
 as anteriores estão aplicadas. É por isso que o ponto de restauração vem antes,
 e não porque o rename possa ficar pela metade.
 
-### Passo 3 — registrar as 21 em `supabase_migrations.schema_migrations`
+### Passo 3 — registrar as 22 em `supabase_migrations.schema_migrations`
 
 Sem isso, o próximo `supabase db push` tenta aplicá-las de novo.
 
@@ -189,7 +189,7 @@ Sem isso, o próximo `supabase db push` tenta aplicá-las de novo.
 plataforma, 28/08/2026). O histórico de migrations é **compartilhado**: eles
 aplicam o que é deles via `supabase db query --file` justamente para não tocar
 esse bookkeeping, e avisam que `supabase migration list` mostra migrations
-"órfãs" dos dois lados. Registrar 21 versões nossas ali muda o que o CLI deles
+"órfãs" dos dois lados. Registrar 22 versões nossas ali muda o que o CLI deles
 enxerga.
 
 Combinar antes, e **nunca** rodar `supabase migration repair` sem alinhar — é o
@@ -407,7 +407,7 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
       `select entity, max(finished_at) from app.sync_run group by 1` antes de
       culpar a sync
 - [ ] O painel abre contra produção e lista unidade e ocorrência
-- [ ] `select count(*) from supabase_migrations.schema_migrations` = 44 (23 + 21)
+- [ ] `select count(*) from supabase_migrations.schema_migrations` = 45 (23 + 22)
 - [ ] **O assistente responde uma pergunta de período** — "quantos desvios
       tivemos este mês?" tem de voltar com evento `metrica` e um número, não com
       "Falha ao consultar o modelo". É o item que pega a 31: catálogo e `TYPES`

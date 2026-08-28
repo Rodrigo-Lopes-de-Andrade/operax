@@ -82,6 +82,19 @@ insert into app.employee_pii (employee_id, tenant_id, cpf, rg) values
   ('a0000000-0000-0000-0000-0000000000c1', 'aaaaaaaa-0000-0000-0000-000000000001', '00000000191', 'MG-1'),
   ('b0000000-0000-0000-0000-0000000000c1', 'bbbbbbbb-0000-0000-0000-000000000002', '00000000272', 'SP-2');
 
+-- Domínio disciplinar (migration 32) e domínio de saúde, uma linha cada — e no
+-- colaborador que o supervisor **enxerga**, de propósito. Sem linha, "não lê"
+-- conta zero numa tabela vazia e a asserção passa sem provar nada: foi o que a
+-- migration 28 ensinou, e o exame ocupacional estava exatamente nesse estado.
+-- Com a linha aqui, o que barra o supervisor é o domínio, não a falta de dado.
+insert into app.disciplinary_event (tenant_id, employee_id, type, occurred_on, summary) values
+  ('aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c1',
+   'written_warning','2026-08-12','Fixture de teste — atraso reincidente');
+
+insert into app.occupational_exam (tenant_id, employee_id, type, performed_on, result) values
+  ('aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c1',
+   'periodic','2026-08-12','fit');
+
 insert into app.deviation_type_config (tenant_id, code, active, counts_as_deviation)
 select t.id, dt.code, true, true
 from app.tenant t cross join app.deviation_type dt
@@ -169,6 +182,8 @@ do $$ begin
     (select count(*) from public.vw_deviation_event where unit_name = 'A Norte'), 0);
   perform pg_temp.assert_eq('supervisor NÃO lê PII (ver unit não basta)',
     (select count(*) from app.employee_pii), 0);
+  perform pg_temp.assert_eq('supervisor NÃO lê ocorrência disciplinar (a linha é de quem ele vê)',
+    (select count(*) from app.disciplinary_event), 0);
   perform pg_temp.assert_eq('supervisor NÃO lê remuneração',
     (select count(*) from app.employee_compensation), 0);
   perform pg_temp.assert_eq('supervisor não vê evento em mode sombra',
@@ -190,6 +205,8 @@ set local request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
 do $$ begin
   perform pg_temp.assert_eq('DP lê PII',
     (select count(*) from app.employee_pii), 1);
+  perform pg_temp.assert_eq('DP LÊ ocorrência disciplinar',
+    (select count(*) from app.disciplinary_event), 1);
   perform pg_temp.assert_eq('DP NÃO lê exame ocupacional (domínio saúde)',
     (select count(*) from app.occupational_exam), 0);
   perform pg_temp.assert_eq('DP vê os 2 colaboradores do tenant',

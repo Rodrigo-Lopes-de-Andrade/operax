@@ -665,6 +665,47 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.disciplinary_event`
+
+> Advertência, suspensão e anotação administrativa. Domínio sensível `disciplinary`: ver a unidade não basta e ser gestor dela não basta. Sem delete para o painel — registro aplicado por engano se corrige por update, com trilha, nunca por apagamento.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `employee_id` | uuid | não |  | `app.employee` |  |
+| `type` | text | não |  |  |  |
+| `occurred_on` | date | não |  |  |  |
+| `days` | integer | sim |  |  |  |
+| `summary` | text | sim |  |  | Texto livre sobre uma pessoa, no domínio mais sensível dos quatro. NUNCA em view de public. |
+| `document_id` | uuid | sim |  | `app.document` |  |
+| `acknowledged_on` | date | sim |  |  |  |
+| `created_by` | uuid | sim |  | `auth.users` |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Restrições**
+
+- `CHECK (((days IS NULL) OR (days > 0)))`
+- `CHECK (((days IS NULL) OR (type = 'suspension'::text)))`
+- `CHECK ((type = ANY (ARRAY['verbal_warning'::text, 'written_warning'::text, 'suspension'::text, 'administrative_note'::text])))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `disciplinary_read` | SELECT | `(util.can_see_domain(tenant_id, 'disciplinary'::app.sensitive_domain) AND util.can_see_employee(employee_id))` | `-` |
+| `disciplinary_write` | ALL | `util.can_see_domain(tenant_id, 'disciplinary'::app.sensitive_domain)` | `util.can_see_domain(tenant_id, 'disciplinary'::app.sensitive_domain)` |
+
+<details><summary>Índices</summary>
+
+- `disciplinary_colab_idx` — `app.disciplinary_event USING btree (employee_id, occurred_on DESC)`
+- `disciplinary_tenant_idx` — `app.disciplinary_event USING btree (tenant_id, occurred_on DESC)`
+
+</details>
+
+
 ## `app.document`
 
 > O arquivo vive no Supabase Storage. A policy do bucket precisa espelhar util.can_see_employee — RLS de tabela não protege o objeto.

@@ -300,13 +300,28 @@ equipamento, feedback ou anotação.
 histórico de remuneração, histórico de função, documentos, vencimentos, exames,
 ASO, férias, afastamentos.
 
-❌ feedbacks · **advertências e ocorrências** · treinamentos · benefícios ·
-equipamentos entregues · anotações administrativas.
+❌ feedbacks · treinamentos · benefícios · equipamentos entregues · anotações
+administrativas.
 
-A de advertências é uma **inconsistência do meu próprio modelo**: declarei
-`disciplinary` como um dos quatro domínios sensíveis em `app.sensitive_domain`,
-com permissão configurada por papel — e não criei nenhuma tabela que use esse
-domínio. O eixo de autorização existe protegendo o vazio.
+✅ **Advertências e ocorrências — entregue em 28/08** (`app.disciplinary_event`,
+migration 32). Era **inconsistência do meu próprio modelo**, não só lacuna de
+escopo: `disciplinary` estava declarado em `app.sensitive_domain` desde a
+migration 02, com `owner`, `hr` e `personnel` já autorizados em
+`app.domain_permission` — e nenhuma tabela usava o domínio. O eixo de
+autorização existia protegendo o vazio.
+
+A tabela segue o desenho de `app.occupational_exam`: leitura exige o domínio
+**e** enxergar a pessoa; ver a unidade não basta e ser gestor dela não basta.
+Sem `delete` para o painel, por decisão — a regra 6 já diz o que fazer com fato
+que perdeu validade, e advertência apagada não deixa rastro numa discussão
+trabalhista.
+
+⚠️ **A suíte ganhou fixture junto, e é o que dá sentido à asserção.** A
+verificação "DP não lê exame ocupacional" contava zero numa tabela **vazia** —
+passava sem provar nada, exatamente a patologia que a migration 28 expôs. Agora
+existe uma linha de cada domínio sensível, e as duas asserções que valem são as
+positivas ao lado: o supervisor não lê a ocorrência disciplinar **de alguém que
+ele enxerga**, e o DP lê.
 
 ---
 
