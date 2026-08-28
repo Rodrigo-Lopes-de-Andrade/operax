@@ -6,8 +6,10 @@ real gerado pela suíte, não de memória.
 
 Legenda: ✅ coberto · ⚠️ parcial · ❌ falta · 🔒 bloqueado por dependência externa
 
-**Resultado: 25 lacunas** (era 27; a cadência de sync fechou uma e a agregação por gestor, outra). Nove delas mudam o escopo de trabalho de forma
-relevante; o resto é volume.
+**Resultado: 22 lacunas** (era 27). Fecharam: a cadência de sync, a agregação
+por gestor, a fila de pendentes de justificativa (27/08), e os itens 21 e 22 —
+que **já estavam aplicados no PRD** e continuavam contados aqui. Nove delas
+mudam o escopo de trabalho de forma relevante; o resto é volume.
 
 ---
 
@@ -27,6 +29,22 @@ em Excel**, não API. Consequências:
 O modelo de dados já suportava (`app.file_import`, `payroll_entry.source`), mas
 **a funcionalidade de importação não existia em nenhum sprint** — estava como
 plano B. Agora é caminho crítico da Fase 3.
+
+---
+
+## 27/08/2026 — a lista de lacunas estava contando trabalho já feito
+
+Três correções, e nenhuma delas veio de memória:
+
+| O que este documento dizia | O que a medição diz |
+|---|---|
+| "O catálogo tem 8 métricas" | `select count(*) from app.metric` = **9**. Faltava `data_freshness` |
+| Itens 21 e 22: ajustar o PRD | O PRD já não contém nenhuma das duas afirmações — a auditoria de 24/08 registrou isso em A18 e ninguém deu baixa aqui |
+| §4.5: "mais a passada diária de backfill de 7 dias" | Produção não faz backfill. O runner que roda lá desde 25/08 carimba janela deslizante fixa de 2 dias |
+
+A lista de lacunas é lida por quem planeja a próxima sprint. Superestimada, ela
+faz replanejar trabalho pronto — que é exatamente o que a auditoria apontou em
+A17 sobre o `SPRINTS.md`.
 
 ---
 
@@ -131,9 +149,14 @@ permanente da idade do dado. Sem isso a tela mente por omissão — mostra um
 retrato de até 15 min atrás como se fosse o agora.
 
 Resta uma pendência real, e ela **reabriu** com a cadência escrita: são **~96
-execuções/dia por tenant só para Batida**, mais a passada diária de backfill de 7
-dias. Cabem no rate limit da API? É a única coisa que ainda pode derrubar a
-cadência.
+execuções/dia por tenant só para Batida**. Cabem no rate limit da API? É a única
+coisa que ainda pode derrubar a cadência.
+
+⚠️ **A "passada diária de backfill de 7 dias" saiu desta conta em 27/08.** Ela é
+contrato do runner **deste** repositório; produção roda o `kastropark-jobs` na
+Vercel desde 25/08, e toda passada dele carimba janela deslizante fixa de **2
+dias**, sem escopo de backfill — medido no log. A carga real hoje é ~96 + ~48
+chamadas/dia. Ver `docs/PLANO-RECONCILIACAO-NUVEM.md`.
 
 ---
 
@@ -153,9 +176,16 @@ Onze tipos de alerta. Dez cobertos pelo catálogo `app.deviation_type` + regras.
 
 ## 4.8 Assistente de IA — 3 das 9 perguntas-exemplo não têm métrica
 
-O catálogo tem 8 métricas: `deviations_total`, `deviations_minutes`,
-`ranking_by_unit`, `ranking_by_employee`, `daily_trend`, `recurrence`,
-`documents_expiring`, `payroll_summary`.
+O catálogo tem **9** métricas — contadas em `app.metric` em 27/08/2026, não de
+memória: `deviations_total`, `deviations_minutes`, `ranking_by_unit`,
+`ranking_by_employee`, `daily_trend`, `recurrence`, `documents_expiring`,
+`payroll_summary` e **`data_freshness`**, que este documento vinha omitindo.
+
+⚠️ E duas leituras que existem no banco **não estão no catálogo**, então o
+assistente não as alcança: `fn_ranking_by_manager` (migration 27) e
+`fn_pending_justification` (migration 23, com tela desde 27/08). Nenhuma das duas
+exige dado novo — exige linha em `app.metric`, que é migration com `make db-test`
+verde, no mesmo PR. É este o conteúdo concreto do item 27 da lista de lacunas.
 
 | Pergunta do escopo | Métrica | Status |
 |---|---|---|
@@ -182,9 +212,11 @@ O escopo lista 11 relatórios e diz que devem ser **visualizados e exportados**.
 
 - Não existe catálogo de relatórios nem definição dos 11 tipos.
 - `app.report_cycle` cobre só o ciclo consolidado enviado por WhatsApp/e-mail.
-- **Conflito:** o `PRD-OPERAX.md` lista "Exportação Excel/PDF" como fora do MVP —
-  herdado do resumo técnico original de vocês. O escopo contratado exige. O PRD
-  está errado e precisa mudar, não o escopo.
+- ~~**Conflito** com o PRD~~ — **não existe mais, e talvez nunca tenha existido
+  nesta versão do PRD.** Conferido em 27/08: o "Não entra" do `PRD-OPERAX.md`
+  não menciona exportação. A auditoria de 24/08 já havia registrado isso (A18).
+  O que continua aberto é o **formato** — Excel, PDF ou os dois —, que muda o
+  esforço do sprint e é decisão do dono.
 
 ---
 
@@ -287,15 +319,21 @@ domínio. O eixo de autorização existe protegendo o vazio.
 19. Reconciliação ponto × folha
 20. Oito indicadores de folha (derivam do item 7)
 
-**Ajuste de documento (7)**
+**Ajuste de documento (7 — dois deles já feitos)**
 
-21. PRD: remover "exportação fora do MVP"
-22. PRD: risco do Domínio deixa de ser alto
+21. ~~PRD: remover "exportação fora do MVP"~~ — **já aplicado**. O "Não entra" do
+    PRD atual não menciona exportação. O que segue aberto é o **formato**
+    (Excel, PDF ou os dois), que é decisão do dono, não ajuste de texto
+22. ~~PRD: risco do Domínio deixa de ser alto~~ — **já aplicado**. A tabela de
+    riscos do PRD não tem risco de Domínio; tem "Plano de contas de eventos não
+    mapeado", que é outro item e continua aberto (item 7)
 23. SPEC: Domínio vira file-first, não fallback
 24. SPEC: rever a pendência do monitor diário
 25. SPRINTS: Fase 3 não depende mais de acesso externo
 26. SPRINTS: sprint novo de importação
-27. Métricas do assistente no catálogo `app.metric`
+27. Métricas do assistente no catálogo `app.metric` — concretamente:
+    `ranking_by_manager` e `pending_justification`, as duas leituras que existem
+    no banco e o assistente não alcança. Ver §4.8
 
 ---
 
