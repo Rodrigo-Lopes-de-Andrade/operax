@@ -72,9 +72,22 @@ recusa como parâmetro desconhecido.
       com `https://operaxfonted.vercel.app`, pela Management API)
 - [ ] **Deployment Protection do projeto do painel desligada** — hoje toda URL
       dele devolve 302 para `vercel.com/sso-api`, e o cliente não passa da porta
-- [ ] Senha do banco de produção **resetada**, e `DATABASE_URL` (Transaction
-      Pooler) mais os quatro `SECULLUM_*` configurados como secrets das Edge
-      Functions — ver passo 4
+- [ ] Senha do banco de produção **resetada pelo painel** (Project Settings →
+      Database), e `DATABASE_URL` mais os quatro `SECULLUM_*` configurados como
+      secrets das Edge Functions — ver passo 4.
+      ⛔ **Não dá para roteirizar:** `alter role postgres with password` pelo
+      `sb_sql.sh` responde `42501: only superusers can alter privileged roles` —
+      a Management API roda como `postgres`, que no Supabase não é superusuário.
+      Medido em 28/08 contra o staging. É passo manual do dono, e é por isso que
+      está no preparo e não na janela.
+      ⚠️ Escolha uma senha **URL-safe** (letras, dígitos, `-`, `_`). A que estava
+      em `backend/.env.staging` tinha dois `@`, que o RFC 3986 obriga a escapar
+      e que cada camada trata de um jeito — e além disso nem era a do staging.
+      ⏱️ **A senha nova não vale na hora.** Medido em 28/08 contra produção: o
+      pooler recusou por alguns minutos depois do reset e passou a aceitar
+      sozinho, sem nada ter mudado. Dentro da janela, `password authentication
+      failed` logo após um reset **não é senha errada** — é propagação. Esperar e
+      repetir antes de mexer em qualquer outra coisa
 - [ ] Backup completo e ponto de restauração criados
 
 ⛔ **Exposed schemas NÃO é item de preparo.** Ele parece um ajuste de painel e
@@ -175,6 +188,21 @@ código dele nunca precisou ser lido, porque ele não vai continuar.
 gravam em `app.sync_run` (nome em inglês, pós-rename) e tocam as quatro tabelas
 de ingestão pelos nomes em português — que o 11b **exclui do rename de
 propósito**, e diz isso no próprio cabeçalho. Não há nada a renomear no runner.
+
+⛔ **A MESMA SENHA GERA DUAS STRINGS DIFERENTES, E TROCÁ-LAS FALHA DEVAGAR**
+
+Medido em 28/08 contra o staging, com o backend já publicado:
+
+| Consumidor | Host e porta | Por quê |
+|---|---|---|
+| Edge Functions (`supabase/functions/`) | **Transaction Pooler, 6543** | `postgres-client.ts` já passa `prepare: false` e `max: 1` — desenhado para serverless |
+| Backend FastAPI (Railway) | **Session Pooler, 5432** | `core/db.py` monta o pool sem `prepare_threshold=None` e usa `options=-c search_path`; o transaction pooler não sustenta nem um nem outro |
+
+⛔ E **nenhum dos dois** é `db.<ref>.supabase.co`, a connection string que o painel
+do Supabase mostra primeiro: aquele host é **IPv6-only**. O Railway sai por IPv4,
+então a conexão não falha — ela **pendura** até o `PoolTimeout`, e o sintoma é um
+500 de trinta segundos numa rota que parecia não ter nada a ver com rede. Custou
+duas rodadas de diagnóstico em staging, onde não havia ninguém esperando.
 
 ⛔ **Cinco secrets, e nenhum deles está no Vault de produção.** As funções leem
 `DATABASE_URL`, `SECULLUM_USERNAME`, `SECULLUM_PASSWORD`, `SECULLUM_CLIENT_ID` e
