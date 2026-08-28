@@ -259,12 +259,38 @@ O modelo suporta (`app.file_import` com `layout_version`, `rows_total`,
 
 | O que falta | Onde entra |
 |---|---|
-| Template padronizado publicado | Entregável de implantação (§6 do escopo obriga) |
-| Tela de upload com preview | Frontend, sprint novo |
-| Parser + validação de campos obrigatórios | Backend `operax/imports/` |
-| Relatório de erro por linha, devolvido ao usuário | Backend + frontend |
-| Detecção de duplicidade e reimportação | Backend |
-| **Mapa de código de evento → categoria** | Sem isto não dá para separar o que é hora extra, férias ou rescisão dentro de `payroll_entry.code` |
+| ~~Template padronizado publicado~~ | ✅ **28/08** — `operax/imports/payroll.py`, com aba de controle, competência e comentário por coluna |
+| ~~Parser + validação de campos obrigatórios~~ | ✅ **28/08** — recusa de arquivo inteiro antes da primeira linha (tenant, tipo, versão, cabeçalho, competência) |
+| ~~Relatório de erro por linha~~ | ✅ **28/08** — `Report.as_json()`, no formato de `app.file_import.report`, só com as linhas que têm o que dizer |
+| Gravação em `app.payroll_entry` + `app.payroll_period` | Backend, próxima unidade |
+| Endpoint de upload e confirmação | Backend — a esteira do RH já tem o par `POST /imports` + `/confirm` para seguir |
+| Tela de upload com preview | Frontend |
+| Detecção de reimportação da mesma competência | Backend — a duplicidade **dentro** do arquivo já é detectada |
+| **Mapa de código de evento → categoria** | ✅ a tabela existe (migration 30); falta a curadoria com a contabilidade |
+
+### 28/08/2026 — a esteira decide, e ainda não grava
+
+O que entrou é a metade que julga: `build_template` publica o modelo da
+competência, `parse_upload` recusa o arquivo inteiro antes da primeira linha, e
+`verdict` devolve o que aconteceria com cada uma — **sem tocar no banco**. É a
+mesma divisão do RH (`importer.py` decide, `repository.py` grava), e ela existe
+porque a tela de preview precisa perguntar duas vezes.
+
+Três decisões que valem registro:
+
+- **Código de evento sem categoria não é erro.** A linha entra, o valor conta no
+  total, e o que ela não faz é cair numa categoria. Bloquear a folha inteira por
+  código não mapeado tornaria impossível justo o primeiro mês, que é quando a
+  curadoria ainda não existe. O relatório devolve a lista de códigos órfãos —
+  que é o insumo da curadoria, e vale mais que a contagem de linhas.
+- **Valor no formato brasileiro é aceito** (`1.234,56`). É o que sai do sistema
+  da contabilidade; recusar faria alguém reformatar mil linhas à mão.
+- ⚠️ **Premissa declarada:** o arquivo é **o nosso modelo**, não o export cru do
+  Domínio — §6 do escopo obriga a contratada a fornecer o template, e um arquivo
+  que nós geramos carrega aba de controle, que é o que transforma importação
+  errada silenciosa em recusa nomeada. Se o cliente disser que vai mandar o
+  export do Domínio como sai, o que muda é só a porta de entrada; o veredito, o
+  mapa e o relatório continuam valendo.
 
 O último é o mesmo problema do mapeamento de unidades: o plano de contas de
 eventos da folha é do cliente, e transformar `code` em categoria de produto
