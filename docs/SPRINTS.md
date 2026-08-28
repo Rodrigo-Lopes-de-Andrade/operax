@@ -310,9 +310,38 @@ Três decisões que o código carrega:
 - **O veredito é escolhido antes de ser gravado.** Dois botões lado a lado numa
   ação irreversível é um clique errado a um pixel de distância.
 
-⚠️ Falta a *fila*: `fn_pending_justification` existe desde a 23 e nenhuma tela
-ainda a lê. O cartão do dashboard continua mostrando "pendentes de ciclo", que é
-outro número e está rotulado como tal.
+### Em 27/08/2026 — a fila ganhou tela
+
+`fn_pending_justification` existia desde a 23 e nenhuma tela a lia. Entrou
+`/dashboard/justificativas`, **sem migration nenhuma**: a função é
+`security invoker` com grant para `authenticated`, então é Caminho 1 e a fila de
+um supervisor traz a unidade dele porque a RLS decide, não porque o TypeScript
+filtra.
+
+Quatro decisões que a tela carrega:
+
+- **O padrão olha 30 dias, não 7.** A fila é passivo, não recorte de análise: o
+  período curto do dashboard esconderia justamente o indício de duas semanas
+  atrás que continua sem explicação.
+- **Não há filtro de empresa.** A função recebe unidade, departamento e gestor, e
+  nenhum parâmetro de empresa. Um seletor descartado no caminho mente mais do que
+  a ausência dele — as unidades seguem agrupadas por empresa dentro do seletor.
+- **A coluna é "Desvio", com magnitude, e não minutos assinados.** A função
+  devolve `minutes` e não devolve `direction`, que é propriedade do TIPO e não do
+  sinal (`late_entry` é `shortfall`). Deduzir a direção do sinal seria a lista
+  afirmando o que o dado não diz; o detalhe, a um clique, mostra o valor
+  assinado com a direção verdadeira.
+- **O veredito continua no drawer**, que agora recebe `closeHref` e é alcançado
+  das duas telas. Fechar devolve o gestor ao recorte de onde ele veio — uma fila
+  que cospe o usuário noutra tela a cada veredito deixa de ser fila.
+
+⚠️ **Fila vazia tem duas causas, e a tela diz as duas.**
+`requires_justification` nasce `false` para todo tipo. Um cliente que ainda não
+ligou a política vê zero aqui para sempre, e "está tudo justificado" seria a tela
+afirmando curadoria que nunca existiu.
+
+O cartão do dashboard continua mostrando "pendentes de ciclo", que é outro número
+e está rotulado como tal.
 
 ---
 

@@ -7,6 +7,7 @@ import { NavLink } from "@/components/nav-link";
 import { SignOutButton } from "@/components/sign-out-button";
 import { UserBadge } from "@/components/user-badge";
 import { ASSISTENTE_PATH } from "@/lib/assistente/url";
+import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
 import { MAPEAMENTO_PATH, ROTACOES_PATH } from "@/lib/curadoria/url";
@@ -59,6 +60,7 @@ export function AppShell({
           </p>
           <NavLink href={PONTO_PATH} label="Gestão de ponto" />
           <NavLink href={MONITOR_PATH} label="Monitor diário" />
+          <NavLink href={JUSTIFICATIVAS_PATH} label="Justificativas" />
           <NavLink href={TV_PATH} label="Painel de TV" />
           <NavLink href={ASSISTENTE_PATH} label="Assistente" />
         </nav>

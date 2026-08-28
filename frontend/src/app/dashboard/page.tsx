@@ -10,7 +10,7 @@ import { Rankings } from "@/components/ponto/rankings";
 import { TrendCard } from "@/components/ponto/trend-card";
 import { parseFilters, type RawSearchParams } from "@/lib/ponto/filters";
 import { loadPontoScreen } from "@/lib/ponto/queries";
-import { parsePaging } from "@/lib/ponto/url";
+import { parsePaging, pontoHref } from "@/lib/ponto/url";
 
 export const metadata: Metadata = {
   title: pageTitle("Gestão de ponto"),
@@ -52,8 +52,7 @@ export default async function GestaoDePontoPage({
       {filters.eventId ? (
         <OccurrenceDrawer
           occurrence={screen.selected}
-          filters={filters}
-          paging={paging}
+          closeHref={pontoHref(filters, paging, { eventId: null })}
         />
       ) : null}
     </div>

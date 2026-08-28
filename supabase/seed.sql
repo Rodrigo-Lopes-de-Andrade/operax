@@ -239,6 +239,16 @@ select 'dede0000-0000-0000-0000-000000000001', dt.code, true,
 from app.deviation_type dt
 on conflict (tenant_id, code) do nothing;
 
+-- Exigir justificativa é política por tipo e nasce desligada (migration 23).
+-- Ligada aqui para dois tipos porque, desligada em todos, `/dashboard/justificativas`
+-- fica permanentemente vazia em desenvolvimento — e uma tela que só sabe mostrar
+-- o estado vazio não é uma tela que alguém consiga conferir.
+update app.deviation_type_config
+   set requires_justification = true
+ where tenant_id = 'dede0000-0000-0000-0000-000000000001'
+   and code in ('late_entry', 'incomplete_punches')
+   and not requires_justification;
+
 -- ---------------------------------------------------------------------------
 -- Jornada esperada — 45 dias. Um terço em 12x36, com confidence abaixo de 80,
 -- porque a escala inferida do Horario do Secullum não chega a 100 e a tela
@@ -579,6 +589,7 @@ declare
   v_pii      bigint;
   v_sensivel bigint;
   v_alerta   bigint;
+  v_sem_justificativa bigint;
 begin
   select count(*) into v_eventos
     from app.deviation_event
@@ -631,6 +642,21 @@ begin
     raise exception 'seed sem documento perto do vencimento — a view de vencimento nasce sem caso em alerta';
   end if;
 
-  raise notice 'seed fastpark-dev: % desvios em produção, % pendentes de ciclo, % em sombra, % vínculos divergentes, % faixas de remuneração',
-    v_eventos, v_pendentes, v_sombra, v_divergentes, v_sensivel;
+  -- Contado direto na tabela, como as demais provas deste bloco: a função é
+  -- `security invoker`, e afirmar sobre o seed pela leitura de quem roda o seed
+  -- reprovaria por falta de escopo, não por falta de dado.
+  select count(*) into v_sem_justificativa
+    from app.deviation_event d
+    join app.deviation_type_config cfg
+         on cfg.tenant_id = d.tenant_id and cfg.code = d.type
+        and cfg.active and cfg.requires_justification
+   where d.tenant_id = v_tenant and d.mode = 'production' and d.status = 'active'
+     and not exists (select 1 from app.justification j
+                     where j.deviation_event_id = d.id and j.status = 'accepted');
+  if v_sem_justificativa = 0 then
+    raise exception 'seed sem pendente de justificativa — a fila de /dashboard/justificativas nasce vazia e ninguém a confere';
+  end if;
+
+  raise notice 'seed fastpark-dev: % desvios em produção, % pendentes de ciclo, % em sombra, % vínculos divergentes, % faixas de remuneração, % pendentes de justificativa',
+    v_eventos, v_pendentes, v_sombra, v_divergentes, v_sensivel, v_sem_justificativa;
 end $$;

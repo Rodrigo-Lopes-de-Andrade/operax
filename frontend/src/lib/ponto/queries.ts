@@ -1,5 +1,7 @@
 import "server-only";
 
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 import type { Database } from "@/lib/database.types";
 import {
   eachDay,
@@ -120,6 +122,56 @@ function toOccurrence(row: OccurrenceRow): Occurrence {
   };
 }
 
+/**
+ * As unidades que a sessão alcança, na ordem em que os seletores as mostram.
+ *
+ * Uma definição só porque o slug é contrato de URL: duas telas derivando-o de
+ * jeitos diferentes fariam o mesmo link abrir recortes diferentes.
+ */
+export async function loadUnits(
+  supabase: SupabaseClient<Database>,
+): Promise<UnitOption[]> {
+  const unitRows = await supabase
+    .from("vw_unit")
+    .select("unit_id, code, name, company_id, company_name")
+    .eq("active", true)
+    .order("name");
+
+  if (unitRows.error) {
+    throw new Error(
+      `Não foi possível ler as unidades: ${unitRows.error.message}`,
+    );
+  }
+
+  return (unitRows.data ?? []).map((row) => ({
+    unitId: row.unit_id ?? "",
+    code: row.code ?? "",
+    slug: slugify(row.code ?? ""),
+    name: row.name ?? "",
+    companyId: row.company_id ?? "",
+    companyName: row.company_name ?? "",
+    companySlug: slugify(row.company_name ?? ""),
+  }));
+}
+
+/**
+ * Uma ocorrência, para o detalhe que o `?ev=` abre. Devolve null tanto para o
+ * indício revogado quanto para o que está fora do alcance de quem pediu — a
+ * RLS não distingue os dois, e a tela também não deve fingir que distingue.
+ */
+export async function loadOccurrence(
+  supabase: SupabaseClient<Database>,
+  eventId: string,
+): Promise<Occurrence | null> {
+  const { data } = await supabase
+    .from("vw_deviation_event")
+    .select(OCCURRENCE_COLUMNS)
+    .eq("evento_id", eventId)
+    .maybeSingle();
+
+  return data ? toOccurrence(data) : null;
+}
+
 export type Resolved = {
   units: UnitOption[];
   unit: UnitOption | null;
@@ -180,27 +232,7 @@ export async function loadPontoScreen(
     ate: range.ate,
   };
 
-  const unitRows = await supabase
-    .from("vw_unit")
-    .select("unit_id, code, name, company_id, company_name")
-    .eq("active", true)
-    .order("name");
-
-  if (unitRows.error) {
-    throw new Error(
-      `Não foi possível ler as unidades: ${unitRows.error.message}`,
-    );
-  }
-
-  const units: UnitOption[] = (unitRows.data ?? []).map((row) => ({
-    unitId: row.unit_id ?? "",
-    code: row.code ?? "",
-    slug: slugify(row.code ?? ""),
-    name: row.name ?? "",
-    companyId: row.company_id ?? "",
-    companyName: row.company_name ?? "",
-    companySlug: slugify(row.company_name ?? ""),
-  }));
+  const units = await loadUnits(supabase);
 
   const unit = filters.unitCode
     ? (units.find((option) => option.slug === filters.unitCode) ?? null)
@@ -324,12 +356,8 @@ export async function loadPontoScreen(
       p_unit_id: unitId,
     }),
     filters.eventId
-      ? supabase
-          .from("vw_deviation_event")
-          .select(OCCURRENCE_COLUMNS)
-          .eq("evento_id", filters.eventId)
-          .maybeSingle()
-      : Promise.resolve({ data: null, error: null }),
+      ? loadOccurrence(supabase, filters.eventId)
+      : Promise.resolve(null),
   ]);
 
   if (occurrenceResult.error) {
@@ -356,7 +384,7 @@ export async function loadPontoScreen(
     occurrenceTotal: occurrenceResult.count ?? 0,
     page,
     pageSize,
-    selected: selectedResult.data ? toOccurrence(selectedResult.data) : null,
+    selected: selectedResult,
     trend: trendResult.error
       ? null
       : foldTrend(trendResult.data ?? [], trendRange),

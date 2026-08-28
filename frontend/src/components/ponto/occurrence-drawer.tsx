@@ -7,7 +7,6 @@ import { JustificationVerdict } from "@/components/ponto/justification-verdict";
 import { Badge } from "@/components/ui/badge";
 import { Drawer } from "@/components/ui/drawer";
 import { SignedMinutes } from "@/components/ui/signed-minutes";
-import type { PontoFilters } from "@/lib/ponto/filters";
 import {
   directionWord,
   formatClock,
@@ -16,25 +15,25 @@ import {
   formatTime,
 } from "@/lib/ponto/format";
 import type { Occurrence } from "@/lib/ponto/queries";
-import { pontoHref, type Paging } from "@/lib/ponto/url";
 
 /**
  * Detail of one indication. Everything here is what the engine observed —
  * expected against recorded, and the reading that produced it. The screen never
  * claims a finding: it shows the two times side by side and says where the
  * official record lives.
+ *
+ * `closeHref` é parâmetro porque o detalhe é alcançado de duas telas — a gestão
+ * de ponto e a fila de pendentes de justificativa — e fechar tem de devolver o
+ * gestor ao recorte de onde ele veio. Uma fila de trabalho que cospe o usuário
+ * noutra tela a cada veredito deixa de ser fila.
  */
 export function OccurrenceDrawer({
   occurrence,
-  filters,
-  paging,
+  closeHref,
 }: {
   occurrence: Occurrence | null;
-  filters: PontoFilters;
-  paging: Paging;
+  closeHref: string;
 }) {
-  const closeHref = pontoHref(filters, paging, { eventId: null });
-
   if (!occurrence) {
     return (
       <Drawer
@@ -123,11 +122,12 @@ export function OccurrenceDrawer({
           </p>
         </section>
 
-        {/* O veredito mora aqui e não numa fila própria: quem decide precisa
-            dos dois horários lado a lado, e eles estão logo acima. As
-            justificativas já escritas ficam na tela do colaborador, que o
-            rodapé deste drawer linka — repeti-las aqui duplicaria a leitura sem
-            mudar a decisão. */}
+        {/* O veredito mora aqui, e continua morando aqui depois que a fila de
+            pendentes passou a existir: a fila lista e traz para cá, porque quem
+            decide precisa dos dois horários lado a lado, e eles estão logo
+            acima. As justificativas já escritas ficam na tela do colaborador,
+            que o rodapé deste drawer linka — repeti-las aqui duplicaria a
+            leitura sem mudar a decisão. */}
         <JustificationVerdict
           deviationEventId={occurrence.eventoId}
           employeeName={occurrence.employeeName}
