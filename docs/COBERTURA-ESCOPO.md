@@ -1,3 +1,5 @@
+<!-- verificar-docs: inexistentes-de-proposito secullum.departamento_gestor -->
+
 # OperaX — cobertura do escopo da proposta
 
 Confronto item a item entre o **escopo contratado** e o que existe hoje em
@@ -69,7 +71,7 @@ dado sustenta. Faltam 2.
 | 11 | **Saldo consolidado de horas** | ❌ | Banco de horas não é modelado. Aparece também em 4.4 e 4.8 |
 | 12 | Evolução das ocorrências por período | ✅ | `vw_deviation_daily_trend` |
 | 13 | Comparação entre unidades | ✅ | `fn_ranking_by_unit` |
-| 14 | Comparação entre equipes e gestores | ✅ | `app.manager` + `fn_ranking_by_manager` (migration 27). **Não sai de `manager_employee_id`**: aquela coluna aponta para um colaborador e nada a preenche. O gestor vem de `Funcionario.EstruturaId` → `secullum."Estrutura"`, que cobre 69 dos ~70 ativos |
+| 14 | Comparação entre equipes e gestores | ✅ | `app.manager` + `fn_ranking_by_manager` (migration 27). **Não sai de `manager_employee_id`**: aquela coluna aponta para um colaborador e nada a preenche. O gestor vem de `Funcionario.EstruturaId` → `secullum."Estrutura"`, que cobre 69 dos ~70 ativos. ⚠️ Ver a nota sobre `secullum.departamento_gestor` abaixo |
 | 15–18 | Rankings (atraso, extra, faltante, esquecimento) | ✅ | `fn_ranking_by_employee` + filtro de tipo |
 
 ### 25/08/2026 — três indicadores entregues, e por que dois não
@@ -120,6 +122,30 @@ fn_recurrence(p_de, p_ate, p_min_dias, p_unit_id)
 ```
 
 ---
+
+### 28/08/2026 — quem responde por um departamento é tabela da outra equipe
+
+O handoff da equipe de plataforma trouxe `secullum.departamento_gestor`, que já
+existe em produção e que **eles mantêm**. Decisão do dono, no mesmo dia: fica a
+que já existe, e não construímos outra.
+
+Vale saber o que ela é e o que ela não é, porque as duas coisas se parecem:
+
+| | `app.manager` (nossa, migration 27) | `secullum.departamento_gestor` (deles) |
+|---|---|---|
+| Pergunta | a quem **esta pessoa** responde | qual `Estrutura` responde por qual `Departamento` |
+| Origem | `Funcionario.EstruturaId` | a mesma — agregada por departamento |
+| Natureza | dimensão, retrato de agora | **observação**, com `observado_desde`/`observado_ate` e `funcionarios_observados` |
+
+Não são a mesma coisa e não competem: o ranking por gestor continua saindo do
+vínculo por pessoa, que é mais fino — atribuir o gestor do departamento a quem
+tem `EstruturaId` diferente do dominante seria a mesma classe de erro que a
+regra 5 evita para empresa. **Nada muda no código hoje.**
+
+O que a decisão fecha é para frente: quando precisarmos de "quem responde pela
+unidade" — e o primeiro lugar é `app.unit_responsible`, que hoje é preenchida à
+mão e decide para quem o relatório vai —, a resposta vem da tabela deles, com o
+histórico de vigência que a nossa não tem. Não se inventa uma terceira.
 
 ## 4.4 Consulta individual do colaborador
 

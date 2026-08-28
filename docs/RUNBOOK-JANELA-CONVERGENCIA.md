@@ -185,6 +185,17 @@ e não porque o rename possa ficar pela metade.
 
 Sem isso, o próximo `supabase db push` tenta aplicá-las de novo.
 
+⚠️ **Este passo deixou de ser decisão só nossa** (handoff da equipe de
+plataforma, 28/08/2026). O histórico de migrations é **compartilhado**: eles
+aplicam o que é deles via `supabase db query --file` justamente para não tocar
+esse bookkeeping, e avisam que `supabase migration list` mostra migrations
+"órfãs" dos dois lados. Registrar 21 versões nossas ali muda o que o CLI deles
+enxerga.
+
+Combinar antes, e **nunca** rodar `supabase migration repair` sem alinhar — é o
+comando que pode confundir o CLI da outra equipe. Registrar é o certo para nós
+(sem isso, um `db push` reaplica o lote); o que muda é que agora se avisa.
+
 ### Passo 4 — o runner da sincronização volta para este repositório
 
 **Decisão de 28/08/2026 (do dono):** o `kastropark-jobs` sai, e as Edge Functions
