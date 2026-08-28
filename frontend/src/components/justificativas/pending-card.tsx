@@ -10,7 +10,6 @@ import {
   type PendingFilters,
 } from "@/lib/justificativas/url";
 import {
-  formatClock,
   formatDayShort,
   formatDuration,
   formatNumber,
@@ -29,19 +28,16 @@ const COLUMNS: Column[] = [
     numeric: true,
     width: "120px",
   },
-  {
-    key: "detectado",
-    label: "Detectado",
-    align: "right",
-    width: "120px",
-    noWrap: true,
-  },
 ];
 
 /**
  * A fila. Cada linha abre o mesmo detalhe da gestão de ponto, e é lá que o
  * veredito é dado: quem decide precisa do previsto e do registrado lado a lado,
  * e eles não cabem — nem deveriam caber — numa linha de lista.
+ *
+ * Não há coluna de detecção. `formatClock` dá HH:MM, e numa fila de 30 dias uma
+ * hora sem dia não responde nada — quanto tempo o indício está parado sai da
+ * primeira coluna, que é o dia em que ele aconteceu.
  *
  * ⚠️ A coluna é "Desvio" e traz magnitude, não valor com sinal.
  * `fn_pending_justification` devolve `minutes` e não devolve `direction`, que é
@@ -90,11 +86,6 @@ export function PendingCard({
       desvio: (
         <span className="text-ink font-semibold tabular-nums">
           {formatDuration(pending.minutes)}
-        </span>
-      ),
-      detectado: (
-        <span className="text-ink-muted text-xs">
-          {formatClock(pending.detected_at)}
         </span>
       ),
     },
