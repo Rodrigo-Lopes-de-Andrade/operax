@@ -471,7 +471,7 @@ as suítes só dirigiam o braço que produção não usa).
 | 5. limpeza pré-lote + **18 migrations** | ✅ todas |
 | 6. suítes | **97 ✅ · 98 ✅ · 99 ✅ · 98_postgrest ✅** |
 | 7. catálogo × alvo | ✗ **só** `app.job_execucao` — ver decisão abaixo |
-| 8. fronteira por HTTP | ⚠️ pulado, faltam as chaves do staging |
+| 8. fronteira por HTTP | ✅ **POSTGREST OK** — 12 passos, 24 asserções |
 
 A suíte 98 passa nas **duas** formas de claim: a achatada
 (`request.jwt.claim.sub`) e a que o PostgREST real entrega
@@ -572,9 +572,31 @@ produção e nenhuma migration daqui a cria. É o diário do runner da Vercel (�
 Enquanto a Vercel não é lida, **(b)** é o único caminho honesto: (a) obriga a
 afirmar sobre um contrato que ninguém conferiu.
 
-⚠️ O passo 8 continua pulado por falta de `SUPABASE_PUBLISHABLE_KEY` e
-`SUPABASE_SECRET_KEY` do staging — e é justamente ele que exercita o PostgREST
-real, onde a policy do bloqueio 2 se manifesta.
+#### O passo 8 fechou — e ele é o que exercita o PostgREST real
+
+Com `SUPABASE_PUBLISHABLE_KEY` e `SUPABASE_SECRET_KEY` do staging no ambiente,
+`scripts/provar_postgrest.sh wbzaqjlfpqteesehapnn` fecha **POSTGREST OK**: 12
+passos, 24 asserções, nenhuma falha. O que ele prova e as suítes 97/98/99 não
+alcançam:
+
+| | |
+|---|---|
+| anon com a chave publicável, sem sessão | 401 nas quatro views do Caminho 1 |
+| `Accept-Profile: app` / `secullum` / `util` com a chave de **serviço** | 406 — o schema não existe pela API |
+| `mv_deviation_day` pela API | 404 — a matview não é alcançável |
+| owner A / supervisor A / owner B, cada um por login real no GoTrue | vê só o seu recorte |
+| owner A filtrando pelo `tenant_id` de B | 0 linhas — a policy não confia no parâmetro do cliente |
+| `vw_employee?select=cpf` | 400 — PII não está na superfície |
+| views de `public` graváveis | 0, e o `insert` pelo navegador é recusado |
+| `fn_kpi_period` com e sem sessão | 200 / 401 |
+
+Os quatro usuários são criados no Auth de verdade e **derrubados no fim** — o
+passo 12 assere que os dois tenants de teste sobraram em zero. Conferido depois
+da execução: staging voltou a 0 colaboradores, 0 desvios e 0 usuários
+`@teste.local`.
+
+O 406 do `Accept-Profile` é o mesmo controle que o incidente de 27/08 mexeu por
+painel. Aqui ele é asserção, não configuração conferida a olho.
 
 ---
 
