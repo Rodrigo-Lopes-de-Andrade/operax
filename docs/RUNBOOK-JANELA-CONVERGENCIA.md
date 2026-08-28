@@ -1,3 +1,5 @@
+<!-- verificar-docs: inexistentes-de-proposito app.job_execucao app.sync_execucao app.integracao -->
+
 # Runbook — janela de convergência
 
 **Substitui a "Fase 3 — janela" de `PLANO-RECONCILIACAO-NUVEM.md`**, que ficou
@@ -6,7 +8,7 @@ desatualizada em dois pontos que mudam a operação inteira:
 | | Fase 3, como escrita | Hoje |
 |---|---|---|
 | Migrations a aplicar | **5** (11b, 12–15) | **18** (11b, 12–28), mais a limpeza do passo 2a |
-| Teto de parada | **48 h**, imposto pelo código | Não é mais o código que impõe — ver §5 |
+| Teto de parada | **48 h**, imposto pelo código | **48 h ainda**, agora medido no runner da Vercel — ver §5 |
 | Natureza da janela | rename | **release de convergência**: schema + Edge Functions + backend |
 
 Produção (`nklobmlxyidqxarzisph`) é este repositório parado na migration 11, com
@@ -72,8 +74,9 @@ Edge Function usa transação nos pontos que o §4b lista**.
 | `sync-batidas-cron` | `*/15 * * * *` |
 | `sync-cadastro-cron` | `*/30 * * * *` |
 
-**Anotar o horário exato.** É o T0 do buraco na série, e é ele que o backfill do
-passo 6 precisa cobrir.
+**Anotar o horário exato.** É o T0 do buraco na série. Com o horário de religar
+(passo 6), é ele que diz se a parada coube nas 48 h da janela deslizante — o
+único mecanismo de cobertura que produção tem (§5).
 
 ### Passo 1 — ponto de restauração
 
@@ -167,19 +170,34 @@ que é justamente o que esta janela remove.
 
 Redeploy apontando para produção. Não é aqui que ele nasce (ver §2).
 
-### Passo 6 — religar e cobrir o buraco
+### Passo 6 — religar, e o que de fato cobre o buraco
 
-1. Reabilitar os dois jobs de `pg_cron`.
-2. Disparar o backfill explicitamente, sem esperar a passada diária:
+1. Reabilitar os dois jobs de `pg_cron`. **Anotar o horário**: com o T0 do passo
+   0, é ele que dá o tamanho da parada — e o passo 7 precisa desse número.
 
-   ```
-   POST <url da sync-batidas>   body: {"scope":"backfill"}
-   ```
+2. ⛔ **Não há backfill a disparar.** Três medições de 27/08/2026 derrubam o que
+   este passo mandava fazer:
 
-   Cobre 7 dias (`BACKFILL_WINDOW_DAYS`). Se a parada tiver passado disso, a
-   janela é ajustável **na própria invocação**, sem redeploy:
-   `{"scope":"backfill","windowDays":N}` — a precedência é invocação > ambiente >
-   padrão do código.
+   | Medido | Onde |
+   |---|---|
+   | os dois comandos chamam por **GET** — `command ~* 'post'` é falso nos dois | `cron.job` |
+   | toda passada de batidas carimba **janela deslizante de 2 dias** | log do runner, `janela deslizante 2026-08-25..2026-08-27` |
+   | nenhuma leitura mostrou o `kastropark-jobs` aceitando `scope` | leitura da Vercel |
+
+   O `POST {"scope":"backfill"}` e o `BACKFILL_WINDOW_DAYS` são contrato do runner
+   **deste** repositório, e produção não o roda desde 25/08.
+
+3. **O que cobre o buraco é a janela deslizante.** Religados os jobs, as passadas
+   seguintes releem os 2 dias inteiros e o upsert é idempotente — foi exatamente
+   isso que absorveu o ciclo perdido do incidente de 27/08, sem deixar falha na
+   série. **Enquanto a parada couber em 48 h, religar basta.** Passando disso, ver
+   §5: não há gesto de recuperação ao nosso alcance.
+
+⚠️ **Invocar à mão não é `curl` na URL.** O projeto está sob SSO
+(`all_except_custom_domains`) e não tem domínio próprio, e a chamada leva o
+segredo `vercel_cron_secret` — os dois vivem fora deste repositório. Existe ainda
+um terceiro endpoint, `api/diagnostico`, que apareceu no build de 27/08 e **nunca
+foi lido**; o que ele faz, e se dispara alguma coisa, é pergunta em aberto.
 
 ### Passo 7 — verificar que RELIGOU, não que respondeu
 
@@ -216,7 +234,63 @@ O item 3 é o estado que o motor lê como `no_punches` e transforma em indício
 contra quem bateu ponto. Sai com código 1 em qualquer falha, para servir de
 portão.
 
-Rodar de novo **depois** do backfill do passo 6.
+Rodar de novo **depois** de a janela deslizante ter passado sobre a parada
+inteira. Não existe backfill a esperar — ver passo 6.
+
+#### A cadeia 09 → 11b → 12, e por que este passo reprova por construção
+
+| Migration | O que faz com o diário |
+|---|---|
+| **09** | cria o diário da sincronização. Produção recebeu a forma antiga: `app.sync_execucao`, 11 colunas, com `tenant_id`, `integracao_id`, `entidade` e contadores |
+| **11b** | renomeia `app.sync_execucao` → `app.sync_run` e traduz as 8 colunas (`entidade`→`entity`, `terminado_em`→`finished_at`, …) |
+| **12** | cria `public.fn_data_freshness` **sobre `app.sync_run`**, mais o índice parcial de frescor com `status = 'completed'` |
+| 21 | acrescenta `scope` e `records_skipped` a `app.sync_run` |
+
+⛔ **A 11b não menciona `app.job_execucao` uma única vez** — `grep -c job_execucao`
+na migration devolve `0`. Ela renomeia o diário **vazio**. A cisão atravessa a
+janela intacta, e nenhuma migration a fecha: é trabalho de runner, não de schema.
+
+Medido em produção em 27/08/2026, por leitura:
+
+| Diário | Linhas | Último fim |
+|---|---|---|
+| `app.sync_execucao` — o que a 11b renomeia para `app.sync_run` | **0** | — |
+| `app.job_execucao` — o que o runner de fato usa | **220** | 27/08 21:30 BRT |
+
+A inferência estrutural do §4b do plano deixa de ser inferência. E a consequência
+é exata: com o lote aplicado e o runner intocado, `app.sync_run` segue vazio,
+`fn_data_freshness` devolve **zero linha**, e `90_reconciliar_sync.py` para na
+**afirmação 1** — *"app.sync_run não tem nenhuma execução de 'Batida'"* — saindo
+com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 4.
+
+#### O que a conversão de diário exige — medido, não suposto
+
+1. **Grão.** `app.job_execucao` tem uma linha por **job**: `job` só assume
+   `sync_batidas` e `sync_cadastro`. `fn_data_freshness` agrupa por **entidade**, e
+   `90_reconciliar_sync.py` procura `entity = 'Batida'`. Uma passada de cadastro
+   carimba **17 entidades** no `resumo` (`companiesUpserted`, `unitsUpserted`,
+   `employeesUpserted`, `schedulesUpserted`, `absencesUpserted`, …). Uma linha de
+   job vira **N linhas** de `app.sync_run`, uma por entidade.
+2. **Vocabulário de status.** O runner grava `running` / `success` / `error`;
+   `app.sync_run` exige `running` / `completed` / `failed` / `partial`. `success`
+   não é `completed`, e o índice de frescor da 12 filtra exatamente por
+   `completed` — um mapeamento errado aqui sobe verde e mede nada.
+3. ⛔ **Não há integração para referenciar.** `app.sync_run.integration_id` e
+   `tenant_id` são `not null` com FK. Em produção, `app.integracao` tem **0
+   linhas** (`app.tenant` tem 1). A primeira escrita em `app.sync_run` é
+   impossível antes de alguém criar essa linha — **é linha nova em `app`, então é
+   decisão do dono**, e ela precisa existir *antes* de o runner novo subir.
+4. **Contadores.** `records_read`/`records_written` saem prontos do `resumo`:
+   `batidasFetched`/`batidasUpserted` para `Batida`, os `*Upserted` por entidade
+   no cadastro. O `records_skipped` da 21 também tem origem —
+   `batidasSkippedMissingFuncionario` e `employeesSkipped`.
+5. ⛔ **`app.job_execucao` também é o lock, e `app.sync_run` não tem equivalente.**
+   O índice único parcial `job_execucao_em_andamento_key` — `(job) where status =
+   'running'` — é o que impede duas passadas sobrepostas; o comentário da tabela
+   em produção o declara ("lock de sobreposição dos jobs agendados"). Trocar de
+   diário sem trocar de lock entrega sobreposição silenciosa. Então o alvo do
+   passo 4 **não é "mudar de tabela"**: é escrever nos dois, ou dar o lock a
+   `app.sync_run` antes de aposentar o outro. Decidir **antes** da janela.
 
 ---
 
@@ -224,7 +298,8 @@ Rodar de novo **depois** do backfill do passo 6.
 
 - [ ] `net._http_response` com `status_code = 200` nos ciclos após religar —
       **não** `cron.job_run_details`
-- [ ] `90_reconciliar_sync.py` verde, duas vezes: após religar e após o backfill
+- [ ] `90_reconciliar_sync.py` verde, duas vezes: no primeiro ciclo após
+      religar, e de novo depois de a janela deslizante ter coberto a parada
 - [ ] Um ciclo completo de cada job sem erro (15 min e 30 min)
 - [ ] `fn_data_freshness` sem `is_stale` — limiar de 25 min para `Batida`.
       ⚠️ Este é o item que pega a **cisão de diário**: se ele acusar tudo
@@ -240,28 +315,37 @@ Rodar de novo **depois** do backfill do passo 6.
 
 ---
 
-## 5. Teto de parada — o que o P1 mudou
+## 5. Teto de parada — 48 h, e agora por medição
 
 A Fase 3 dizia **48 h, e não era escolha**: `sync-batidas` lia uma janela fixa de
 2 dias, `BATIDAS_WINDOW_DAYS` era constante de compilação, e a única forma de
 alargá-la era um redeploy — dentro da janela, com a sincronização parada.
 
-O P1 tirou essa amarra. A janela virou configuração com precedência
-invocação > ambiente > padrão, e o escopo `backfill` relê 7 dias com o mesmo
-upsert do incremental. **Uma parada longa passou a ser recuperável sem
-redeploy.**
+O P1 tirou essa amarra: janela como configuração, precedência
+invocação > ambiente > padrão, escopo `backfill` relendo 7 dias.
+
+⛔ **E nada disso vale em produção.** O P1 endureceu `supabase/functions/`, que
+produção não roda desde 25/08. O que roda carimba, em **toda** passada,
+`janela deslizante 2026-08-25..2026-08-27` — dois dias, fixos, lidos no log em
+27/08/2026. **O teto de 48 h nunca caiu**; o que mudou é que antes ele saía da
+leitura do nosso código e agora sai da medição do runner de verdade.
 
 O que isso significa na prática:
 
-- A janela continua sendo planejada em **horas**. Nada aqui é convite a esticá-la.
-- O que cresceu é a **folga de recuperação**: 7 dias por padrão, e mais que isso
-  por `windowDays` explícito. É folga de *rollback* — se algo falhar no meio e for
-  preciso restaurar, tentar de novo e só então religar, o buraco resultante
-  continua coberto.
-- ⚠️ **O limite real deixou de ser o nosso código e passou a ser a origem.** Por
-  quanto tempo o Secullum ainda serve marcação retroativa não foi medido, e não
-  está escrito em lugar nenhum. Enquanto ninguém medir, tratar 7 dias como o teto
-  operacional — não porque o código imponha, mas porque é o que já foi exercido.
+- A janela é planejada em **horas**, e agora contra um teto duro. Parada acima de
+  48 h deixa **buraco permanente** na série de marcações.
+- **A folga de recuperação de 7 dias não existe aqui.** Ela é do runner deste
+  repositório. Em produção, o único mecanismo de cobertura é a própria janela
+  deslizante — passo 6.
+- ⚠️ **Alargar a janela saiu do nosso alcance.** Antes era "um redeploy, ainda que
+  no pior momento". O código está em `fdiasoliver/kastropark`, fora desta conta:
+  esticar o teto virou **dependência de terceiro**, com o tempo de resposta dele
+  no meio de uma janela com a sincronização parada. Então a parada se planeja para
+  **caber** em 48 h, não para ser recuperada depois.
+- ⚠️ **E há um segundo teto, que continua sem medição.** Por quanto tempo o
+  Secullum ainda serve marcação retroativa não está escrito em lugar nenhum. Ele
+  só passa a importar se alguém trocar o runner por um que releia mais que 2 dias
+  — hoje o limite que morde primeiro é o de cima.
 
 ---
 
