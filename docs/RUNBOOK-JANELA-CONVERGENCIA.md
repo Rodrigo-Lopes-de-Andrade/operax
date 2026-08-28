@@ -7,7 +7,7 @@ desatualizada em dois pontos que mudam a operação inteira:
 
 | | Fase 3, como escrita | Hoje |
 |---|---|---|
-| Migrations a aplicar | **5** (11b, 12–15) | **20** (11b, 12–30), mais a limpeza do passo 2a |
+| Migrations a aplicar | **5** (11b, 12–15) | **21** (11b, 12–31), mais a limpeza do passo 2a |
 | Teto de parada | **48 h**, imposto pelo código | **48 h até a troca do runner, 7 dias depois dela** — ver §5 |
 | Natureza da janela | rename | **release de convergência**: schema + Edge Functions + backend |
 
@@ -26,7 +26,7 @@ Nenhum destes é passo da janela. São condições para ela existir.
    `scripts/ensaiar_rename_staging.sh` e `scripts/comparar_catalogos.py` — e o
    mesmo formato de resultado: catálogo comparado e suítes verdes.
    ⚠️ O ensaio que temos validou **11b + 12–15**. O que foi provado não é mais o
-   que vai rodar: são 20 migrations agora, e as 16–30 nunca correram contra o
+   que vai rodar: são 21 migrations agora, e as 16–31 nunca correram contra o
    schema de produção.
 3. Só com os dois verdes é que a data é marcada com o cliente.
 
@@ -60,20 +60,21 @@ janela: `PORT=8000` fixo (o Railway injeta 8080 e o domínio aponta para 8000), 
 recusa como parâmetro desconhecido.
 
 - [x] Serviço criado no Railway, buildando, apontado para staging
-- [ ] Env do Railway preenchida (**nomes**, nunca valores neste documento):
+- [x] Env do Railway preenchida (**nomes**, nunca valores neste documento):
       `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
       `SUPABASE_JWT_JWKS_URL`, `CORS_ORIGINS`, `IMPORT_BUCKET`, e ao menos uma de
       `OPENAI_API_KEY` / `ANTHROPIC_API_KEY` / `GOOGLE_API_KEY`
-- [ ] Env da Vercel no projeto do painel: `NEXT_PUBLIC_SUPABASE_URL`,
+- [x] Env da Vercel no projeto do painel: `NEXT_PUBLIC_SUPABASE_URL`,
       `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_URL`
-- [ ] `CORS_ORIGINS` com a origem exata do painel — `*` é rejeitado no startup
+- [x] `CORS_ORIGINS` com a origem exata do painel — `*` é rejeitado no startup
+      (conferido por HTTP: origem do painel recebe o header, origem estranha toma 400)
 - [ ] Redirect URLs do Supabase Auth de **produção** incluem o endereço do painel
       (o de **staging** foi configurado em 28/08: `site_url` e `uri_allow_list`
       com `https://operaxfonted.vercel.app`, pela Management API)
-- [ ] **Deployment Protection do projeto do painel desligada** — hoje toda URL
-      dele devolve 302 para `vercel.com/sso-api`, e o cliente não passa da porta
-- [ ] Senha do banco de produção **resetada pelo painel** (Project Settings →
-      Database), e `DATABASE_URL` mais os quatro `SECULLUM_*` configurados como
+- [x] **Deployment Protection do projeto do painel desligada** — era ela que
+      fazia toda URL devolver 302 para `vercel.com/sso-api`
+- [x] Senha do banco de produção **resetada pelo painel** (Project Settings →
+      Database) em 28/08, e **verificada** conectando pelas duas portas do pooler, e `DATABASE_URL` mais os quatro `SECULLUM_*` configurados como
       secrets das Edge Functions — ver passo 4.
       ⛔ **Não dá para roteirizar:** `alter role postgres with password` pelo
       `sb_sql.sh` responde `42501: only superusers can alter privileged roles` —
@@ -101,9 +102,16 @@ URL de deployment com hash, que muda a cada publicação e levaria o login junto
 
 ⚠️ **A ordem entre os dois deploys não é livre.** `frontend/src/lib/env.ts`
 valida `NEXT_PUBLIC_API_URL` como URL obrigatória e falha alto sem ela — medido
-em 28/08: `operaxfonted.vercel.app` responde **500** hoje, com o projeto sem
-nenhuma variável. O painel não sobe antes de existir uma API para apontar, nem
+em 28/08: com o projeto sem variável nenhuma, `operaxfonted.vercel.app` respondia
+**500 sem corpo**. O painel não sobe antes de existir uma API para apontar, nem
 que seja a de staging. Railway primeiro, Vercel depois.
+
+✅ **A pilha inteira foi provada contra staging em 28/08**, e é isso que o
+preparo existe para conseguir: login pelo painel, `/me` devolvendo tenant e
+papel, monitor diário com número por unidade, e o assistente respondendo uma
+pergunta de período com evento `metrica` e agregado. Cada camada só apareceu
+depois que a anterior fechou — e três defeitos só existiam com o serviço
+publicado (a porta do `PORT`, o host IPv6-only e a migration 31).
 
 ---
 
@@ -152,7 +160,7 @@ scripts/sb_sql.sh nklobmlxyidqxarzisph -f supabase/migrations/<arquivo>.sql
 ```
 
 Na ordem: `11b` · `12` · `13` · `14` · `15` · `16` · `17` · `18` · `19` · `20` ·
-`21` · `22` · `23` · `24` · `25` · `26` · `27` · **`28`** · `29` · `30`.
+`21` · `22` · `23` · `24` · `25` · `26` · `27` · **`28`** · `29` · `30` · **`31`**.
 
 ⛔ **A 28 não é opcional e não pode ficar para depois.** Ela reescreve
 `deviation_read`, que o 11b renomeia sem traduzir o literal `'producao'` de
@@ -160,11 +168,20 @@ dentro da expressão. Enquanto ela não rodar, **todo não-admin vê zero desvio
 sem erro e sem log. Aplicar o lote sem a 28 entrega um sistema que parece pronto
 e mostra o painel vazio para o supervisor de unidade.
 
+⛔ **A 31 é irmã da 28, e também não é opcional.** O 11b traduz `code` e
+`target_view` de `app.metric` e **não** traduz `dimensions` e `filters`, que são
+dado. Sem a 31, o catálogo de produção fica com nome de métrica em inglês e
+parâmetro em português (`data_inicio`, `unidade`), e `catalogo.TYPES` — que é
+código — levanta `UntypedParameterError` em **8 das 11 métricas**. A pessoa
+recebe "Falha ao consultar o modelo", que é a mensagem de erro de *provider*,
+com o provider funcionando e o token da pergunta já pago. Medida em staging, em
+28/08, com o backend publicado.
+
 Cada chamada é atômica em si. **Entre elas não há atomicidade** — se a 19 falhar,
 as anteriores estão aplicadas. É por isso que o ponto de restauração vem antes,
 e não porque o rename possa ficar pela metade.
 
-### Passo 3 — registrar as 20 em `supabase_migrations.schema_migrations`
+### Passo 3 — registrar as 21 em `supabase_migrations.schema_migrations`
 
 Sem isso, o próximo `supabase db push` tenta aplicá-las de novo.
 
@@ -379,7 +396,11 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
       `select entity, max(finished_at) from app.sync_run group by 1` antes de
       culpar a sync
 - [ ] O painel abre contra produção e lista unidade e ocorrência
-- [ ] `select count(*) from supabase_migrations.schema_migrations` = 43 (23 + 20)
+- [ ] `select count(*) from supabase_migrations.schema_migrations` = 44 (23 + 21)
+- [ ] **O assistente responde uma pergunta de período** — "quantos desvios
+      tivemos este mês?" tem de voltar com evento `metrica` e um número, não com
+      "Falha ao consultar o modelo". É o item que pega a 31: catálogo e `TYPES`
+      falando línguas diferentes só aparece com uma pergunta de verdade
 - [ ] **Um supervisor de unidade vê os desvios da unidade dele.** É o que a 28
       conserta, e o que nenhum teste pegava: um usuário que não vê NADA passa em
       todo teste que só verifica o que ele não deve ver
