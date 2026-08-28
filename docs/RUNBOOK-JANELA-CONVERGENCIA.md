@@ -7,8 +7,8 @@ desatualizada em dois pontos que mudam a operação inteira:
 
 | | Fase 3, como escrita | Hoje |
 |---|---|---|
-| Migrations a aplicar | **5** (11b, 12–15) | **19** (11b, 12–29), mais a limpeza do passo 2a |
-| Teto de parada | **48 h**, imposto pelo código | **48 h ainda**, agora medido no runner da Vercel — ver §5 |
+| Migrations a aplicar | **5** (11b, 12–15) | **20** (11b, 12–30), mais a limpeza do passo 2a |
+| Teto de parada | **48 h**, imposto pelo código | **48 h até a troca do runner, 7 dias depois dela** — ver §5 |
 | Natureza da janela | rename | **release de convergência**: schema + Edge Functions + backend |
 
 Produção (`nklobmlxyidqxarzisph`) é este repositório parado na migration 11, com
@@ -26,7 +26,7 @@ Nenhum destes é passo da janela. São condições para ela existir.
    `scripts/ensaiar_rename_staging.sh` e `scripts/comparar_catalogos.py` — e o
    mesmo formato de resultado: catálogo comparado e suítes verdes.
    ⚠️ O ensaio que temos validou **11b + 12–15**. O que foi provado não é mais o
-   que vai rodar: são 19 migrations agora, e as 16–29 nunca correram contra o
+   que vai rodar: são 20 migrations agora, e as 16–30 nunca correram contra o
    schema de produção.
 3. Só com os dois verdes é que a data é marcada com o cliente.
 
@@ -46,7 +46,20 @@ da manhã com a sincronização parada é um problema que não precisava existir
 
 Checklist de preparo:
 
-- [ ] Serviço criado no Railway, buildando, apontado para staging
+✅ **Feito em 28/08/2026** — os três primeiros itens abaixo. O serviço
+`operax-api` existe no projeto `KastroPark` (ambiente `production` do Railway, o
+único que há; quem aponta para staging são as variáveis), builda do
+`backend/Dockerfile` com root directory `/backend`, healthcheck em `/health`, e
+responde em **`https://operax-api-production.up.railway.app`**. O primeiro build
+levou 15 s e a primeira falha foi a esperada — `ConfigurationError` nomeando as
+quatro variáveis ausentes, que é o `config.py` recusando bootar meio
+configurado. Duas correções que a primeira subida obrigou, e que valem para a
+janela: `PORT=8000` fixo (o Railway injeta 8080 e o domínio aponta para 8000), e
+`DATABASE_URL` no **session pooler (5432)**, não no transaction pooler (6543) —
+`db.py` monta o pool sem `prepare_threshold=None`, e `?pgbouncer=true` o libpq
+recusa como parâmetro desconhecido.
+
+- [x] Serviço criado no Railway, buildando, apontado para staging
 - [ ] Env do Railway preenchida (**nomes**, nunca valores neste documento):
       `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`,
       `SUPABASE_JWT_JWKS_URL`, `CORS_ORIGINS`, `IMPORT_BUCKET`, e ao menos uma de
@@ -54,9 +67,30 @@ Checklist de preparo:
 - [ ] Env da Vercel no projeto do painel: `NEXT_PUBLIC_SUPABASE_URL`,
       `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_URL`
 - [ ] `CORS_ORIGINS` com a origem exata do painel — `*` é rejeitado no startup
-- [ ] Redirect URLs do Supabase Auth de produção incluem o domínio do painel
-- [ ] **Exposed schemas de produção = apenas `public` e `graphql_public`**
+- [ ] Redirect URLs do Supabase Auth de **produção** incluem o endereço do painel
+      (o de **staging** foi configurado em 28/08: `site_url` e `uri_allow_list`
+      com `https://operaxfonted.vercel.app`, pela Management API)
+- [ ] **Deployment Protection do projeto do painel desligada** — hoje toda URL
+      dele devolve 302 para `vercel.com/sso-api`, e o cliente não passa da porta
+- [ ] Senha do banco de produção **resetada**, e `DATABASE_URL` (Transaction
+      Pooler) mais os quatro `SECULLUM_*` configurados como secrets das Edge
+      Functions — ver passo 4
 - [ ] Backup completo e ponto de restauração criados
+
+⛔ **Exposed schemas NÃO é item de preparo.** Ele parece um ajuste de painel e
+não é: enquanto o runner atual falar PostgREST, corrigi-lo derruba a
+sincronização — foi o incidente de 27/08. Ele é o item 4 do passo 4, depois de o
+runner trocar.
+
+**O endereço do painel é `operaxfonted.vercel.app`** (decisão de 28/08), e é ele
+que entra no `CORS_ORIGINS` e nas Redirect URLs — o **alias do projeto**, nunca a
+URL de deployment com hash, que muda a cada publicação e levaria o login junto.
+
+⚠️ **A ordem entre os dois deploys não é livre.** `frontend/src/lib/env.ts`
+valida `NEXT_PUBLIC_API_URL` como URL obrigatória e falha alto sem ela — medido
+em 28/08: `operaxfonted.vercel.app` responde **500** hoje, com o projeto sem
+nenhuma variável. O painel não sobe antes de existir uma API para apontar, nem
+que seja a de staging. Railway primeiro, Vercel depois.
 
 ---
 
@@ -105,7 +139,7 @@ scripts/sb_sql.sh nklobmlxyidqxarzisph -f supabase/migrations/<arquivo>.sql
 ```
 
 Na ordem: `11b` · `12` · `13` · `14` · `15` · `16` · `17` · `18` · `19` · `20` ·
-`21` · `22` · `23` · `24` · `25` · `26` · `27` · **`28`** · `29`.
+`21` · `22` · `23` · `24` · `25` · `26` · `27` · **`28`** · `29` · `30`.
 
 ⛔ **A 28 não é opcional e não pode ficar para depois.** Ela reescreve
 `deviation_read`, que o 11b renomeia sem traduzir o literal `'producao'` de
@@ -117,54 +151,61 @@ Cada chamada é atômica em si. **Entre elas não há atomicidade** — se a 19 
 as anteriores estão aplicadas. É por isso que o ponto de restauração vem antes,
 e não porque o rename possa ficar pela metade.
 
-### Passo 3 — registrar as 19 em `supabase_migrations.schema_migrations`
+### Passo 3 — registrar as 20 em `supabase_migrations.schema_migrations`
 
 Sem isso, o próximo `supabase db push` tenta aplicá-las de novo.
 
-### Passo 4 — o runner da sincronização
+### Passo 4 — o runner da sincronização volta para este repositório
 
-⛔ **ESTE PASSO ESTÁ INCOMPLETO E BLOQUEIA A JANELA.** Ele dizia "deploy das Edge
-Functions blindadas". Medido em 27/08: **produção não roda Edge Function
-nenhuma.** `GET /v1/projects/<ref>/functions` devolve `[]`, e os dois jobs de
-`pg_cron` chamam o serviço **`kastropark-jobs` na Vercel**
-(`vercel_jobs_base_url` no Vault). O código dele não está neste repositório e
-ainda não foi lido.
+**Decisão de 28/08/2026 (do dono):** o `kastropark-jobs` sai, e as Edge Functions
+deste repositório (`sync-cadastro`, `sync-batidas`, `secullum-test-auth`)
+assumem a sincronização de produção. Este passo deixa de estar bloqueado — o
+código dele nunca precisou ser lido, porque ele não vai continuar.
 
-O que continua verdadeiro e decide a ordem: o runner tem de ser atualizado
-**depois** do passo 2 e nunca antes. Quem grava `app.sync_run.scope` e
-`records_skipped` depende da migration 21; e o runner antigo escreve nos nomes em
-português que o 11b renomeia. Entre o passo 2 e o fim do passo 4 **não existe
-sincronização funcional** — esse intervalo é a janela real.
+**O que a decisão destrava, e não é pouco:**
 
-⛔ **Além disso, o `kastropark-jobs` fala com o banco por PostgREST** — provado
-em 27/08 quando remover `app`/`secullum` dos exposed schemas o derrubou com
-`FUNCTION_INVOCATION_FAILED` (ver `INCIDENTE-2026-08-27-EXPOSED-SCHEMAS.md`).
-Então **a correção dos exposed schemas é item DESTA janela**, junto com um runner
-que não dependa mais deles. Nunca como mudança avulsa de painel.
+| | Com o `kastropark-jobs` | Com as funções daqui |
+|---|---|---|
+| Caminho até o banco | PostgREST — exige `app` exposto | conexão direta (`postgres-client.ts`) |
+| Exposed schemas | impossível corrigir (foi o incidente de 27/08) | **corrigível nesta janela** |
+| Diário de execução | `app.job_execucao`, que nenhuma migration daqui cria | `app.sync_run` — o que `fn_data_freshness` lê |
+| Os quatro riscos do §4b | desconhecidos | corrigidos no P1 |
 
-⛔ **E ele escreve o diário errado.** O runner deste repositório grava em
-`app.sync_run`; o `kastropark-jobs` grava em `app.job_execucao`, que **nenhuma
-migration daqui cria**. Quem lê `app.sync_run` é `fn_data_freshness` — o deadman
-de frescor, consumido pelo painel (`frontend/src/lib/freshness.ts`) e exposto
-como métrica do assistente. Se o runner sair da janela ainda escrevendo só em
-`job_execucao`, o deadman sobe **cego**: reporta toda entidade obsoleta sem que a
-sincronização esteja quebrada.
+✅ **Compatibilidade com o schema pós-janela, conferida em 28/08.** As funções
+gravam em `app.sync_run` (nome em inglês, pós-rename) e tocam as quatro tabelas
+de ingestão pelos nomes em português — que o 11b **exclui do rename de
+propósito**, e diz isso no próprio cabeçalho. Não há nada a renomear no runner.
 
-Não se conserta com migration — a 12 não migra nada, ela só cria a função, o
-índice e a linha de `app.metric`; e a 09 já cria a tabela, que em produção espera
-o rename da 11b sob o nome `app.sync_execucao`. **É o runner que tem de mudar de
-diário**, e por isso o requisito entra aqui e não no passo 2:
+⛔ **Cinco secrets, e nenhum deles está no Vault de produção.** As funções leem
+`DATABASE_URL`, `SECULLUM_USERNAME`, `SECULLUM_PASSWORD`, `SECULLUM_CLIENT_ID` e
+`SECULLUM_BANK_ID` — o último nem aparece na lista do `CLAUDE.md`. Os quatro do
+Secullum vivem no projeto da Vercel. E o primeiro é o que exige ação com
+antecedência: `DATABASE_URL` é a connection string do Transaction Pooler **com a
+senha do banco**, e a senha de produção está perdida desde o início desta
+reconciliação (§2 do `PLANO-RECONCILIACAO-NUVEM.md`). **Resetá-la é preparo, não
+passo de janela** — hoje ninguém depende dela: o `kastropark-jobs` fala por
+PostgREST e nunca a usou.
 
-- [ ] o runner atualizado grava em `app.sync_run`, com `entity`, `scope`,
-      `records_skipped` e `finished_at` — os campos que a 21 acrescentou e que
-      `fn_data_freshness` agrupa
-- [ ] uma execução real depois de religar aparece em `app.sync_run`, não só em
-      `app.job_execucao`
+A ordem interna continua a mesma, e pelo mesmo motivo: o runner sobe **depois**
+do passo 2. `app.sync_run.scope` e `records_skipped` dependem da migration 21.
+Entre o passo 2 e o fim deste passo **não existe sincronização funcional** — esse
+intervalo é a janela real.
 
-Este passo só fica escrevível depois da leitura do `kastropark-jobs` — e a
-leitura precisa responder **se ele consegue escrever em `app.sync_run`**, o que
-depende de (b) da ordem fixada: por PostgREST, `app` teria de continuar exposto,
-que é justamente o que esta janela remove.
+1. `supabase functions deploy` das três, com os cinco secrets já configurados.
+2. Reescrever o comando dos dois jobs de `pg_cron`: hoje fazem **GET** no
+   `vercel_jobs_base_url`; passam a invocar as funções. É a reescrita do comando
+   que desliga a chamada à Vercel — não há gesto separado para isso.
+3. ⚠️ **Conferir se o projeto da Vercel tem cron próprio** (`vercel.json`). Se
+   tiver, ele precisa ser desligado lá: dois runners escrevendo o mesmo dado por
+   dois caminhos mantêm dois cursores, e o upsert idempotente não protege contra
+   isso.
+4. **Só então** corrigir os exposed schemas para `public,graphql_public` — nesta
+   ordem, e nunca antes de o passo 2 do item 2 estar valendo.
+
+- [ ] uma execução real depois de religar aparece em `app.sync_run`, com
+      `entity`, `scope`, `records_skipped` e `finished_at`
+- [ ] `net._http_response` com 200 nos ciclos seguintes à correção dos exposed
+      schemas — é exatamente o sinal que faltou em 27/08
 
 ### Passo 5 — backend no Railway
 
@@ -175,8 +216,9 @@ Redeploy apontando para produção. Não é aqui que ele nasce (ver §2).
 1. Reabilitar os dois jobs de `pg_cron`. **Anotar o horário**: com o T0 do passo
    0, é ele que dá o tamanho da parada — e o passo 7 precisa desse número.
 
-2. ⛔ **Não há backfill a disparar.** Três medições de 27/08/2026 derrubam o que
-   este passo mandava fazer:
+2. ✅ **O backfill volta a existir — depois do passo 4.** As três medições
+   abaixo, de 27/08/2026, descrevem o runner que sai, e ficam registradas porque
+   explicam por que este passo mandava algo impossível enquanto ele estava lá:
 
    | Medido | Onde |
    |---|---|
@@ -185,19 +227,20 @@ Redeploy apontando para produção. Não é aqui que ele nasce (ver §2).
    | nenhuma leitura mostrou o `kastropark-jobs` aceitando `scope` | leitura da Vercel |
 
    O `POST {"scope":"backfill"}` e o `BACKFILL_WINDOW_DAYS` são contrato do runner
-   **deste** repositório, e produção não o roda desde 25/08.
+   **deste** repositório — que é justamente o que o passo 4 devolve a produção.
+   Depois dele, e só depois dele, o gesto de recuperação existe de novo.
 
 3. **O que cobre o buraco é a janela deslizante.** Religados os jobs, as passadas
    seguintes releem os 2 dias inteiros e o upsert é idempotente — foi exatamente
    isso que absorveu o ciclo perdido do incidente de 27/08, sem deixar falha na
-   série. **Enquanto a parada couber em 48 h, religar basta.** Passando disso, ver
-   §5: não há gesto de recuperação ao nosso alcance.
+   série. **Enquanto a parada couber em 48 h, religar basta.** Passando disso,
+   uma passada de `backfill` cobre até 7 dias — ver §5.
 
-⚠️ **Invocar à mão não é `curl` na URL.** O projeto está sob SSO
-(`all_except_custom_domains`) e não tem domínio próprio, e a chamada leva o
-segredo `vercel_cron_secret` — os dois vivem fora deste repositório. Existe ainda
-um terceiro endpoint, `api/diagnostico`, que apareceu no build de 27/08 e **nunca
-foi lido**; o que ele faz, e se dispara alguma coisa, é pergunta em aberto.
+⚠️ **Isto vale enquanto o runner for o da Vercel.** Invocá-lo à mão não é `curl`
+na URL: o projeto está sob SSO (`all_except_custom_domains`), não tem domínio
+próprio, e a chamada leva o segredo `vercel_cron_secret` — os dois vivem fora
+deste repositório. Depois do passo 4, invocar à mão é `supabase functions invoke`
+com o corpo que `resolveRunOptions` lê, e o problema deixa de existir.
 
 ### Passo 7 — verificar que RELIGOU, não que respondeu
 
@@ -308,7 +351,7 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
       `select entity, max(finished_at) from app.sync_run group by 1` antes de
       culpar a sync
 - [ ] O painel abre contra produção e lista unidade e ocorrência
-- [ ] `select count(*) from supabase_migrations.schema_migrations` = 42 (23 + 19)
+- [ ] `select count(*) from supabase_migrations.schema_migrations` = 43 (23 + 20)
 - [ ] **Um supervisor de unidade vê os desvios da unidade dele.** É o que a 28
       conserta, e o que nenhum teste pegava: um usuário que não vê NADA passa em
       todo teste que só verifica o que ele não deve ver
@@ -324,28 +367,31 @@ alargá-la era um redeploy — dentro da janela, com a sincronização parada.
 O P1 tirou essa amarra: janela como configuração, precedência
 invocação > ambiente > padrão, escopo `backfill` relendo 7 dias.
 
-⛔ **E nada disso vale em produção.** O P1 endureceu `supabase/functions/`, que
-produção não roda desde 25/08. O que roda carimba, em **toda** passada,
-`janela deslizante 2026-08-25..2026-08-27` — dois dias, fixos, lidos no log em
-27/08/2026. **O teto de 48 h nunca caiu**; o que mudou é que antes ele saía da
-leitura do nosso código e agora sai da medição do runner de verdade.
+⛔ **Nada disso valia em produção — até a decisão de 28/08.** O P1 endureceu
+`supabase/functions/`, que produção não rodava desde 25/08. O que rodava
+carimbava, em **toda** passada, `janela deslizante 2026-08-25..2026-08-27` —
+dois dias, fixos, lidos no log em 27/08/2026.
+
+**O teto de 48 h cai junto com o runner, e não antes dele.** Como o passo 4
+devolve a sincronização às funções deste repositório, o que vale depois de
+religar é o contrato delas: escopo `backfill` relendo 7 dias, janela como
+configuração, precedência invocação > ambiente > padrão — e **sem redeploy**,
+porque `resolveRunOptions` lê o corpo da invocação. Alargar a janela volta a ser
+gesto nosso, em vez de depender de um repositório de terceiro no meio de uma
+parada.
 
 O que isso significa na prática:
 
-- A janela é planejada em **horas**, e agora contra um teto duro. Parada acima de
-  48 h deixa **buraco permanente** na série de marcações.
-- **A folga de recuperação de 7 dias não existe aqui.** Ela é do runner deste
-  repositório. Em produção, o único mecanismo de cobertura é a própria janela
-  deslizante — passo 6.
-- ⚠️ **Alargar a janela saiu do nosso alcance.** Antes era "um redeploy, ainda que
-  no pior momento". O código está em `fdiasoliver/kastropark`, fora desta conta:
-  esticar o teto virou **dependência de terceiro**, com o tempo de resposta dele
-  no meio de uma janela com a sincronização parada. Então a parada se planeja para
-  **caber** em 48 h, não para ser recuperada depois.
-- ⚠️ **E há um segundo teto, que continua sem medição.** Por quanto tempo o
-  Secullum ainda serve marcação retroativa não está escrito em lugar nenhum. Ele
-  só passa a importar se alguém trocar o runner por um que releia mais que 2 dias
-  — hoje o limite que morde primeiro é o de cima.
+- A parada continua planejada em **horas**. O que muda é a consequência de
+  estourar: com o runner novo, uma parada acima de 48 h é **recuperável** com uma
+  passada de `backfill`, em vez de virar buraco permanente.
+- ⚠️ **O teto que sobra é o único que nunca foi medido:** por quanto tempo o
+  Secullum ainda serve marcação retroativa. Ele deixou de ser hipotético no
+  momento em que o runner passou a reler mais que 2 dias — agora é ele que morde
+  primeiro, e continua sem número.
+- ⛔ **Durante a janela, entre o passo 2 e o fim do passo 4, não há runner
+  nenhum.** A folga de 7 dias é do lado de lá do passo 4; ela não cobre um passo
+  4 que não terminou.
 
 ---
 
