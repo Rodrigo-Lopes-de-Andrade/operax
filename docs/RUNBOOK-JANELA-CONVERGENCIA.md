@@ -75,9 +75,16 @@ recusa como parâmetro desconhecido.
       `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_URL`
 - [x] `CORS_ORIGINS` com a origem exata do painel — `*` é rejeitado no startup
       (conferido por HTTP: origem do painel recebe o header, origem estranha toma 400)
-- [ ] Redirect URLs do Supabase Auth de **produção** incluem o endereço do painel
-      (o de **staging** foi configurado em 28/08: `site_url` e `uri_allow_list`
-      com `https://operaxfonted.vercel.app`, pela Management API)
+- [x] Redirect URLs do Supabase Auth de **produção** incluem o endereço do painel
+      — **feito em 31/08** pela Management API: `site_url` e `uri_allow_list` com
+      `https://operaxfonted.vercel.app`. `disable_signup` fica `true`, e o
+      `http://localhost:3000` que o **staging** tem na lista **não** foi copiado:
+      em staging serve ao desenvolvedor, em produção é um destino de redirect de
+      autenticação numa porta local.
+      ⏱️ **O primeiro `PATCH` respondeu 200 e a leitura seguinte ainda mostrava
+      `localhost`** — a configuração propagou depois. Dentro da janela, conferir
+      um ajuste de painel logo após aplicá-lo pode dar falso negativo, igual ao
+      que já está registrado sobre a senha nova.
 - [x] **Deployment Protection do projeto do painel desligada** — era ela que
       fazia toda URL devolver 302 para `vercel.com/sso-api`
 - [x] Senha do banco de produção **resetada pelo painel** (Project Settings →
@@ -106,7 +113,25 @@ recusa como parâmetro desconhecido.
       sozinho, sem nada ter mudado. Dentro da janela, `password authentication
       failed` logo após um reset **não é senha errada** — é propagação. Esperar e
       repetir antes de mexer em qualquer outra coisa
-- [ ] Backup completo e ponto de restauração criados
+- [x] Backup **feito e provado** em 31/08 — e não pelo caminho que este runbook
+      previa. ⛔ Medido: `pitr_enabled: false` e **zero backups listados** no
+      projeto de produção, então o "ponto de restauração" do §6 não existia.
+      Decisão do dono no mesmo dia: **dump lógico**. Foram dumpados os quatro
+      schemas que carregam o que não volta sozinho (`app`, `secullum`, `util`,
+      `public`) pelo **session pooler (5432)**, com `pg_dump` 17.6 — a mesma
+      versão do servidor.
+      ✅ **E o dump foi restaurado num Postgres descartável e conferido contra
+      produção**: 176 funcionários, 4.822 marcações, 49 tabelas em `app`, 22 em
+      `secullum`, 66 policies, 8 views. Backup que ninguém restaurou não é
+      rollback. O banco de verificação foi apagado — tinha PII de 176 pessoas.
+      ⚠️ O arquivo carrega `secullum` com PII completa e precisa de casa
+      definitiva antes da janela; onde ele fica é decisão do dono.
+- [x] **Ao menos um usuário em `auth.users`** — item que faltava nesta lista e é
+      pré-requisito da curadoria, não da janela. Criado em 31/08 pelo Admin API,
+      já confirmado (`mailer_autoconfirm` é `false`), com vínculo `owner` em
+      `app.tenant_membro`. Provado sob RLS, como o usuário: `util.eh_admin` =
+      true e as 4.822 marcações visíveis. O papel `owner` já tinha os quatro
+      domínios sensíveis liberados desde a migration 02.
 
 ⛔ **Exposed schemas NÃO é item de preparo.** Ele parece um ajuste de painel e
 não é: enquanto o runner atual falar PostgREST, corrigi-lo derruba a
