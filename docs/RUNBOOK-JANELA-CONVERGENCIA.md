@@ -44,10 +44,21 @@ Nenhum destes é passo da janela. São condições para ela existir.
    Vercel. O script sai não-zero por causa dela. Enquanto o `kastropark-jobs`
    não for lido, trazê-la para o repositório seria afirmar sobre um contrato que
    ninguém conferiu.
-   ⚠️ **O passo 8 continua pulado** — a fronteira por HTTP no PostgREST real
-   exige `SUPABASE_PUBLISHABLE_KEY` e `SUPABASE_SECRET_KEY` do **staging**. É o
-   único braço que o ensaio não alcança, e o que ele cobriria é justamente onde
-   o navegador vive.
+   ✅ **O passo 8 deixou de estar pulado — rodado em 31/08**, contra o
+   PostgREST real do staging e já com o schema pós-janela: `POSTGREST OK`. anon
+   toma 401 nas quatro views; `app`, `secullum` e `util` respondem **406 até
+   para a chave de serviço**; a matview 404; cada sessão vê só o seu recorte;
+   `tenant_id` vindo do cliente não fura a policy; `cpf` na superfície dá 400; e
+   nenhuma view de `public` é gravável.
+   ⛔ **As chaves NOVAS não servem para este projeto, e o sintoma engana.** A
+   Management API lista `sb_publishable_…` e `sb_secret_…`, mas o PostgREST as
+   recusa com **401**. Use as **legadas** (`anon` e `service_role`, os JWTs) —
+   as duas saem de `GET /v1/projects/<ref>/api-keys`, sem precisar de ninguém.
+   ⚠️ **E com a chave errada o passo 5 passa pelo motivo errado:** "anon recebe
+   401" é verde tanto com a fronteira de pé quanto com a chave inválida. Quem
+   denuncia são os `406` do passo 6 virando `401`. É a mesma patologia da
+   asserção que conta zero numa tabela vazia — um teste que só verifica o que
+   **não** deve acontecer passa quando nada acontece.
    📌 **Um subproduto que vale para a janela:** o alvo confirma que os papéis
    seguem o rename. Produção tem `[owner, diretoria, rh, dp, …]` e o alvo tem
    `[owner, executive, hr, personnel, …]`, na mesma ordem — os vínculos gravados
