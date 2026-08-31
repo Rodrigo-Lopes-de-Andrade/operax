@@ -11,6 +11,7 @@ import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
 import { MAPEAMENTO_PATH, ROTACOES_PATH } from "@/lib/curadoria/url";
+import { FOLHA_PATH } from "@/lib/folha/url";
 import { COLABORADORES_PATH, IMPORTACAO_PATH } from "@/lib/rh/url";
 import { TV_PATH } from "@/lib/tv/url";
 
@@ -20,9 +21,9 @@ import { TV_PATH } from "@/lib/tv/url";
  *
  * The navigation lists only what exists. The individual consultation is reached
  * from a row, not from here, because it is always about somebody you were
- * already looking at. Payroll and alert rules arrive with their own screens — a
- * nav item that leads nowhere reads as a defect, and a disabled one without a
- * reason reads worse.
+ * already looking at. Alert rules arrive with their own screen — a nav item that
+ * leads nowhere reads as a defect, and a disabled one without a reason reads
+ * worse.
  *
  * The administration section follows the same rule one step further: it is
  * absent, not disabled, for a role that does not reach it. The role comes from
@@ -33,17 +34,17 @@ import { TV_PATH } from "@/lib/tv/url";
 export function AppShell({
   children,
   showAdmin = false,
-  showCuration = false,
+  showAdminWrites = false,
 }: {
   children: ReactNode;
   showAdmin?: boolean;
   /**
-   * Curadoria é escrita, e escrita é `util.is_admin` — que não inclui
-   * `executive`. Ele alcança a área de RH para ler e não cura nada, então o
-   * item não aparece para ele: a página responde 404, e um link que leva a 404
-   * é pior do que link nenhum.
+   * Os itens que só escrevem — curadoria e folha. Escrita é `util.is_admin`, que
+   * não inclui `executive`: ele alcança a área de RH para ler, não cura nada e
+   * não publica folha. Então o item não aparece para ele: a página responde 404,
+   * e um link que leva a 404 é pior do que link nenhum.
    */
-  showCuration?: boolean;
+  showAdminWrites?: boolean;
 }) {
   return (
     <div className="bg-canvas flex min-h-dvh">
@@ -75,8 +76,9 @@ export function AppShell({
             </p>
             <NavLink href={COLABORADORES_PATH} label="Colaboradores" />
             <NavLink href={IMPORTACAO_PATH} label="Importação" />
-            {showCuration ? (
+            {showAdminWrites ? (
               <>
+                <NavLink href={FOLHA_PATH} label="Folha" />
                 <NavLink href={MAPEAMENTO_PATH} label="Mapeamento" />
                 <NavLink href={ROTACOES_PATH} label="Escalas" />
               </>

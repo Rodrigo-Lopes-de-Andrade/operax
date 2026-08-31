@@ -37,7 +37,7 @@ export default async function DashboardLayout({
     <SessionProvider user={{ id: user.id, email: user.email ?? "" }}>
       <AppShell
         showAdmin={reachesHr(identity?.role)}
-        showCuration={isAdmin(identity?.role)}
+        showAdminWrites={isAdmin(identity?.role)}
       >
         {children}
       </AppShell>

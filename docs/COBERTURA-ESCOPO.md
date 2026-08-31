@@ -8,11 +8,12 @@ real gerado pela suíte, não de memória.
 
 Legenda: ✅ coberto · ⚠️ parcial · ❌ falta · 🔒 bloqueado por dependência externa
 
-**Resultado: 21 lacunas** (era 27). Fecharam: a cadência de sync, a agregação
+**Resultado: 20 lacunas** (era 27). Fecharam: a cadência de sync, a agregação
 por gestor, a fila de pendentes de justificativa (27/08), as duas métricas que o
-assistente não alcançava (28/08), e os itens 21 e 22 — que **já estavam
-aplicados no PRD** e continuavam contados aqui. Nove delas mudam o escopo de
-trabalho de forma relevante; o resto é volume.
+assistente não alcançava (28/08), a importação da folha ponta a ponta — item 6,
+em 31/08 — e os itens 21 e 22, que **já estavam aplicados no PRD** e continuavam
+contados aqui. O grupo que bloqueia entrega continua com nove itens no registro
+abaixo — cinco deles já riscados; o resto é volume.
 
 ---
 
@@ -252,7 +253,7 @@ O escopo lista 11 relatórios e diz que devem ser **visualizados e exportados**.
 
 ---
 
-## 5. Domínio via Excel — o backend fecha; falta a tela
+## 5. Domínio via Excel — a esteira está de pé, ponta a ponta
 
 O modelo suporta (`app.file_import` com `layout_version`, `rows_total`,
 `rows_ok`, `rows_error`, `report jsonb`), e agora a esteira também:
@@ -264,7 +265,7 @@ O modelo suporta (`app.file_import` com `layout_version`, `rows_total`,
 | ~~Relatório de erro por linha~~ | ✅ **28/08** — `Report.as_json()`, no formato de `app.file_import.report`, só com as linhas que têm o que dizer |
 | ~~Gravação em `app.payroll_entry` + `app.payroll_period`~~ | ✅ **31/08** — `operax/imports/repository.py`, numa transação só com a auditoria |
 | ~~Endpoint de upload e confirmação~~ | ✅ **31/08** — `GET /folha/template`, `POST /folha/imports`, `POST /folha/imports/{id}/confirm` |
-| Tela de upload com preview | Frontend — é o que resta do item 6 |
+| ~~Tela de upload com preview~~ | ✅ **31/08** — `/dashboard/administracao/folha`, o mesmo fluxo de quatro passos do import de RH |
 | ~~Detecção de reimportação da mesma competência~~ | ✅ **31/08** — o preview devolve `replaces`, e a confirmação **substitui** a competência |
 | **Mapa de código de evento → categoria** | ✅ a tabela existe (migration 30); falta a curadoria com a contabilidade |
 
@@ -296,7 +297,7 @@ O último é o mesmo problema do mapeamento de unidades: o plano de contas de
 eventos da folha é do cliente, e transformar `code` em categoria de produto
 exige curadoria validada. **Sem isso, 8 dos 16 indicadores de 5.3 não saem.**
 
-### 31/08/2026 — a folha vira competência gravada, e a metade que falta é tela
+### 31/08/2026 — a folha vira competência gravada, e a tela vem junto
 
 O arquivo agora chega ao banco. `GET /folha/template` publica o modelo do mês já
 preenchido com o que entrou antes, `POST /folha/imports` guarda, julga e não
@@ -338,6 +339,19 @@ depois. É o pré-requisito do indicador "projeção de 13º".
 `personnel`, o que `util.is_admin` responde), com o domínio `compensation`. O
 papel `accounting` existe para **ler** a folha. Se o cliente disser que a
 contabilidade publica direto, muda um `if` em `server/routers/folha.py`.
+
+A tela é a mesma esteira de quatro passos do import de RH — competência,
+arquivo, preview, confirmar — e carrega as duas diferenças na superfície, porque
+esconder qualquer uma delas seria esconder o que muda um número:
+
+- o botão de confirmar **sai do ar com o motivo escrito ao lado** quando há linha
+  em erro, em vez de desabilitar calado;
+- ele diz **quantos lançamentos serão substituídos** antes do clique — reenviar a
+  folha de um mês apaga o que estava lá, e um botão escrito só "Confirmar"
+  esconderia exatamente isso;
+- código sem categoria aparece **uma vez por código**, não uma linha por linha da
+  planilha: na primeira importação o plano de contas inteiro está por mapear, e
+  mil avisos idênticos não são relatório.
 
 ---
 
@@ -419,9 +433,10 @@ ele enxerga**, e o DP lê.
 4. ~~Histórico de marcações na tela individual~~ — **entregue em 25/08**
 5. Catálogo dos 11 relatórios + exportação — **formato decidido em 28/08: Excel
    *e* PDF**
-6. Importação do Excel do Domínio, ponta a ponta — **o backend fechou em 31/08**
-   (modelo, preview, gravação e substituição da competência). Falta a **tela de
-   upload com preview**, que é o que sobrou do item
+6. ~~Importação do Excel do Domínio, ponta a ponta~~ — **entregue em 31/08**:
+   modelo, preview, gravação, substituição da competência e a tela em
+   `/dashboard/administracao/folha`. O que resta é a **curadoria** do plano de
+   contas, que é o item 7 e é atividade de implantação, não de código
 7. Mapa de código de evento de folha → categoria — **a tabela existe desde
    28/08** (`app.payroll_event_map`, migration 30); falta a curadoria, que é
    atividade de implantação com a contabilidade
