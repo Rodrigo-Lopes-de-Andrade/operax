@@ -187,7 +187,8 @@ async def enviar_planilha(
     await repository.create_import(
         tenant,
         import_id=import_id,
-        template=template,
+        type=template.type,
+        layout_version=template.layout_version,
         storage_path=caminho,
         file_name=arquivo.filename,
     )

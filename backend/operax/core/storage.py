@@ -35,9 +35,14 @@ class FileStore(Protocol):
     async def get(self, path: str) -> bytes: ...
 
 
-def import_path(tenant_id: UUID, import_id: UUID) -> str:
-    """Tenant first, so the object key is already scoped when a policy needs it."""
-    return f"{tenant_id}/hr/{import_id}.xlsx"
+def import_path(tenant_id: UUID, import_id: UUID, area: str = "hr") -> str:
+    """Tenant first, so the object key is already scoped when a policy needs it.
+
+    `area` segrega o que a folha guarda do que o RH guarda: os dois arquivos
+    carregam dados de naturezas diferentes, e uma policy de bucket que um dia
+    precise separá-los precisa que o caminho já os tenha separado.
+    """
+    return f"{tenant_id}/{area}/{import_id}.xlsx"
 
 
 class SupabaseStorage:

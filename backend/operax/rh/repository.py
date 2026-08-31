@@ -67,7 +67,10 @@ _CREATE_IMPORT_SQL = """
        %(layout_version)s, %(uploaded_by)s, 'received')
 """
 
-_SAVE_REPORT_SQL = """
+# Público porque a importação de folha o executa dentro da transação dela: os dois
+# fluxos fecham o mesmo `app.file_import`, e duas versões deste update virariam
+# dois formatos de contagem no mesmo registro.
+SAVE_REPORT_SQL = """
     update app.file_import
        set status = %(status)s,
            rows_total = %(rows_total)s,
@@ -142,7 +145,8 @@ def _dumps(valor: Any) -> str:
     return json.dumps(valor, default=str, ensure_ascii=False)
 
 
-def _jsonb(valor: Any) -> Jsonb:
+def jsonb(valor: Any) -> Jsonb:
+    """O `Jsonb` do projeto, com o `default` que a trilha precisa. Vale para os dois imports."""
     return Jsonb(valor, dumps=_dumps)
 
 
@@ -189,19 +193,25 @@ async def create_import(
     tenant: TenantContext,
     *,
     import_id: UUID,
-    template: Template,
+    type: str,
+    layout_version: str,
     storage_path: str,
     file_name: str | None,
 ) -> None:
+    """Abre o registro do arquivo recebido.
+
+    Recebe tipo e versão soltos, e não um `Template`: a folha entra pela mesma
+    porta e não tem `Template` — as colunas dela não têm dono na matriz do RH.
+    """
     async with tenant_scope(tenant) as scope:
         await scope.execute(
             _CREATE_IMPORT_SQL,
             {
                 "import_id": import_id,
-                "type": template.type,
+                "type": type,
                 "storage_path": storage_path,
                 "file_name": file_name,
-                "layout_version": template.layout_version,
+                "layout_version": layout_version,
                 "uploaded_by": tenant.user_id,
             },
         )
@@ -219,14 +229,14 @@ async def save_report(
 ) -> None:
     async with tenant_scope(tenant) as scope:
         await scope.execute(
-            _SAVE_REPORT_SQL,
+            SAVE_REPORT_SQL,
             {
                 "import_id": import_id,
                 "status": status,
                 "rows_total": rows_total,
                 "rows_ok": rows_ok,
                 "rows_error": rows_error,
-                "report": _jsonb(report),
+                "report": jsonb(report),
             },
         )
 
@@ -270,14 +280,14 @@ async def apply_lines(
             aplicadas += 1
 
         await scope.execute(
-            _SAVE_REPORT_SQL,
+            SAVE_REPORT_SQL,
             {
                 "import_id": import_id,
                 "status": status,
                 "rows_total": rows_total,
                 "rows_ok": rows_ok,
                 "rows_error": rows_error,
-                "report": _jsonb(report),
+                "report": jsonb(report),
             },
         )
     return aplicadas
@@ -406,8 +416,8 @@ async def audit(
             "action": action,
             "entity": entity,
             "entity_id": str(entity_id),
-            "antes": _jsonb(antes),
-            "depois": _jsonb({**depois, "_origem": origem}),
+            "antes": jsonb(antes),
+            "depois": jsonb({**depois, "_origem": origem}),
         },
     )
 
@@ -422,8 +432,8 @@ async def record_export(tenant: TenantContext, *, template: Template, rows: int)
                 "action": "export",
                 "entity": "rh_template",
                 "entity_id": template.type,
-                "antes": _jsonb(None),
-                "depois": _jsonb(
+                "antes": jsonb(None),
+                "depois": jsonb(
                     {
                         "layout_version": template.layout_version,
                         "domain": str(template.domain) if template.domain else None,

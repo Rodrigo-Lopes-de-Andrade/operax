@@ -252,20 +252,20 @@ O escopo lista 11 relatórios e diz que devem ser **visualizados e exportados**.
 
 ---
 
-## 5. Domínio via Excel — a funcionalidade não existe em nenhum sprint
+## 5. Domínio via Excel — o backend fecha; falta a tela
 
 O modelo suporta (`app.file_import` com `layout_version`, `rows_total`,
-`rows_ok`, `rows_error`, `report jsonb`), mas falta tudo em volta:
+`rows_ok`, `rows_error`, `report jsonb`), e agora a esteira também:
 
 | O que falta | Onde entra |
 |---|---|
 | ~~Template padronizado publicado~~ | ✅ **28/08** — `operax/imports/payroll.py`, com aba de controle, competência e comentário por coluna |
 | ~~Parser + validação de campos obrigatórios~~ | ✅ **28/08** — recusa de arquivo inteiro antes da primeira linha (tenant, tipo, versão, cabeçalho, competência) |
 | ~~Relatório de erro por linha~~ | ✅ **28/08** — `Report.as_json()`, no formato de `app.file_import.report`, só com as linhas que têm o que dizer |
-| Gravação em `app.payroll_entry` + `app.payroll_period` | Backend, próxima unidade |
-| Endpoint de upload e confirmação | Backend — a esteira do RH já tem o par `POST /imports` + `/confirm` para seguir |
-| Tela de upload com preview | Frontend |
-| Detecção de reimportação da mesma competência | Backend — a duplicidade **dentro** do arquivo já é detectada |
+| ~~Gravação em `app.payroll_entry` + `app.payroll_period`~~ | ✅ **31/08** — `operax/imports/repository.py`, numa transação só com a auditoria |
+| ~~Endpoint de upload e confirmação~~ | ✅ **31/08** — `GET /folha/template`, `POST /folha/imports`, `POST /folha/imports/{id}/confirm` |
+| Tela de upload com preview | Frontend — é o que resta do item 6 |
+| ~~Detecção de reimportação da mesma competência~~ | ✅ **31/08** — o preview devolve `replaces`, e a confirmação **substitui** a competência |
 | **Mapa de código de evento → categoria** | ✅ a tabela existe (migration 30); falta a curadoria com a contabilidade |
 
 ### 28/08/2026 — a esteira decide, e ainda não grava
@@ -295,6 +295,49 @@ Três decisões que valem registro:
 O último é o mesmo problema do mapeamento de unidades: o plano de contas de
 eventos da folha é do cliente, e transformar `code` em categoria de produto
 exige curadoria validada. **Sem isso, 8 dos 16 indicadores de 5.3 não saem.**
+
+### 31/08/2026 — a folha vira competência gravada, e a metade que falta é tela
+
+O arquivo agora chega ao banco. `GET /folha/template` publica o modelo do mês já
+preenchido com o que entrou antes, `POST /folha/imports` guarda, julga e não
+grava, e `POST /folha/imports/{id}/confirm` relê o arquivo guardado, julga de
+novo e substitui a competência. Nenhuma migration: `app.file_import.type` aceita
+`'folha'` desde a 09, e `app.payroll_period` / `app.payroll_entry` existem desde
+a 07.
+
+Três decisões, e as três mudam um número que alguém compara com holerite:
+
+- **Folha não entra pela metade.** Arquivo com uma linha em erro não é
+  confirmável — recebe `validation_error` e para aí. É o contrário do import de
+  RH, onde as linhas boas entram e o arquivo volta marcado como parcial, e a
+  diferença não é de rigor: lá cada linha é um fato independente sobre uma
+  pessoa; aqui as linhas são parcelas de uma soma. "Importei 998 de 1000" produz
+  um total que não bate com nada e não avisa ninguém — a mesma razão pela qual
+  valor ilegível vira erro e nunca zero. A recusa está em dois lugares de
+  propósito: no estado que o import recebe e dentro de `apply_payroll`, que é a
+  que nenhum caminho novo contorna.
+- **Reenviar substitui a competência, não soma.** A folha é declaração fechada do
+  mês. Somar dobraria todo valor; "pular o que já existe" faria correção de valor
+  não ter efeito — que é pior, porque parece que funcionou. O preview avisa o que
+  será substituído (`replaces`), a auditoria registra quantas linhas saíram, e o
+  arquivo anterior continua guardado no Storage. Competência `fechada` recusa, e
+  a recusa também está no `on conflict ... where` — entre o preview e a
+  confirmação alguém pode fechar o mês.
+- **A auditoria é do arquivo, não da linha.** Uma folha de mil linhas geraria mil
+  registros em `app.audit_log` por mês, numa tabela cujo próprio comentário diz
+  que cresce rápido. São duas: uma da substituição e uma da importação, cada uma
+  com competência, contagem e total. O detalhe por linha continua inteiro em
+  `app.file_import.report`, ao lado do arquivo que o produziu.
+
+⚠️ **O décimo terceiro ainda não é expressável.** `app.payroll_period.month`
+aceita 13, mas a aba de controle carrega `AAAA-MM` e o parser aceita 1..12 — o
+endpoint recusa `mes=13` em vez de gerar um arquivo que ele mesmo recusaria
+depois. É o pré-requisito do indicador "projeção de 13º".
+
+⚠️ **Premissa declarada:** quem envia a folha é RH/DP (`owner`, `hr`,
+`personnel`, o que `util.is_admin` responde), com o domínio `compensation`. O
+papel `accounting` existe para **ler** a folha. Se o cliente disser que a
+contabilidade publica direto, muda um `if` em `server/routers/folha.py`.
 
 ---
 
@@ -376,7 +419,9 @@ ele enxerga**, e o DP lê.
 4. ~~Histórico de marcações na tela individual~~ — **entregue em 25/08**
 5. Catálogo dos 11 relatórios + exportação — **formato decidido em 28/08: Excel
    *e* PDF**
-6. Importação do Excel do Domínio, ponta a ponta
+6. Importação do Excel do Domínio, ponta a ponta — **o backend fechou em 31/08**
+   (modelo, preview, gravação e substituição da competência). Falta a **tela de
+   upload com preview**, que é o que sobrou do item
 7. Mapa de código de evento de folha → categoria — **a tabela existe desde
    28/08** (`app.payroll_event_map`, migration 30); falta a curadoria, que é
    atividade de implantação com a contabilidade

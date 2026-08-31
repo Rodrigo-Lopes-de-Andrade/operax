@@ -21,6 +21,7 @@ from server.routers import (
     assistente,
     curadoria,
     employees,
+    folha,
     justificativas,
     monitor,
     rh,
@@ -55,6 +56,7 @@ app.add_middleware(
 app.include_router(assistente.router)
 app.include_router(curadoria.router)
 app.include_router(employees.router)
+app.include_router(folha.router)
 app.include_router(justificativas.router)
 app.include_router(monitor.router)
 app.include_router(rh.router)

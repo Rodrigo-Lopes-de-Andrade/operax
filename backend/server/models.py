@@ -585,6 +585,64 @@ class ImportResult(ImportPreview):
     partial: bool
 
 
+class PayrollLineReport(BaseModel):
+    """O veredito de uma linha da folha.
+
+    `warnings` existe aqui e não no relatório do RH porque a folha tem pendência
+    que **não** barra a linha: código de evento sem categoria entra, conta no
+    total, e só não aparece nos indicadores por categoria. Misturar isso com
+    `errors` faria a tela oferecer "corrija antes de confirmar" para algo que não
+    é do usuário corrigir — é da curadoria com a contabilidade.
+    """
+
+    line: int
+    errors: list[ImportLineError] = []
+    warnings: list[ImportLineError] = []
+
+
+class PayrollCounts(BaseModel):
+    """Sem `unchanged`: a competência é substituída inteira, não comparada linha a linha."""
+
+    total: int
+    ok: int
+    error: int
+
+
+class PayrollReplacement(BaseModel):
+    """O que já está gravado na competência e que a confirmação substitui."""
+
+    entries: int
+    imported_at: datetime | None = None
+
+
+class PayrollPreview(BaseModel):
+    """O que o arquivo faria com a competência. Nada foi gravado."""
+
+    import_id: UUID
+    period: str
+    layout_version: str
+    status: str
+    counts: PayrollCounts
+    #: Códigos de evento sem categoria, uma vez cada — o insumo da curadoria.
+    unmapped_codes: list[str] = []
+    lines: list[PayrollLineReport] = []
+    #: `None` quando a competência ainda não tem nada gravado.
+    replaces: PayrollReplacement | None = None
+
+
+class PayrollResult(PayrollPreview):
+    """Depois de confirmar.
+
+    Não herda `partial` do import de RH de propósito: folha parcial não existe.
+    Arquivo com uma linha em erro não é confirmável, porque a soma da competência
+    deixaria de bater com o holerite e ninguém veria — a mesma razão pela qual um
+    valor ilegível vira erro em vez de zero.
+    """
+
+    applied: int
+    replaced: int
+
+
 class HrDueDate(BaseModel):
     """O prazo mais urgente de uma pessoa, seja ele qual for.
 
