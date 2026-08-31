@@ -21,16 +21,39 @@ Produção (`nklobmlxyidqxarzisph`) é este repositório parado na migration 11,
 Nenhum destes é passo da janela. São condições para ela existir.
 
 1. **P1 fechado**, com os cinco ajustes do revisor.
-2. **Re-ensaio da fase 2 contra a pilha ATUAL**, em staging
-   (`wbzaqjlfpqteesehapnn`), com os scripts que já existem —
-   `scripts/ensaiar_rename_staging.sh` e `scripts/comparar_catalogos.py` — e o
-   mesmo formato de resultado: catálogo comparado e suítes verdes.
-   ⚠️ O ensaio que temos validou **11b + 12–15**. O que foi provado não é mais o
-   que vai rodar: são **22 migrations pendentes** agora — as `11b` e `12`–`32`,
-   de um repositório que tem 34 no total —, e as `16`–`32` nunca correram contra
-   o schema de produção. Neste runbook, "22" é sempre **o que falta aplicar**,
-   nunca o total.
-3. Só com os dois verdes é que a data é marcada com o cliente.
+2. ✅ **Re-ensaio da fase 2 contra a pilha ATUAL — rodado em 31/08/2026**, em
+   staging (`wbzaqjlfpqteesehapnn`), contra o catálogo real de produção:
+
+       22 migrations no lote                      todas ok
+       97 / 98 / 99 / 98_postgrest                todas ok
+       policies 70/70 · views 9/9 · funções 26/26
+       RLS: 50 de 50 com FORCE
+       enums pós-rename conferidos
+       catálogo × alvo: só `app.job_execucao` diverge
+
+   **O que este ensaio provou e o anterior não podia:** as migrations `29`–`32`
+   entraram em 28/08, *depois* do ensaio de 27/08, e nunca haviam corrido contra
+   um projeto Supabase de verdade. Duas delas criam tabela com policy nova. O
+   portão tinha caído sem ninguém notar — que é exatamente o que ele existe para
+   pegar.
+   ⚠️ **O alvo precisa ser regerado junto.** `scripts/_alvo_en.json` era de
+   27/08 e o passo 7 teria comparado com um alvo velho, dando verde falso. Rode
+   `scripts/ensaiar_rename_nuvem.sh` antes, sempre que entrar migration nova.
+   ⛔ **A divergência que sobra é a de sempre e é aceita:** `app.job_execucao`
+   existe em produção e nenhuma migration daqui a cria — é o diário do runner da
+   Vercel. O script sai não-zero por causa dela. Enquanto o `kastropark-jobs`
+   não for lido, trazê-la para o repositório seria afirmar sobre um contrato que
+   ninguém conferiu.
+   ⚠️ **O passo 8 continua pulado** — a fronteira por HTTP no PostgREST real
+   exige `SUPABASE_PUBLISHABLE_KEY` e `SUPABASE_SECRET_KEY` do **staging**. É o
+   único braço que o ensaio não alcança, e o que ele cobriria é justamente onde
+   o navegador vive.
+   📌 **Um subproduto que vale para a janela:** o alvo confirma que os papéis
+   seguem o rename. Produção tem `[owner, diretoria, rh, dp, …]` e o alvo tem
+   `[owner, executive, hr, personnel, …]`, na mesma ordem — os vínculos gravados
+   hoje em `app.tenant_membro` viram `owner` e `personnel` sozinhos.
+3. ✅ **Os dois portões estão verdes desde 31/08.** A data pode ser marcada com o
+   cliente.
 
 ---
 
