@@ -11,6 +11,90 @@ recebimento dos acessos.
 
 ---
 
+## Estado em 31/08/2026 — medido, e a coluna que faltava
+
+⚠️ **Este bloco substitui o de 24/08 abaixo**, que ficou vencido em quatro linhas
+e é a origem de boa parte dos equívocos de status. O de baixo permanece como
+registro do que se sabia naquele dia.
+
+O equívoco central não era nenhuma linha isolada: era **uma coluna só**. "Sprint
+fechada" vinha significando "o código existe e tem teste", e alguém lia como "o
+cliente está usando". São duas colunas, e a distância entre elas é o projeto
+inteiro hoje.
+
+| Sprint | Código | Em produção |
+|---|---|---|
+| S0 · Diagnóstico e blindagem | ✅ | ✅ — é a única que roda lá |
+| S1 · Isolamento e worker | ✅ | ⚠️ quem sincroniza é o `kastropark-jobs` da Vercel, não este repo |
+| S2 · Modelo e superfície de API | ✅ | ❌ 22 das 34 migrations nunca correram lá |
+| S3 · Jornada esperada | ✅ motor pronto e testado | ❌ nunca rodou contra dado de produção |
+| S4 · Motor em modo sombra | ✅ entregue | ❌ G4 não é **mensurável** antes de rodar lá |
+| S5 · Dashboard | ✅ fechada, 4 critérios com teste | ❌ ninguém acessa: **zero usuários** em `auth.users` |
+| S6 · Alertas e relatório | ✅ esteira completa | ❌ travada em G4 — zero alertas enviados |
+| S7 · Assistente de IA | ✅ entregue | ⚠️ a API está no ar, apontada para **staging** |
+| S8 · Homologação e produção | ❌ não começou | — |
+| Fase 3 · Folha via Excel | ✅ ponta a ponta em 31/08 | ❌ idem |
+
+**Cinco sprints fechadas em código; uma em produção.**
+
+### O que a nuvem responde hoje
+
+Medido em **31/08/2026** pela Management API — leitura de catálogo, nomes nunca
+valores. Reproduzível com `scripts/sb_sql.sh nklobmlxyidqxarzisph`.
+
+| Fato | Produção (`nklobmlxyidqxarzisph`) |
+|---|---|
+| Migrations registradas | **23** (11 stubs + `00`–`11`) — o repositório tem **34** |
+| Tabelas em `app` | 49, **todas com nome em português** — o `11b` não correu |
+| Tabelas em `secullum` | 22 |
+| Policies em `app` | 66 · **zero tabela sem RLS** |
+| Usuários em `auth.users` | **0** |
+| Jobs de `pg_cron` | 2 — apontando para a Vercel |
+| Edge Functions publicadas | 1 · `secullum-test-auth`, publicada em 31/08 para diagnóstico (as duas de sync entram na janela) |
+| Serviços no Railway | 1 · `operax-api`, ambiente `production` |
+| `GET /health` da API | **200 `{"status":"ok"}`** — medido em 31/08 |
+
+⚠️ **A API responde, e isso não significa que produção funciona.** As variáveis
+do `operax-api` apontam para **staging** (registro do runbook, 28/08 — não reli
+os valores, e não pretendo: uma delas é a `service_role`). Um `/health` verde é
+prova de que o serviço builda e sobe, que é exatamente o que o preparo queria — e
+não é prova de que exista produto no ar.
+
+⚠️ **"22 migrations" quer dizer duas coisas neste repositório.** No `CLAUDE.md` e
+no `db reset` são **34** — o total. No runbook da janela são **22** — as que
+faltam aplicar em produção, e o critério de saída é `45 = 23 + 22`. Ler um pelo
+outro é o tipo de erro que só aparece depois.
+
+### O caminho crítico é um só
+
+**A janela de convergência.** Ela não é uma sprint: é o que transforma nove
+colunas "❌ em produção" em "✅" de uma vez. Depois dela, S3 e S4 passam a ser
+mensuráveis, o G4 deixa de ser inalcançável por construção, e o S8 pode começar.
+
+Nada de código bloqueia a janela hoje. O que falta é preparo, e é curto: **as
+Redirect URLs do Auth de produção e o backup com ponto de restauração**. O
+pré-requisito de credencial fechou em 31/08 — a `secullum-test-auth` foi
+publicada e voltou `ok: true` contra o Secullum de produção.
+
+### Por que este bloco existe, e o que ele pede de quem escrever o próximo
+
+O status deste projeto estava espalhado por cinco documentos com datas
+diferentes, e cada um estava certo no dia em que foi escrito. Somados, faziam
+afirmar como pendente o que já estava feito — o reset da senha do banco, os
+secrets do Secullum e o backend no Railway foram dados como bloqueios em 31/08,
+os três já resolvidos desde 28/08. **Nenhum documento estava mentindo; o conjunto
+estava.**
+
+Duas regras para não repetir:
+
+1. **Todo status carrega data e método.** "Medido em DD/MM pela Management API" é
+   verificável; "está pendente" não é.
+2. **Código e produção são colunas separadas**, sempre. Fundi-las é o que produz
+   a leitura de que o projeto está pronto — ou de que não começou, dependendo de
+   qual coluna o leitor tinha em mente.
+
+---
+
 ## Estado em 24/08/2026
 
 Conferido contra o repositório e contra o projeto de produção, não de memória.

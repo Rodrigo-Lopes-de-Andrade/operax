@@ -26,18 +26,25 @@ Nenhum destes é passo da janela. São condições para ela existir.
    `scripts/ensaiar_rename_staging.sh` e `scripts/comparar_catalogos.py` — e o
    mesmo formato de resultado: catálogo comparado e suítes verdes.
    ⚠️ O ensaio que temos validou **11b + 12–15**. O que foi provado não é mais o
-   que vai rodar: são 22 migrations agora, e as 16–32 nunca correram contra o
-   schema de produção.
+   que vai rodar: são **22 migrations pendentes** agora — as `11b` e `12`–`32`,
+   de um repositório que tem 34 no total —, e as `16`–`32` nunca correram contra
+   o schema de produção. Neste runbook, "22" é sempre **o que falta aplicar**,
+   nunca o total.
 3. Só com os dois verdes é que a data é marcada com o cliente.
 
 ---
 
 ## 2. Pré-janela — o que tem de estar pronto ANTES, e não é reversível dentro dela
 
-**O Railway está vazio.** Lido em 27/08/2026 pelo MCP: projeto `KastroPark`
+~~**O Railway está vazio.**~~ Era o estado em 27/08/2026: projeto `KastroPark`
 (`eb5d0a6d-cc9b-42f8-b508-22f84f45db0c`), ambiente `production`, **zero
-serviços**. Então "deploy do backend" na janela não é redeploy: é primeiro build,
-primeiro boot, primeira leitura de env.
+serviços** — e foi o que tornou "deploy do backend" um primeiro build, não um
+redeploy.
+
+✅ **Deixou de valer em 28/08, e está medido em 31/08:** um serviço,
+`operax-api`, no ambiente `production`, com `GET /health` respondendo **200
+`{"status":"ok"}`**. O parágrafo acima fica porque é ele que explica por que o
+próximo é uma regra e não um capricho.
 
 ⛔ **Primeiro build não acontece dentro de janela.** O serviço tem de existir,
 buildar e subir contra **staging** antes da data — o que a janela faz é trocar
@@ -74,8 +81,10 @@ recusa como parâmetro desconhecido.
 - [x] **Deployment Protection do projeto do painel desligada** — era ela que
       fazia toda URL devolver 302 para `vercel.com/sso-api`
 - [x] Senha do banco de produção **resetada pelo painel** (Project Settings →
-      Database) em 28/08, e **verificada** conectando pelas duas portas do pooler, e `DATABASE_URL` mais os quatro `SECULLUM_*` configurados como
-      secrets das Edge Functions — ver passo 4.
+      Database) em 28/08, e **verificada** conectando pelas duas portas do pooler, e `DATABASE_URL` mais **três** dos quatro `SECULLUM_*`
+      configurados como secrets das Edge Functions — ver passo 4. ⚠️ A redação
+      anterior dizia "os quatro": a medição de 31/08 mostra `USERNAME`,
+      `PASSWORD` e `CLIENT_ID`, **sem o `SECULLUM_BANK_ID`**.
       ⛔ **Não dá para roteirizar:** `alter role postgres with password` pelo
       `sb_sql.sh` responde `42501: only superusers can alter privileged roles` —
       a Management API roda como `postgres`, que no Supabase não é superusuário.
@@ -84,6 +93,14 @@ recusa como parâmetro desconhecido.
       ⚠️ Escolha uma senha **URL-safe** (letras, dígitos, `-`, `_`). A que estava
       em `backend/.env.staging` tinha dois `@`, que o RFC 3986 obriga a escapar
       e que cada camada trata de um jeito — e além disso nem era a do staging.
+      ⚠️ **A senha de produção foi exposta em canal de conversa em 31/08/2026.**
+      **Decisão do dono, no mesmo dia: reset só ao concluir o projeto**, não
+      antes da janela. Fica escrito o que a recomendação dizia, porque é o risco
+      que o trabalho passa a carregar: hoje o custo de trocá-la é reconfigurar um
+      secret (`DATABASE_URL` das Edge Functions), porque nada mais a consome —
+      depois da janela ela sustenta a sincronização de produção e o backend, e a
+      troca vira janela nova. **Item de encerramento do projeto**, ao lado da
+      entrega de credenciais.
       ⏱️ **A senha nova não vale na hora.** Medido em 28/08 contra produção: o
       pooler recusou por alguns minutos depois do reset e passou a aceitar
       sozinho, sem nada ter mudado. Dentro da janela, `password authentication
@@ -232,15 +249,32 @@ então a conexão não falha — ela **pendura** até o `PoolTimeout`, e o sinto
 500 de trinta segundos numa rota que parecia não ter nada a ver com rede. Custou
 duas rodadas de diagnóstico em staging, onde não havia ninguém esperando.
 
-⛔ **Cinco secrets, e nenhum deles está no Vault de produção.** As funções leem
-`DATABASE_URL`, `SECULLUM_USERNAME`, `SECULLUM_PASSWORD`, `SECULLUM_CLIENT_ID` e
-`SECULLUM_BANK_ID` — o último nem aparece na lista do `CLAUDE.md`. Os quatro do
-Secullum vivem no projeto da Vercel. E o primeiro é o que exige ação com
-antecedência: `DATABASE_URL` é a connection string do Transaction Pooler **com a
-senha do banco**, e a senha de produção está perdida desde o início desta
-reconciliação (§2 do `PLANO-RECONCILIACAO-NUVEM.md`). **Resetá-la é preparo, não
-passo de janela** — hoje ninguém depende dela: o `kastropark-jobs` fala por
-PostgREST e nunca a usou.
+✅ **Quatro dos cinco secrets já estão em produção — medido em 31/08/2026.**
+As funções leem `DATABASE_URL`, `SECULLUM_USERNAME`, `SECULLUM_PASSWORD`,
+`SECULLUM_CLIENT_ID` e `SECULLUM_BANK_ID`. A Management API (só nomes, nunca
+valores) lista os quatro primeiros configurados. A senha do banco, que este bloco
+dava como perdida, **foi resetada em 28/08** e é o que sustenta o `DATABASE_URL`
+que está lá.
+
+✅ **O `SECULLUM_BANK_ID` ausente é inofensivo nesta conta — medido em
+31/08/2026.** `secullum-client.ts` o declara opcional: sem ele, `login()` escolhe
+`banks[0]`. A conta tem **um banco só** (`88727`), então `banks[0]` é o único que
+existe. Com mais de um, a sincronização espelharia o banco errado **sem erro e
+sem log** — a classe de falha silenciosa que este runbook existe para não
+repetir, e por isso a pergunta foi medida em vez de assumida.
+
+**Como foi medido, e o que mais isso provou.** Autorizado pelo dono em 31/08, a
+`secullum-test-auth` foi publicada em produção — só ela, e a premissa foi
+conferida antes: a função **não abre conexão com o Supabase** (não importa
+cliente de banco, não lê `DATABASE_URL`) e usa `/Horarios` de propósito, para não
+tocar em PII. A invocação voltou `ok: true`, 1 banco, e 94 horários. **As três
+credenciais do Secullum em produção estão corretas e funcionando** — o
+pré-requisito de credencial do passo 4 está fechado, e fechado fora do relógio da
+janela, que era o ponto.
+
+💡 **Vale declarar o `SECULLUM_BANK_ID=88727` mesmo assim**, e é barato: hoje a
+sincronização depende de a lista ter um elemento só. Se a conta do cliente ganhar
+uma segunda empresa no Secullum, `banks[0]` muda sozinho e nada avisa.
 
 A ordem interna continua a mesma, e pelo mesmo motivo: o runner sobe **depois**
 do passo 2. `app.sync_run.scope` e `records_skipped` dependem da migration 21.

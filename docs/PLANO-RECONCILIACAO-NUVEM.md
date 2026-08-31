@@ -215,8 +215,11 @@ fala em 30 min para as duas.
 
 ## 2. O que bloqueia o início
 
-1. ~~**Senha do banco.**~~ **Resolvido em 22/08/2026, e não pelo caminho que
-   este documento previa.** A senha continua perdida — três rodadas de teste,
+1. ~~**Senha do banco.**~~ **Contornado em 22/08/2026 pela Management API, e
+   resolvido de vez em 28/08 com o reset pelo painel** — ver §2 do
+   `RUNBOOK-JANELA-CONVERGENCIA.md`. O relato abaixo é de 22/08, quando a senha
+   ainda estava perdida, e explica por que o `sb_sql.sh` existe: três rodadas de
+   teste,
    a última com matriz completa de 2 projetos × 6 regiões de pooler × 2 modos:
    as duas combinações que alcançam o host certo respondem `password
    authentication failed`, as outras 22 falham na rede. Não é endereço, é senha.
