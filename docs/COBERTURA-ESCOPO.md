@@ -8,12 +8,13 @@ real gerado pela suíte, não de memória.
 
 Legenda: ✅ coberto · ⚠️ parcial · ❌ falta · 🔒 bloqueado por dependência externa
 
-**Resultado: 20 lacunas** (era 27). Fecharam: a cadência de sync, a agregação
+**Resultado: 19 lacunas** (era 27). Fecharam: a cadência de sync, a agregação
 por gestor, a fila de pendentes de justificativa (27/08), as duas métricas que o
-assistente não alcançava (28/08), a importação da folha ponta a ponta — item 6,
-em 31/08 — e os itens 21 e 22, que **já estavam aplicados no PRD** e continuavam
-contados aqui. O grupo que bloqueia entrega continua com nove itens no registro
-abaixo — cinco deles já riscados; o resto é volume.
+assistente não alcançava e a tabela de ocorrência disciplinar (28/08), a
+importação da folha ponta a ponta — item 6, em 31/08 — e os itens 21 e 22, que
+**já estavam aplicados no PRD** e continuavam contados aqui. O grupo que bloqueia
+entrega continua com nove itens no registro abaixo — seis deles já riscados; o
+resto é volume.
 
 ---
 
@@ -441,7 +442,11 @@ ele enxerga**, e o DP lê.
    28/08** (`app.payroll_event_map`, migration 30); falta a curadoria, que é
    atividade de implantação com a contabilidade
 8. ~~Ocorrências pendentes de justificativa~~ — **entregue em 25/08** (migration 23); ~~sem tela que aceite ou rejeite~~ — **entregue em 26/08**: `POST /ocorrencias/{id}/justificativa` e o veredito no drawer da ocorrência. "Aceita" e "escrita" deixaram de ser a mesma coisa. ~~Falta a *fila*~~ — **entregue em 27/08**: `/dashboard/justificativas`. Item fechado
-9. Tabela de ocorrência disciplinar
+9. ~~Tabela de ocorrência disciplinar~~ — **entregue em 28/08**
+   (`app.disciplinary_event`, migration 32). O eixo de autorização já existia
+   desde a migration 02 protegendo o vazio; ver §7. Item fechado, e a baixa aqui
+   estava atrasada — que é a patologia que a seção de 27/08 deste documento
+   denuncia
 
 **Volume, sem risco técnico (5)**
 
