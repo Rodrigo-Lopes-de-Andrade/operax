@@ -82,11 +82,27 @@ def main() -> None:
 
     # (schema, nome) -> nome que a tabela tem em `public` antes da migration 03
     alvo: dict[tuple[str, str], str] = {}
+    fora_do_caminho: list[str] = []
     for t in cat["tables"]:
         if t["schema"] == "secullum":
+            # A migration 03 varre de `public` para `secullum` só o que casa
+            # `^[A-Z]`; o que é minúsculo ela manda para `app`. Uma tabela de
+            # espelho em snake_case posta aqui acabaria no schema errado, o que
+            # é pior que a ausência. Ela entra depois das migrations, pela
+            # fixture — ver supabase/fixtures/espelho_secullum.sql.
+            if not t["name"][:1].isupper():
+                fora_do_caminho.append(t["name"])
+                continue
             alvo[(t["schema"], t["name"])] = t["name"]
         elif t["schema"] == "app" and t["name"] in INGESTAO:
             alvo[(t["schema"], t["name"])] = t["name"]
+
+    if fora_do_caminho:
+        print(
+            "espelho fora do caminho do baseline (snake_case, entram pela fixture): "
+            + ", ".join(sorted(fora_do_caminho)),
+            file=sys.stderr,
+        )
 
     faltando = INGESTAO - {n for (s, n) in alvo if s == "app"}
     if faltando:

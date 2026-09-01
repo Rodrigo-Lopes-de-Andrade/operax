@@ -76,12 +76,13 @@ insert into secullum."Funcao" (id, "FuncaoId", "Descricao", tenant_id) values
 -- O gestor, como o Secullum o guarda: uma "Estrutura" cuja Descricao é nome de
 -- pessoa. Duas delas, e a segunda existe para provar que cada um vai para a
 -- estrutura DELE e não para a primeira que aparecer.
+-- Sem `departamento_id`: a coluna existiu no espelho até 21/08/2026 e produção
+-- não a tem mais (backfill para `secullum.departamento_gestor`). O vínculo do
+-- gestor sai de `Funcionario.EstruturaId`, que é o que este teste exercita.
 insert into secullum."Estrutura"
-  (id, "EstruturaId", "EstruturaPaiId", departamento_id, "Descricao", ativo, tenant_id) values
-  ('ffffffff-0000-0000-0000-00000000e5a1', 7401, null,
-   'ffffffff-0000-0000-0000-0000000000d1', 'Helena Prado', true, '{TENANT}'),
-  ('ffffffff-0000-0000-0000-00000000e5a2', 7402, null,
-   'ffffffff-0000-0000-0000-0000000000d2', 'Ivo Ramalho', true, '{TENANT}');
+  (id, "EstruturaId", "EstruturaPaiId", "Descricao", ativo, tenant_id) values
+  ('ffffffff-0000-0000-0000-00000000e5a1', 7401, null, 'Helena Prado', true, '{TENANT}'),
+  ('ffffffff-0000-0000-0000-00000000e5a2', 7402, null, 'Ivo Ramalho', true, '{TENANT}');
 
 -- F2 é o caso que a regra 5 existe para pegar: o departamento é da Empresa A e
 -- a pessoa é da Empresa B.

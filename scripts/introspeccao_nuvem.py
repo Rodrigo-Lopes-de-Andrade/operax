@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import json
 import pathlib
+import re
 import subprocess
 import sys
 
@@ -232,6 +233,11 @@ def main() -> None:
     parser.add_argument(
         "--psql", action="store_true", help="alvo é um Postgres local; `ref` vira o dbname"
     )
+    parser.add_argument(
+        "--only",
+        default=None,
+        help="restringe a saída a estes schemas, separados por vírgula (ex.: secullum)",
+    )
     args = parser.parse_args()
 
     global USE_PSQL
@@ -239,12 +245,28 @@ def main() -> None:
 
     catalog = {name: q(args.ref, sql, opcional=name in OPCIONAIS) for name, sql in QUERIES.items()}
 
+    schemas = SCHEMAS
+    if args.only:
+        schemas = tuple(s.strip() for s in args.only.split(",") if s.strip())
+        desconhecidos = set(schemas) - set(SCHEMAS)
+        if desconhecidos:
+            sys.exit(f"--only não reconhece {', '.join(sorted(desconhecidos))};"
+                     f" a leitura cobre {', '.join(SCHEMAS)}")
+        # `schema_grants` nomeia o schema em `name`; todo o resto em `schema`.
+        # `migrations` não tem schema e fica: é a proveniência da leitura.
+        catalog = {
+            bloco: rows if bloco == "migrations" else [
+                r for r in rows if r.get("schema", r.get("name")) in schemas
+            ]
+            for bloco, rows in catalog.items()
+        }
+
     if args.json:
         pathlib.Path(args.json).write_text(
             json.dumps(catalog, indent=2, ensure_ascii=False, sort_keys=True)
         )
 
-    sql = render(args.ref, catalog)
+    sql = render(args.ref, catalog, schemas)
     if args.out:
         pathlib.Path(args.out).write_text(sql)
         print(f"{args.out} gerado — " + summary(catalog))
@@ -264,15 +286,17 @@ def ident(name: str) -> str:
 COMMAND = {"r": "select", "a": "insert", "w": "update", "d": "delete", "*": "all"}
 
 
-def render(ref: str, cat: dict) -> str:
+def render(ref: str, cat: dict, schemas: tuple[str, ...] = SCHEMAS) -> str:
     q_kinds = cat.get("kinds", [])
     out: list[str] = [
         "-- " + "=" * 74,
         f"-- Schema do projeto Supabase {ref}, reconstruído do catálogo.",
+        *([] if set(schemas) == set(SCHEMAS)
+          else [f"-- RECORTE: apenas o(s) schema(s) {', '.join(schemas)}."]),
         "-- GERADO por scripts/introspeccao_nuvem.py — não editar à mão.",
         "--",
         "-- Só catálogo foi lido: nenhuma linha de dado de cliente entrou aqui.",
-        "-- Não é backup. É o mapa contra o qual a migration de rename é escrita.",
+        "-- Não é backup. É o mapa contra o qual o schema deste repositório é conferido.",
         "-- " + "=" * 74,
         "",
         "-- Histórico de migration aplicado neste projeto:",
@@ -283,7 +307,7 @@ def render(ref: str, cat: dict) -> str:
 
     # `util` só tem função: derivar os schemas das tabelas deixaria ele de fora
     # e as 78 funções seguintes falhariam todas.
-    for schema in SCHEMAS:
+    for schema in schemas:
         out.append(f"create schema if not exists {schema};")
     out.append("")
 
@@ -348,8 +372,12 @@ def render(ref: str, cat: dict) -> str:
             if row["type"] != grupo:
                 continue
             out.append(
-                f"alter table {row['schema']}.{ident(row['name'])} "
-                f"add constraint {ident(row['constraint'])} {row['definition']};"
+                "do $$ begin\n"
+                f"  alter table {row['schema']}.{ident(row['name'])} "
+                f"add constraint {ident(row['constraint'])} {row['definition']};\n"
+                "exception when duplicate_object or duplicate_table\n"
+                "     or invalid_table_definition then null;\n"
+                "end $$;"
             )
     out.append("")
 
@@ -390,7 +418,11 @@ def render(ref: str, cat: dict) -> str:
     for row in cat["indexes"]:
         if (row["schema"], row["index"]) in de_constraint:
             continue
-        out.append(row["definition"] + ";")
+        out.append(
+            re.sub(r"^CREATE (UNIQUE )?INDEX ", r"CREATE \1INDEX IF NOT EXISTS ",
+                   row["definition"], count=1)
+            + ";"
+        )
     out.append("")
 
     out.append("-- policies")

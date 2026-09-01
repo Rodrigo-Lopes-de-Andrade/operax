@@ -55,4 +55,25 @@ echo "--- regenerando dicionário de dados"
 python3 scripts/gerar_dicionario.py || exit 1
 echo "--- verificando referências da documentação"
 python3 scripts/verificar_docs.py || exit 1
+# ---------------------------------------------------------------------------
+# O espelho do Secullum, conferido contra produção.
+#
+# Vinte das 22 tabelas já chegaram aqui pelo `_baseline.sql`, em `public`, e a
+# migration 03 as varreu para `secullum`. As outras duas são snake_case: a 03 só
+# varre `^[A-Z]`, então pelo caminho do baseline elas parariam em `app`. Entram
+# agora, pela fixture, que é idempotente e só preenche o que falta.
+#
+# A conferência é o ponto. Em 01/09/2026 o baseline estava três linhas atrás de
+# produção, e as três eram `Estrutura.departamento_id` — a coluna que a
+# `sync-cadastro` grava e que produção não tem. Nada tocava.
+# ---------------------------------------------------------------------------
+echo "--- espelho do Secullum (alvo de ensaio)"
+psql -q -v ON_ERROR_STOP=1 -f supabase/fixtures/espelho_secullum.sql >/tmp/espelho.log 2>&1 \
+  || { echo "FIXTURE DO ESPELHO FALHOU"; tail -20 /tmp/espelho.log; exit 1; }
+python3 scripts/verificar_espelho.py "$DB" --psql --somente-tabelas || exit 1
+psql -q -v ON_ERROR_STOP=1 -f scripts/88_teste_espelho.sql 2>&1 \
+  | grep -Ev '^(DO|SET|BEGIN|ROLLBACK)' | sed "s/^psql:[^ ]* //"
+RC=${PIPESTATUS[0]}
+[ $RC -ne 0 ] && exit $RC
+
 echo "=== SUÍTE COMPLETA OK"

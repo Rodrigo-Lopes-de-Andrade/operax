@@ -146,7 +146,6 @@ create table if not exists public."Estrutura" (
   id uuid default gen_random_uuid() not null,
   "EstruturaId" integer not null,
   "EstruturaPaiId" integer,
-  departamento_id uuid not null,
   "Descricao" text not null,
   email text,
   email_origem text default 'manual'::text not null,
@@ -601,7 +600,6 @@ alter table public."BatidaFonteDados" add constraint "BatidaFonteDados_batida_id
 alter table public."BatidaFonteDados" add constraint "BatidaFonteDados_batida_marcacao_id_fkey" FOREIGN KEY (batida_marcacao_id) REFERENCES public.batida_marcacao(id) ON DELETE CASCADE;
 alter table public."Departamento" add constraint departamento_empresa_id_fkey FOREIGN KEY (empresa_id) REFERENCES public."Empresa"(id);
 alter table public."Empresa" add constraint "Empresa_cidade_id_fkey" FOREIGN KEY (cidade_id) REFERENCES public."Cidade"(id);
-alter table public."Estrutura" add constraint estrutura_departamento_id_fkey FOREIGN KEY (departamento_id) REFERENCES public."Departamento"(id);
 alter table public."Funcionario" add constraint "Funcionario_cidade_id_fkey" FOREIGN KEY (cidade_id) REFERENCES public."Cidade"(id);
 alter table public."Funcionario" add constraint "Funcionario_funcao_id_fkey" FOREIGN KEY (funcao_id) REFERENCES public."Funcao"(id);
 alter table public."Funcionario" add constraint funcionario_afastamento_atual_id_fkey FOREIGN KEY (afastamento_atual_id) REFERENCES public."FuncionarioAfastamento"(id) ON DELETE SET NULL;
@@ -636,7 +634,6 @@ CREATE INDEX batida_fonte_dados_fontedadosid_idx ON public."BatidaFonteDados" US
 CREATE INDEX "Departamento_empresa_id_fkidx" ON public."Departamento" USING btree (empresa_id);
 CREATE INDEX empresa_cidade_id_idx ON public."Empresa" USING btree (cidade_id);
 CREATE INDEX empresa_empresaid_idx ON public."Empresa" USING btree ("EmpresaId");
-CREATE INDEX "Estrutura_departamento_id_fkidx" ON public."Estrutura" USING btree (departamento_id);
 CREATE INDEX "Funcionario_afastamento_atual_id_fkidx" ON public."Funcionario" USING btree (afastamento_atual_id);
 CREATE INDEX "Funcionario_departamento_id_fkidx" ON public."Funcionario" USING btree (departamento_id);
 CREATE INDEX "Funcionario_empresa_id_fkidx" ON public."Funcionario" USING btree (empresa_id);
