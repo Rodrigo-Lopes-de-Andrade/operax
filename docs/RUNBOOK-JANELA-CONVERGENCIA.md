@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.job_execucao app.sync_execucao app.integracao -->
+<!-- verificar-docs: inexistentes-de-proposito app.job_execucao app.sync_execucao app.integracao secullum.departamento_gestor secullum.departamento_gestor_transition -->
 
 # Runbook — janela de convergência
 
@@ -62,7 +62,7 @@ Nenhum destes é passo da janela. São condições para ela existir.
    📌 **Um subproduto que vale para a janela:** o alvo confirma que os papéis
    seguem o rename. Produção tem `[owner, diretoria, rh, dp, …]` e o alvo tem
    `[owner, executive, hr, personnel, …]`, na mesma ordem — os vínculos gravados
-   hoje em `app.tenant_membro` viram `owner` e `personnel` sozinhos.
+   hoje em `app.tenant_member` viram `owner` e `personnel` sozinhos.
 3. ✅ **Os dois portões estão verdes desde 31/08.** A data pode ser marcada com o
    cliente.
 
@@ -163,7 +163,7 @@ recusa como parâmetro desconhecido.
 - [x] **Ao menos um usuário em `auth.users`** — item que faltava nesta lista e é
       pré-requisito da curadoria, não da janela. Criado em 31/08 pelo Admin API,
       já confirmado (`mailer_autoconfirm` é `false`), com vínculo `owner` em
-      `app.tenant_membro`. Provado sob RLS, como o usuário: `util.eh_admin` =
+      `app.tenant_member`. Provado sob RLS, como o usuário: `util.is_admin` =
       true e as 4.822 marcações visíveis. O papel `owner` já tinha os quatro
       domínios sensíveis liberados desde a migration 02.
 
@@ -486,6 +486,161 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
 
 ---
 
+## 3b. Desfecho medido — 31/08/2026
+
+A janela **converteu o schema e não trocou o runner**. As duas metades têm de
+ser lidas separadas, porque só uma fechou.
+
+### O que fechou
+
+| Passo | Evidência |
+|---|---|
+| 0 · parar a escrita | `cron.alter_job` nos jobs 3 e 4 — **T0 = 18:10:03**. `update` direto em `cron.job` é negado: a tabela é do `supabase_admin` |
+| 1 · ponto de restauração | dump lógico no T0, **restaurado e conferido**: 176 `Funcionario`, 4.822 batidas, 66 policies, 49 tabelas |
+| 2a · limpeza pré-lote | `janela_pre_migrations.sql` |
+| 2b · as 22 migrations | todas aplicadas **uma por chamada**, cada uma devolvendo `[]` |
+| 3 · ledger | 45 = 23 + 22, o critério exato |
+
+Estado pós-lote: **54 tabelas em `app`, 74 policies, zero sem RLS, 8 views
+públicas, 11 métricas no catálogo**.
+
+### O que não fechou, e por quê
+
+**A troca do runner está bloqueada por divergência de schema no espelho.** A
+`sync-cadastro` deste repositório grava `departamento_id` em
+`secullum."Estrutura"`, e produção não tem essa coluna — o espelho de lá é
+desenho da outra equipe.
+
+A causa raiz é mais larga que esse sintoma, e foi medida:
+
+> **As 22 tabelas do schema `secullum` e a `app.job_execucao` existem apenas em
+> produção.** Nenhuma migration deste repositório as cria. Local e staging não
+> têm espelho nenhum.
+
+Disso decorre que **nenhum ensaio jamais executou as Edge Functions deste
+repositório contra um espelho real** — não por descuido, mas porque não havia
+contra o que executar. Todo ensaio validou o lado `app`.
+
+#### ⚠️ 01/09/2026 — o parágrafo acima está errado, e o certo é pior
+
+A frase "não havia contra o que executar" não sobreviveu à primeira tentativa de
+construir o alvo. **Havia.** O `make db-test` monta 20 das 22 tabelas de
+`secullum` desde 24/08: `scripts/_baseline.sql` as cria em `public`, e a
+migration 03 as varre para `secullum`. O que o ensaio não tinha eram as duas
+snake_case — a 03 só varre `^[A-Z]`, e o que é minúsculo ela manda para `app`.
+
+O alvo existia. Ele estava **velho**, e a deriva contra produção era de três
+linhas:
+
+```
+  departamento_id uuid not null,                          ← em "Estrutura"
+  ...estrutura_departamento_id_fkey FOREIGN KEY (departamento_id)
+  CREATE INDEX "Estrutura_departamento_id_fkidx"
+```
+
+As três são a mesma coisa, e é exatamente a coluna que bloqueou a troca do
+runner. Em 21/08 a outra equipe fez backfill de `"Estrutura".departamento_id`
+para `secullum.departamento_gestor` — tabela historizada, escrita só por
+`secullum.departamento_gestor_transition()` — e derrubou a coluna. O baseline de
+24/08 ainda a tinha, então a `sync-cadastro` daqui passava verde em toda suíte
+enquanto era impossível em produção.
+
+**A lição muda de lugar.** Não é "faltava capturar o espelho": é que o espelho
+capturado não tinha dono nem conferência, e envelheceu em silêncio — o mesmo
+modo de falha dos gatilhos de toque, três parágrafos abaixo. Um alvo sem
+verificação é um alvo que mente com a idade.
+
+O que passou a existir em 01/09:
+
+| Peça | Trabalho |
+|---|---|
+| `supabase/fixtures/espelho_secullum.sql` | produção capturada do catálogo, e as 2 tabelas snake_case + a função da outra equipe que o caminho do baseline não entrega |
+| `scripts/verificar_espelho.py` | confere os dois lados — ensaio contra a fixture (na suíte, sem rede) e fixture contra produção (antes de marcar janela) |
+| `scripts/88_teste_espelho.sql` | 22 tabelas · RLS em todas · `force` nas 20 PascalCase · nenhum grant para `anon`/`authenticated` · ponte da 24 fechada |
+| `scripts/_baseline.sql` regenerado | as 20 PascalCase com as colunas de hoje |
+
+E o conserto que a medição obrigou: `upsertManagers` **parou de gravar
+`departamento_id`** em `"Estrutura"`. Nada neste repositório lia esse vínculo —
+`app.manager` (migration 27) o resolve por `Funcionario.EstruturaId` — então
+remover a escrita não perde informação que alguém use. ⏳ **Manter
+`departamento_gestor` continua não implementado**: exige a semântica do ADR-013,
+documento que não está neste repositório.
+
+### A regressão que a janela causou, e o conserto
+
+Religar os jobs às 18:38 **não** restabeleceu a sincronização. As batidas
+falharam em todo ciclo até as 22:33:
+
+```
+record "new" has no field "updated_at"
+```
+
+A `11b` renomeou a função de toque — `toca_atualizado_em`, nome que deixou de
+existir — para `util.touch_updated_at` e
+reescreveu o corpo para gravar `new.updated_at`. As quatro tabelas de ingestão
+ficaram fora da renomeação **de propósito**. Mas produção tem, em duas delas,
+gatilhos `trg_atualizado_em` que a outra equipe criou e que este repositório
+nunca teve — e a renomeação seguiu a função debaixo deles.
+
+O `insert` continuava passando: o gatilho é `before update`, e a escrita da
+sincronização é upsert de janela deslizante, que atualiza. Por isso falhou
+exatamente na sincronização e em mais nada.
+
+Consertado pela **migration 33**, aplicada em produção (ledger → 46), com as
+duas metades: uma função de toque em português para as tabelas em português, e
+a asserção que faltava — *todo gatilho de toque grava numa coluna que a tabela
+tem*. A falha foi reproduzida localmente antes do conserto, com a mensagem
+idêntica.
+
+⚠️ **Isto é a mesma cegueira do bloqueio do `Estrutura`, em outro sintoma.** O
+alvo tem objetos que o ensaio não tem, então o ensaio não pode falhar por causa
+deles. Uma revisão por texto também não pega: nenhuma das 22 migrations cita
+esses gatilhos — o alcance foi indireto, pela função.
+
+### A cisão de diário deixou de ser risco e virou medição
+
+O critério de saída previa `fn_data_freshness` como o item que pegaria isso.
+Ele pega — só não da forma esperada, porque **não devolve linha nenhuma**:
+
+| Diário | Registros em 31/08 |
+|---|---|
+| `app.sync_run` — o que `fn_data_freshness` lê | **0** |
+| `app.job_execucao` — o que o runner da Vercel escreve | **800** |
+
+Enquanto o runner for o da Vercel, o indicador de frescor do painel fica cego
+por construção, e nenhum usuário vê que o dado atrasou. Não é bug a corrigir
+agora: é mais uma consequência de o runner não ter sido trocado, e some junto
+com ela. Registrado para não ser diagnosticado do zero na próxima janela.
+
+### Estado ao fim da janela
+
+- ✅ Schema convergido, ledger em 46, zero tabelas sem RLS
+- ✅ Sincronização rodando — **no runner antigo**, o `kastropark-jobs` da Vercel
+- ⛔ `exposed schemas` **permanece** `public,graphql_public,app,secullum`, e a
+  permanência é decisão: enquanto o runner falar PostgREST, corrigi-lo derruba
+  a sincronização. Foi o incidente de 27/08
+- ⛔ Backend do Railway ainda apontado para staging
+
+### O que a próxima janela precisa antes de ser marcada
+
+1. ✅ **Feito em 01/09.** O schema real de `secullum` capturado neste
+   repositório e, mais importante, **conferido a cada `make db-test`** — a
+   captura sozinha era o que já existia e mentia. Ver o adendo de 01/09 acima.
+2. ⚠️ **As Edge Functions alinhadas a esse schema — parcial.** `Estrutura`
+   fechou: `upsertManagers` não grava mais a coluna que produção não tem, e a
+   suíte reprova se voltar. O resto das funções **nunca correu contra o
+   espelho**: a fixture dá o alvo, e falta o ensaio de fato — subir as duas
+   funções contra o banco descartável e rodar um ciclo.
+   ⏳ Falta também decidir se a sincronização passa a manter
+   `secullum.departamento_gestor`. Hoje não mantém, e ninguém lê.
+3. ⛔ **`deno check` não está em nenhum gate** e acusa 13 erros de tipo em
+   `supabase/functions/_shared/` — pré-existentes, medidos em 01/09 contra o
+   `HEAD`. Quem for mexer nas funções tropeça neles antes de tropeçar no
+   próprio trabalho.
+4. Só então os passos 4 a 7, na ordem em que já estão escritos.
+
+---
+
 ## 4. Critério de saída
 
 - [ ] `net._http_response` com `status_code = 200` nos ciclos após religar —
@@ -500,7 +655,10 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
       `select entity, max(finished_at) from app.sync_run group by 1` antes de
       culpar a sync
 - [ ] O painel abre contra produção e lista unidade e ocorrência
-- [ ] `select count(*) from supabase_migrations.schema_migrations` = 45 (23 + 22)
+- [x] `select count(*) from supabase_migrations.schema_migrations` = 45 (23 + 22)
+      — atingido em 31/08. **Passou a 46** com a migration 33, que consertou
+      a regressão descrita na seção 3b; 45 continua sendo o número que
+      fecha o lote, não o número final do ledger
 - [ ] **O assistente responde uma pergunta de período** — "quantos desvios
       tivemos este mês?" tem de voltar com evento `metrica` e um número, não com
       "Falha ao consultar o modelo". É o item que pega a 31: catálogo e `TYPES`

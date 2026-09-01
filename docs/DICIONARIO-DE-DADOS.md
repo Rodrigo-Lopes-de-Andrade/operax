@@ -2194,7 +2194,6 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
 | `EstruturaId` | integer | não |  |  | Campo `Funcionario.EstruturaId` (= `Estrutura.Id`) — chave de idempotencia. Nunca resolvido subindo por "EstruturaPaiId". |
 | `EstruturaPaiId` | integer | sim |  |  | Campo `Estrutura.EstruturaPaiId`. Guardado so como contexto/diagnostico. 0 = raiz. ⏳ EM ABERTO (ADR-006): qual nivel da arvore e o gestor quando a estrutura nao for raiz. Ate isso ser respondido pelo Owner, NAO subir a arvore. |
-| `departamento_id` | uuid | não |  | `secullum.Departamento` |  |
 | `Descricao` | text | não |  |  | Campo `Estrutura.Descricao` — na pratica, o NOME do gestor responsavel. E o unico dado de identificacao do gestor que o Secullum fornece: e-mail e WhatsApp nao existem la. |
 | `email` | text | sim |  |  | NOSSO (minusculo) apesar de o VALOR vir do Secullum: nao e um campo de `Estrutura`, e o `Funcionario.Email` do funcionario cujo "Nome" bate com "Descricao". E resultado da NOSSA logica de match, nao um no do payload. |
 | `email_origem` | text | não | `'manual'::text` |  | NOSSO (minusculo). manual (default) | secullum. A sincronizacao SO escreve em email quando email IS NULL OU email_origem = 'secullum'. Valor cadastrado pelo Owner NUNCA e sobrescrito. |
@@ -2214,7 +2213,6 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 
 <details><summary>Índices</summary>
 
-- `"Estrutura_departamento_id_fkidx"` — `secullum."Estrutura" USING btree (departamento_id)`
 - `estrutura_tenant_idx` — `secullum."Estrutura" USING btree (tenant_id)`
 - `UNIQUE estrutura_estruturaid_key` — `secullum."Estrutura" USING btree ("EstruturaId")`
 
@@ -3053,6 +3051,7 @@ Não são API. `security definer` com `search_path` travado, `EXECUTE` revogado 
 | `util.is_admin` | `p_tenant_id uuid` | `boolean` |
 | `util.lock_down_new_function` | `` | `event_trigger` |
 | `util.roles_in_tenant` | `p_tenant_id uuid` | `app.user_role[]` |
+| `util.touch_atualizado_em` | `` | `trigger` |
 | `util.touch_updated_at` | `` | `trigger` |
 | `util.user_tenants` | `` | `uuid[]` |
 | `util.validate_alert_payload` | `` | `trigger` |

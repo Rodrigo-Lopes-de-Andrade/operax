@@ -26,33 +26,42 @@ inteiro hoje.
 |---|---|---|
 | S0 · Diagnóstico e blindagem | ✅ | ✅ — é a única que roda lá |
 | S1 · Isolamento e worker | ✅ | ⚠️ quem sincroniza é o `kastropark-jobs` da Vercel, não este repo |
-| S2 · Modelo e superfície de API | ✅ | ❌ 22 das 34 migrations nunca correram lá |
+| S2 · Modelo e superfície de API | ✅ | ✅ **schema convergido em 31/08** — as 35 migrations correram |
 | S3 · Jornada esperada | ✅ motor pronto e testado | ❌ nunca rodou contra dado de produção |
 | S4 · Motor em modo sombra | ✅ entregue | ❌ G4 não é **mensurável** antes de rodar lá |
-| S5 · Dashboard | ✅ fechada, 4 critérios com teste | ❌ ninguém acessa: **zero usuários** em `auth.users` |
+| S5 · Dashboard | ✅ fechada, 4 critérios com teste | ⚠️ 2 usuários criados em 31/08; ninguém abriu o painel contra produção ainda |
 | S6 · Alertas e relatório | ✅ esteira completa | ❌ travada em G4 — zero alertas enviados |
 | S7 · Assistente de IA | ✅ entregue | ⚠️ a API está no ar, apontada para **staging** |
 | S8 · Homologação e produção | ❌ não começou | — |
 | Fase 3 · Folha via Excel | ✅ ponta a ponta em 31/08 | ❌ idem |
 
-**Cinco sprints fechadas em código; uma em produção.**
+**Cinco sprints fechadas em código; duas em produção** — a S2 entrou com a
+janela de 31/08.
 
 ### O que a nuvem responde hoje
 
 Medido em **31/08/2026** pela Management API — leitura de catálogo, nomes nunca
 valores. Reproduzível com `scripts/sb_sql.sh nklobmlxyidqxarzisph`.
 
-| Fato | Produção (`nklobmlxyidqxarzisph`) |
-|---|---|
-| Migrations registradas | **23** (11 stubs + `00`–`11`) — o repositório tem **34** |
-| Tabelas em `app` | 49, **todas com nome em português** — o `11b` não correu |
-| Tabelas em `secullum` | 22 |
-| Policies em `app` | 66 · **zero tabela sem RLS** |
-| Usuários em `auth.users` | **0** |
-| Jobs de `pg_cron` | 2 — apontando para a Vercel |
-| Edge Functions publicadas | 1 · `secullum-test-auth`, publicada em 31/08 para diagnóstico (as duas de sync entram na janela) |
-| Serviços no Railway | 1 · `operax-api`, ambiente `production` |
-| `GET /health` da API | **200 `{"status":"ok"}`** — medido em 31/08 |
+⚠️ **A janela de convergência rodou em 31/08, entre 18:10 e 22:33.** As duas
+colunas abaixo são a mesma medição, antes e depois — porque metade do que a
+janela ia fazer, ela fez, e a outra metade está bloqueada. Desfecho completo em
+`docs/RUNBOOK-JANELA-CONVERGENCIA.md` §3b.
+
+| Fato | Antes (17:00) | Depois (22:40) |
+|---|---|---|
+| Migrations registradas | **23** (11 stubs + `00`–`11`) | **46** — as 22 da janela mais a `33`, que consertou uma regressão dela |
+| Tabelas em `app` | 49, **todas em português** — o `11b` não correu | **54**, em inglês; 5 seguem em português **de propósito** (as 4 de ingestão e a `job_execucao`, que o runner escreve) |
+| Tabelas em `secullum` | 22 | 22 — e **nenhuma delas nasce de migration nossa**: o espelho é da outra equipe, e não existe em local nem em staging |
+| Policies em `app` | 66 · zero tabela sem RLS | **74** · zero tabela sem RLS |
+| Views em `public` | 8 | 8 |
+| Métricas no catálogo | — | 11 |
+| Usuários em `auth.users` | **0** | **2** |
+| Jobs de `pg_cron` | 2 — apontando para a Vercel | 2, ativos — **ainda apontando para a Vercel** |
+| Edge Functions publicadas | 1 · `secullum-test-auth` | 3 · as duas de sync entraram, **publicadas e ociosas**: o `pg_cron` não chama nenhuma delas |
+| `exposed schemas` | `public,graphql_public,app,secullum` | inalterado, **por decisão** — corrigi-lo com o runner falando PostgREST derruba a sincronização |
+| Serviços no Railway | 1 · `operax-api`, ambiente `production` | idem |
+| `GET /health` da API | **200 `{"status":"ok"}`** | idem |
 
 ⚠️ **A API responde, e isso não significa que produção funciona.** As variáveis
 do `operax-api` apontam para **staging** (registro do runbook, 28/08 — não reli

@@ -104,7 +104,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 - Ruff (Python), Prettier + TS strict (frontend). Sentry para erros da aplicação.
 - Observabilidade do agente: **LangSmith é o default** (traces de LLM, tools, latência e tokens). Não introduzir outro vendor sem decisão explícita.
 - Testes: pytest (backend), Vitest (frontend), Playwright (E2E).
-- **Suíte de banco** (`make db-test`): sobe Postgres descartável, aplica as 34 migrations, roda 23 asserções funcionais de isolamento (dois tenants, quatro papéis), 24 asserções de regra de alerta, cadência e provedor, e 13 verificações estruturais, regenera o dicionário de dados e valida que toda referência a objeto de banco na documentação existe. Obrigatória em qualquer PR que toque policy, view, grant ou migration.
+- **Suíte de banco** (`make db-test`): sobe Postgres descartável, aplica as 35 migrations, roda 23 asserções funcionais de isolamento (dois tenants, quatro papéis), 24 asserções de regra de alerta, cadência e provedor, e 13 verificações estruturais, regenera o dicionário de dados, valida que toda referência a objeto de banco na documentação existe e **confere o espelho do Secullum contra a captura de produção**. Obrigatória em qualquer PR que toque policy, view, grant ou migration.
 
 ### Deploy
 
@@ -127,7 +127,8 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 - **`backend/operax/rh/`** — `ownership.py` = a matriz dono-do-campo (sync x RH), lida por template, tela e import; `validators.py` = um funil só para formulário e planilha; `templates.py` = o que cada modelo `.xlsx` carrega; `workbook.py` = gera e lê o arquivo; `importer.py` = o veredito por linha, sem escrever; `repository.py` = o SQL, com leitura como o usuário e gravação junto da auditoria; `employees.py` = a lista e o detalhe da aba Colaboradores; `carga_inicial.py` = o conversor de implantação, que preenche os modelos baixados e **não abre conexão com o banco**.
 - **`backend/operax/core/`** — `db.py` = pools por schema; `tenant.py` = contexto de tenant (todo acesso com `service_role` passa por aqui); `config.py`; `vault.py` = leitura de credencial por tenant.
 - **`backend/server/`** — `main.py` = entrypoint; `deps.py` = valida o JWT do Supabase e resolve tenant e papel; `models.py` = **fonte da verdade dos schemas**; `routers/` = endpoints por área.
-- **`supabase/migrations/`** — 34 migrations aplicadas em ordem (numeradas 00–32, com a 11b). Ver `docs/PLANO-BANCO-OPERAX.md`. ⚠️ **Produção tem 12 delas** (`00`–`11`); as outras 22 entram na janela de convergência — quando um documento fala em "as 22", é desse resto que ele fala, não do total.
+- **`supabase/fixtures/`** — `espelho_secullum.sql` = o schema `secullum` como **produção** o tem, capturado do catálogo em 01/09/2026. As 22 tabelas do espelho são desenho da outra equipe: nenhuma migration daqui as cria. Vinte chegam ao ensaio pelo `scripts/_baseline.sql` (em `public`, a 03 as varre); as duas snake_case pela fixture, porque a 03 só varre `^[A-Z]`. ⚠️ **A captura sozinha já existia e mentia** — estava três linhas atrás de produção, e as três eram `"Estrutura".departamento_id`, a coluna que bloqueou a troca do runner. O que vale é a conferência: `scripts/verificar_espelho.py` roda no `make db-test` (ensaio contra a fixture, sem rede) e sob demanda contra produção (`python3 scripts/verificar_espelho.py <ref>`), que é obrigatório antes de marcar janela.
+- **`supabase/migrations/`** — 35 migrations aplicadas em ordem (numeradas 00–33, com a 11b). Ver `docs/PLANO-BANCO-OPERAX.md`. ✅ **Produção está convergida desde 31/08**: a janela aplicou as 22 que faltavam e a `33` consertou uma regressão delas — ledger em 46 (23 registros antigos + 22 + 1). Quando um documento antigo fala em "as 22", é do lote da janela que ele fala, não do total.
 - **`scripts/`** — diagnóstico, testes de isolamento, gerador do dicionário, verificador de documentação.
 - **`frontend/src/`** — `app/` roteamento; `components/` (`ui/` = design system); `lib/supabase.ts` = cliente com anon key; `lib/api.ts` = cliente do FastAPI; `state/` = sessão + streaming do assistente.
 
@@ -191,16 +192,19 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 │   └── vitest.config.ts
 ├── supabase/
 │   ├── migrations/
+│   ├── fixtures/           # espelho_secullum.sql = o schema `secullum` de producao
 │   ├── functions/          # sincronizacao com o Secullum (Deno) — ainda nao baixadas
 │   └── config.toml
 ├── scripts/
 │   ├── 00_diagnostico.sql
+│   ├── 88_teste_espelho.sql
 │   ├── 98_teste_isolamento_tenant.sql
 │   ├── 99_verificacao_rls.sql
 │   ├── gerar_dicionario.py
 │   ├── rh_carga_inicial.py
 │   ├── testar_migrations.sh
-│   └── verificar_docs.py
+│   ├── verificar_docs.py
+│   └── verificar_espelho.py
 ├── docs/
 ├── CLAUDE.md
 ├── Makefile
@@ -303,7 +307,7 @@ cp frontend/.env.local.example frontend/.env.local
 
 # 3. Banco local + migrações
 supabase start                                    # Postgres + Auth + Storage locais
-supabase db reset                                 # aplica as 34 migrations do zero
+supabase db reset                                 # aplica as 35 migrations do zero
 
 # 4. Rodar / verificar
 make dev                    # backend + frontend
