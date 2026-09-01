@@ -164,7 +164,7 @@ create table if not exists secullum."Empresa" (
   "FechamentoPonto" smallint,
   "DiaFechamentoPonto" smallint,
   "EmitiuAtestadoTecnico" boolean,
-  ativo boolean not null,
+  ativo boolean generated always as (COALESCE((NOT "Desativada"), true)) stored not null,
   tenant_id uuid default '6fcb0cc4-c89e-4549-8e6b-6b348f810371'::uuid not null
 );
 alter table secullum."Empresa" enable row level security;

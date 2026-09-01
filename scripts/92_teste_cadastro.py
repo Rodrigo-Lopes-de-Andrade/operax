@@ -62,9 +62,9 @@ insert into app.tenant (id, slug, name) values ('{TENANT}', 'cadastro-teste', 'C
   on conflict do nothing;
 
 -- Duas empresas no espelho, e um departamento que pertence à primeira.
-insert into secullum."Empresa" (id, "EmpresaId", "Documento", "Nome", ativo, tenant_id) values
-  ('ffffffff-0000-0000-0000-0000000000e1', 7001, '11.222.333/0001-81', 'Empresa A', true, '{TENANT}'),
-  ('ffffffff-0000-0000-0000-0000000000e2', 7002, '44.555.666/0001-72', 'Empresa B', true, '{TENANT}');
+insert into secullum."Empresa" (id, "EmpresaId", "Documento", "Nome", "Desativada", tenant_id) values
+  ('ffffffff-0000-0000-0000-0000000000e1', 7001, '11.222.333/0001-81', 'Empresa A', false, '{TENANT}'),
+  ('ffffffff-0000-0000-0000-0000000000e2', 7002, '44.555.666/0001-72', 'Empresa B', false, '{TENANT}');
 
 insert into secullum."Departamento" (id, "DepartamentoId", empresa_id, "Descricao", tenant_id) values
   ('ffffffff-0000-0000-0000-0000000000d1', 7101, 'ffffffff-0000-0000-0000-0000000000e1', 'Pátio Centro', '{TENANT}'),

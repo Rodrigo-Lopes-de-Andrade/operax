@@ -138,6 +138,8 @@ def main() -> None:
             peca = f"  {ident(col['column'])} {t}"
             if col["is_identity"] == "YES":
                 peca += f" generated {col['identity_generation'].lower()} as identity"
+            elif col.get("is_generated") == "ALWAYS":
+                peca += f" generated always as ({col['generation_expression']}) stored"
             elif col["column_default"]:
                 peca += f" default {col['column_default']}"
             if col["is_nullable"] == "NO":

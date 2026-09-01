@@ -208,8 +208,12 @@ $$;
 insert into app.tenant (id, slug, name) values ('{TENANT}', 'deteccao-teste', 'Detecção')
   on conflict do nothing;
 
-insert into secullum."Empresa" (id, "EmpresaId", "Documento", "Nome", ativo, tenant_id) values
-  ('dddddddd-0000-0000-0000-0000000000d1', 9500, '00000000000191', 'Detecção SA', true, '{TENANT}');
+-- `ativo` é coluna GERADA em produção (`coalesce(not "Desativada", true)`) e o
+-- Postgres recusa escrita nela. Quem se grava é `"Desativada"`. Escrever `ativo`
+-- passava enquanto a captura do espelho perdia a cláusula `generated`; desde
+-- 01/09/2026 ela não perde mais.
+insert into secullum."Empresa" (id, "EmpresaId", "Documento", "Nome", "Desativada", tenant_id) values
+  ('dddddddd-0000-0000-0000-0000000000d1', 9500, '00000000000191', 'Detecção SA', false, '{TENANT}');
 insert into secullum."Departamento" (id, "DepartamentoId", empresa_id, "Descricao", tenant_id) values
   ('dddddddd-0000-0000-0000-0000000000d2', 9500, 'dddddddd-0000-0000-0000-0000000000d1', 'D-999', '{TENANT}');
 

@@ -70,8 +70,12 @@ insert into app.tenant (id, slug, name) values ('{TENANT}', 'jornada-teste', 'Jo
 -- O espelho real exige empresa e departamento: `Funcionario.empresa_id` e
 -- `.departamento_id` são NOT NULL com FK. O stub simulado não exigia — e é
 -- justamente por isso que o baseline real é que vale.
-insert into secullum."Empresa" (id, "EmpresaId", "Documento", "Nome", ativo, tenant_id) values
-  ('c0000000-0000-0000-0000-0000000000d1', 9000, '00000000000191', 'Jornada SA', true, '{TENANT}');
+-- `ativo` é coluna GERADA em produção (`coalesce(not "Desativada", true)`) e o
+-- Postgres recusa escrita nela. Quem se grava é `"Desativada"`. Escrever `ativo`
+-- passava enquanto a captura do espelho perdia a cláusula `generated`; desde
+-- 01/09/2026 ela não perde mais.
+insert into secullum."Empresa" (id, "EmpresaId", "Documento", "Nome", "Desativada", tenant_id) values
+  ('c0000000-0000-0000-0000-0000000000d1', 9000, '00000000000191', 'Jornada SA', false, '{TENANT}');
 insert into secullum."Departamento" (id, "DepartamentoId", empresa_id, "Descricao", tenant_id) values
   ('c0000000-0000-0000-0000-0000000000d2', 9000, 'c0000000-0000-0000-0000-0000000000d1', 'U-999', '{TENANT}');
 

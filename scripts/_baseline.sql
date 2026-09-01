@@ -140,7 +140,7 @@ create table if not exists public."Empresa" (
   "FechamentoPonto" smallint,
   "DiaFechamentoPonto" smallint,
   "EmitiuAtestadoTecnico" boolean,
-  ativo boolean not null
+  ativo boolean generated always as (COALESCE((NOT "Desativada"), true)) stored not null
 );
 create table if not exists public."Estrutura" (
   id uuid default gen_random_uuid() not null,

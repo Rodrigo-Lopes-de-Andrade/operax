@@ -2168,7 +2168,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `FechamentoPonto` | smallint | sim |  |  | [VALIDAR — Postman] Tipo assumido smallint (por analogia com `HorarioDia.Fechamento`, Inteiro 0..23). Se o payload real trouxer "HH:mm" ou boolean, abrir migration corretiva — nao forcar conversao no parser. |
 | `DiaFechamentoPonto` | smallint | sim |  |  | [VALIDAR — Postman] Tipo assumido smallint (dia do mes). Mesma ressalva de "FechamentoPonto". |
 | `EmitiuAtestadoTecnico` | boolean | sim |  |  | [VALIDAR — Postman] Nao consta do manual oficial; reportado pelo Owner no payload real. |
-| `ativo` | boolean | não |  |  | DERIVADA POR NOS (minusculo) e GERADA PELO POSTGRES: coalesce(not "Desativada", true). ⛔ O upsert da sincronizacao NAO pode incluir esta coluna — o Postgres rejeita escrita em coluna gerada. Grave "Desativada". Ver o cabecalho da secao 4 desta migration e ADR-009. |
+| `ativo` | boolean | não | `COALESCE((NOT "Desativada"), true)` |  | DERIVADA POR NOS (minusculo) e GERADA PELO POSTGRES: coalesce(not "Desativada", true). ⛔ O upsert da sincronizacao NAO pode incluir esta coluna — o Postgres rejeita escrita em coluna gerada. Grave "Desativada". Ver o cabecalho da secao 4 desta migration e ADR-009. |
 | `tenant_id` | uuid | não | `'<tenant fastpark>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.

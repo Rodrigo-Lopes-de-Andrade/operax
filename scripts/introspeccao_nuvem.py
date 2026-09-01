@@ -99,7 +99,7 @@ QUERIES: dict[str, str] = {
                ordinal_position as pos, data_type, udt_name, udt_schema,
                character_maximum_length as maxlen, numeric_precision as prec,
                numeric_scale as scale, is_nullable, column_default, is_identity,
-               identity_generation
+               identity_generation, is_generated, generation_expression
         from information_schema.columns
         where table_schema in ({IN_SCHEMAS})
         order by table_schema, table_name, ordinal_position
@@ -344,6 +344,8 @@ def render(ref: str, cat: dict, schemas: tuple[str, ...] = SCHEMAS) -> str:
             # nasce `bigint not null` sem gerador e todo insert sem `id` quebra.
             if col["is_identity"] == "YES":
                 piece += f" generated {col['identity_generation'].lower()} as identity"
+            elif col.get("is_generated") == "ALWAYS":
+                piece += f" generated always as ({col['generation_expression']}) stored"
             elif col["column_default"]:
                 piece += f" default {col['column_default']}"
             if col["is_nullable"] == "NO":
