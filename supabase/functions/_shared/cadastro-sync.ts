@@ -518,7 +518,6 @@ export interface InsertHorarioToleranciaEspecificaItemInput {
 export interface UpsertEstruturaInput {
   secullumEstruturaId: number;
   secullumEstruturaPaiId: number | null;
-  unitId: string;
   name: string;
   /**
    * ⚠️ Sempre explícito (nunca `undefined`/omitido) nesta versão do
@@ -2867,7 +2866,6 @@ export async function runCadastroSync(
     newManagerInputs.push({
       secullumEstruturaId: estrutura.Id,
       secullumEstruturaPaiId: estrutura.EstruturaPaiId ?? null,
-      unitId: unit.id,
       name: estrutura.Descricao,
       email,
       emailSource,

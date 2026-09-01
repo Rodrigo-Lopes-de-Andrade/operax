@@ -515,6 +515,21 @@ export class SupabaseSyncRepository implements SyncRepository {
     }));
   }
 
+  /**
+   * ⚠️ NÃO grava o departamento aqui. `secullum."Estrutura"` teve
+   * `departamento_id` até 21/08/2026, quando a equipe do espelho fez backfill
+   * da coluna para `secullum.departamento_gestor` — uma tabela historizada, com
+   * `observado_desde`/`observado_ate` e escrita só por
+   * `secullum.departamento_gestor_transition()` — e derrubou a coluna. Escrever
+   * nela contra produção é `column does not exist`, e foi o que bloqueou a troca
+   * do runner na janela de 31/08.
+   *
+   * O vínculo departamento -> gestor continua NÃO sendo mantido por esta
+   * função: manter `departamento_gestor` exige a semântica do ADR-013, que não
+   * está neste repositório. Nada aqui lê o vínculo — `app.manager` (migration
+   * 27) o resolve por `Funcionario.EstruturaId` — então a ausência não perde
+   * informação que alguém use hoje. Ver docs/RUNBOOK-JANELA-CONVERGENCIA.md §3b.
+   */
   async upsertManagers(inputs: UpsertEstruturaInput[]): Promise<EstruturaRow[]> {
     if (!inputs.length) return [];
     const now = new Date().toISOString();
@@ -526,7 +541,6 @@ export class SupabaseSyncRepository implements SyncRepository {
     const rows = inputs.map((input) => ({
       EstruturaId: input.secullumEstruturaId,
       EstruturaPaiId: input.secullumEstruturaPaiId,
-      departamento_id: input.unitId,
       Descricao: input.name,
       email: input.email,
       email_origem: input.emailSource,
@@ -540,7 +554,6 @@ export class SupabaseSyncRepository implements SyncRepository {
         rows,
         "EstruturaId",
         "EstruturaPaiId",
-        "departamento_id",
         "Descricao",
         "email",
         "email_origem",
@@ -549,7 +562,6 @@ export class SupabaseSyncRepository implements SyncRepository {
     }
       on conflict ("EstruturaId") do update set
         "EstruturaPaiId" = excluded."EstruturaPaiId",
-        departamento_id = excluded.departamento_id,
         "Descricao" = excluded."Descricao",
         email = excluded.email,
         email_origem = excluded.email_origem,
