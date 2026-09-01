@@ -336,7 +336,7 @@ export interface UpsertHorariosOpcoesInput {
   exibirColunaHorasRepousoFaltantesTrabalhoContinuo: boolean | null;
   horasRepousoConfiguracaoPadrao: boolean | null;
   /** jsonb genérico — shape não confirmado, grava o valor bruto tal como veio. */
-  horasRepousoFaixas: unknown;
+  horasRepousoFaixas: JsonDesconhecido;
   completarBatidasFaltantes: boolean | null;
   permitirFolgasAutomaticas: boolean | null;
   quantidadeFolgasAutomaticas: number | null;
@@ -363,16 +363,16 @@ export interface UpsertHorariosOpcoesInput {
   compensacaoIgnorarFeriados: boolean | null;
   compensacaoIgnorarFolgas: boolean | null;
   /** jsonb genérico — shape não confirmado. */
-  compensacaoMensalFechamento: unknown;
+  compensacaoMensalFechamento: JsonDesconhecido;
   compensacaoCalcularHorasComoNormaisCompatibilidadePontoOff: boolean | null;
   calcularNoturnasIndependenteCompensado: boolean | null;
   calcularBatidasIntermediarias: boolean | null;
   naoCalcularHorasFaltaBatidasIntermediarias: boolean | null;
   /** jsonb genérico — shape não confirmado (veio `[]`). */
-  listaHorasSobreAviso: unknown;
+  listaHorasSobreAviso: JsonDesconhecido;
   calcularHorasInItinere: boolean | null;
   /** jsonb genérico — shape não confirmado (veio `[]`). */
-  listaHorasInItinere: unknown;
+  listaHorasInItinere: JsonDesconhecido;
   somarHorasInItinereNormais: boolean | null;
   calcularHorasInItinereIninterruptas: boolean | null;
 }
@@ -1030,8 +1030,20 @@ export function asTextPassthrough(value: unknown): string | null {
  * significaria inventar estrutura sem evidência (mesmo erro que já quebrou
  * este projeto duas vezes em produção).
  */
-export function asJsonPassthrough(value: unknown): unknown {
-  return value === undefined ? null : value;
+export type JsonDesconhecido =
+  | null
+  | boolean
+  | number
+  | string
+  | JsonDesconhecido[]
+  | { [chave: string]: JsonDesconhecido };
+
+export function asJsonPassthrough(value: unknown): JsonDesconhecido {
+  // O único cast do arquivo, e ele NÃO afirma shape: diz apenas "isto é JSON",
+  // que é o que a coluna `jsonb` do espelho já declara. Sem ele o driver recusa
+  // `unknown` como parâmetro, e a alternativa seria modelar as colunas do item
+  // — exatamente o que os comentários acima proíbem por falta de evidência.
+  return (value === undefined ? null : value) as JsonDesconhecido;
 }
 
 // ---------------------------------------------------------------------------

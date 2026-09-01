@@ -1,10 +1,10 @@
 {
   "tasks": {
-    "//test": "--no-check continua obrigatório, mas o motivo MUDOU em 01/09/2026. Era `secullum-cadastro-types.ts` não existir — nem aqui, nem na nuvem: `import type` some na transpilação, então o módulo nunca chegou ao deploy e o `functions download` não o trazia. Ele foi reconstruído pelo compilador, campo a campo, e `deno task check` agora cobre cadastro-sync.ts. O que sobra são 12 erros nos dois repositórios, todos do helper `sql(rows, ...columns)` do driver `postgres` — problema de tipagem do driver, não de contrato com a origem.",
-    "test": "deno test --allow-net --allow-env --no-check _shared",
-    "check": "deno check _shared/secullum-batida-types.ts _shared/secullum-cadastro-types.ts _shared/postgres-client.ts _shared/cadastro-sync.ts",
+    "test": "deno test --allow-net --allow-env _shared",
+    "check": "deno check _shared/*.ts sync-cadastro/index.ts sync-batidas/index.ts secullum-test-auth/index.ts",
     "lint": "deno lint .",
-    "fmt": "deno fmt ."
+    "fmt": "deno fmt .",
+    "//check": "Cobre tudo desde 01/09/2026. Antes não cobria nada que dependesse de cadastro-sync.ts, porque `secullum-cadastro-types.ts` não existia — o módulo foi reconstruído. Depois sobravam 12 erros do helper `sql(rows, ...columns)` do driver `postgres`: as listas de coluna eram `string[]` e o helper quer `(keyof T)[]` (resolvido com `as const`), e `buildFuncionarioRow` declarava retorno `Record<string, unknown>`, que apagava a forma da linha (resolvido deixando o TypeScript inferir)."
   },
   "lint": {
     "rules": {

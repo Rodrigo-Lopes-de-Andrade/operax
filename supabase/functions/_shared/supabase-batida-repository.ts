@@ -154,7 +154,7 @@ export class SupabaseBatidaRepository implements BatidaSyncRepository {
       "status_dia_rotulo",
       "sincronizado_em",
       "atualizado_em",
-    ];
+    ] as const;
     const result = await this.sql<
       { id: string; funcionario_id: string; Data: string; BatidaId: number | null }[]
     >`
@@ -239,7 +239,7 @@ export class SupabaseBatidaRepository implements BatidaSyncRepository {
       "desconsiderada",
       "sincronizado_em",
       "atualizado_em",
-    ];
+    ] as const;
     const result = await this.sql<
       { id: string; batida_id: string; tipo_coluna: "Entrada" | "Saida"; indice_coluna: number }[]
     >`

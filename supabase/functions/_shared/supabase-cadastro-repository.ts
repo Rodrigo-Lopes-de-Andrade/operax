@@ -239,7 +239,7 @@ export class SupabaseSyncRepository implements SyncRepository {
       "DiaFechamentoPonto",
       "EmitiuAtestadoTecnico",
       "atualizado_em",
-    ];
+    ] as const;
     const result = await this.sql<{ id: string; Documento: string }[]>`
       insert into secullum."Empresa" ${this.sql(rows, ...columns)}
       on conflict ("Documento") do update set
@@ -461,7 +461,7 @@ export class SupabaseSyncRepository implements SyncRepository {
       "Alocar24Horas",
       "sem_expediente",
       "atualizado_em",
-    ];
+    ] as const;
     await this.sql`
       insert into secullum."HorarioDia" ${this.sql(rows, ...columns)}
       on conflict (horario_id, "DiaSemana") do update set
@@ -612,7 +612,7 @@ export class SupabaseSyncRepository implements SyncRepository {
    * (RG, endereço, telefone, filiação, nascimento, observação em texto
    * livre). Nunca logar o retorno desta função.
    */
-  private buildFuncionarioRow(input: UpsertFuncionarioInput, now: string): Record<string, unknown> {
+  private buildFuncionarioRow(input: UpsertFuncionarioInput, now: string) {
     return {
       FuncionarioId: input.secullumFuncionarioId,
       departamento_id: input.unitId,
@@ -924,7 +924,7 @@ export class SupabaseSyncRepository implements SyncRepository {
       afastado_hoje: input.onLeave,
       afastamento_atual_id: input.currentAbsenceId,
     }));
-    const columns = [...FUNCIONARIO_BASE_COLUMNS, "afastado_hoje", "afastamento_atual_id"];
+    const columns = [...FUNCIONARIO_BASE_COLUMNS, "afastado_hoje", "afastamento_atual_id"] as const;
     await this.sql`
       insert into secullum."Funcionario" ${this.sql(rows, ...columns)}
       on conflict ("FuncionarioId") do update set
@@ -1183,7 +1183,7 @@ export class SupabaseSyncRepository implements SyncRepository {
       "CalcularHorasInItinereIninterruptas",
       "sincronizado_em",
       "atualizado_em",
-    ];
+    ] as const;
     await this.sql`
       insert into secullum."HorariosOpcoes" ${this.sql(rows, ...columns)}
       on conflict (horario_id) do update set
@@ -1321,7 +1321,7 @@ export class SupabaseSyncRepository implements SyncRepository {
       "Acumulo",
       "sincronizado_em",
       "atualizado_em",
-    ];
+    ] as const;
     await this.sql`
       insert into secullum."HorarioExtras" ${this.sql(rows, ...columns)}
       on conflict (horario_id) do update set

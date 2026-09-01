@@ -674,10 +674,23 @@ com ela. Registrado para não ser diagnosticado do zero na próxima janela.
    `Nome: string` sem isso afirmaria sobre o Secullum uma garantia que ninguém
    pode conferir — não há sandbox dele para este cliente.
 
-   Resultado medido: `deno check _shared/cadastro-sync.ts` **passa**, e
-   `deno task check` agora o cobre. Sobram **12 erros** nos dois repositórios,
-   todos do helper `sql(rows, ...columns)` do driver `postgres` — tipagem do
-   driver, não contrato com a origem, e fora do escopo desta rodada.
+   Resultado medido: **`supabase/functions/` inteiro type-checa** — os doze
+   módulos de `_shared` e os três entrypoints. Os 12 erros que sobravam eram
+   duas coisas, nenhuma delas contrato com a origem:
+
+   - as listas de coluna eram `string[]`, e o helper `sql(rows, ...columns)`
+     quer `(keyof T)[]` — resolvido com `as const`, que não muda uma linha de
+     runtime;
+   - `buildFuncionarioRow` declarava retorno `Record<string, unknown>`, o que
+     **apagava a forma da linha**: o spread dela não contribuía chave nenhuma e
+     as colunas deixavam de casar. Resolvido deixando o TypeScript inferir.
+
+   Com isso o `deno.json` perdeu o `--no-check` que carregava desde 25/08, e
+   `deno task check` passou a cobrir tudo. O único cast novo está em
+   `asJsonPassthrough`, e ele não afirma shape — diz "isto é JSON", que é o que
+   a coluna `jsonb` do espelho já declara. Modelar as colunas do item é
+   justamente o que os comentários daquele campo proíbem por falta de
+   evidência.
 4. Só então os passos 4 a 7, na ordem em que já estão escritos.
 
 ---
