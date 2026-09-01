@@ -773,6 +773,18 @@ export interface SyncRepository {
   upsertWorkScheduleDays(inputs: UpsertHorarioDiaInput[]): Promise<void>;
   listManagers(): Promise<EstruturaRow[]>;
   upsertManagers(inputs: UpsertEstruturaInput[]): Promise<EstruturaRow[]>;
+
+  /** Linhas VIGENTES de `secullum.departamento_gestor` (`observado_ate is null`). */
+  listCurrentDepartmentManagers(): Promise<VigenciaGestor[]>;
+  /**
+   * Aplica uma transição pela RPC `secullum.departamento_gestor_transition`.
+   *
+   * A RPC é o **único** caminho de escrita da tabela, e o motivo está no
+   * comentário dela: fechar a anterior e abrir a nova numa transação só. Um
+   * `update` seguido de `insert` daqui reintroduziria a janela em que o
+   * departamento fica sem gestor vigente, ou com dois.
+   */
+  transitionDepartmentManager(transicao: TransicaoGestor): Promise<void>;
   /** Leitura em lote do estado ATUAL de employee (ADR-009) — usada antes do upsert, para gerar eventos de histórico. */
   listEmployees(): Promise<ExistingFuncionarioRow[]>;
   /** Retorna as linhas upsertadas (id + chave natural) — necessário para vincular `employee_status_event.employee_id`. */
@@ -880,6 +892,8 @@ export interface SyncSummary {
   absencesUpserted: number;
   /** ADR-010 — linhas apagadas de `employee_absence` na convergência desta execução. */
   absencesDeleted: number;
+  /** Transições gravadas em `secullum.departamento_gestor` nesta execução (ADR-013). */
+  departmentManagerTransitions: number;
   /** ADR-011 — linhas upsertadas em "Cidade" nesta execução (deduplicadas entre Funcionario e Empresa). */
   citiesUpserted: number;
   /** ADR-011 — linhas upsertadas em "Funcao" nesta execução. */
@@ -910,6 +924,7 @@ export interface SyncSummary {
 function emptySummary(): SyncSummary {
   return {
     companiesUpserted: 0,
+    departmentManagerTransitions: 0,
     unitsUpserted: 0,
     managersUpserted: 0,
     employeesUpserted: 0,
@@ -3097,6 +3112,70 @@ export async function runCadastroSync(
   const employeeRows = employeeInputs.length ? await repo.upsertEmployees(employeeInputs) : [];
   summary.employeesUpserted = employeeInputs.length;
 
+  // -------------------------------------------------------------------------
+  // `secullum.departamento_gestor` — vigência de gestor por unidade.
+  //
+  // Roda DEPOIS do upsert de funcionários porque a observação é sobre eles: é o
+  // `EstruturaId` de cada ativo que diz qual "Estrutura" responde pela unidade.
+  // A regra está em `decideDepartmentManagerTransitions`, e a premissa dela
+  // está declarada no comentário daquela função — o ADR-013 não está aqui.
+  // -------------------------------------------------------------------------
+  const observadasPorUnidade = new Map<string, Map<number, number>>();
+  const departamentoSecullumPorUnidade = new Map<string, number>();
+  for (const input of employeeInputs) {
+    if (input.secullumDepartamentoId !== null) {
+      departamentoSecullumPorUnidade.set(input.unitId, input.secullumDepartamentoId);
+    }
+    // Só ativos: um desligado não diz mais nada sobre quem responde pela
+    // unidade hoje, e contá-lo faria uma unidade inteira de desligados manter
+    // um gestor vigente para sempre.
+    if (!input.active || input.secullumEstruturaId === null) continue;
+    const porEstrutura = observadasPorUnidade.get(input.unitId) ?? new Map<number, number>();
+    porEstrutura.set(
+      input.secullumEstruturaId,
+      (porEstrutura.get(input.secullumEstruturaId) ?? 0) + 1,
+    );
+    observadasPorUnidade.set(input.unitId, porEstrutura);
+  }
+
+  const observacoesGestor: ObservacaoGestor[] = [];
+  for (const [unitId, porEstrutura] of observadasPorUnidade) {
+    const estruturas: EstruturaObservada[] = [];
+    for (const [secullumEstruturaId, ativos] of porEstrutura) {
+      const manager = managerByEstruturaId.get(secullumEstruturaId);
+      if (!manager) {
+        // A "Estrutura" não chegou ao espelho nesta passada. Ignorá-la é mais
+        // seguro que inventar: sem o id dela não há o que gravar, e tratá-la
+        // como inexistente poderia tornar a unidade "inequívoca" por omissão.
+        warn(
+          "gestor_sem_estrutura",
+          `Unidade ${unitId}: EstruturaId=${secullumEstruturaId} observado em ` +
+            `funcionário ativo mas ausente do espelho — vigência não avaliada.`,
+        );
+        continue;
+      }
+      estruturas.push({ managerId: manager.id, secullumEstruturaId, ativos });
+    }
+    const secullumDepartamentoId = departamentoSecullumPorUnidade.get(unitId);
+    if (secullumDepartamentoId === undefined) {
+      // `"DepartamentoId"` é `not null` na tabela: sem ele não há linha a
+      // gravar. Silenciar seria pior que avisar — some uma unidade inteira.
+      warn(
+        "gestor_sem_departamento_id",
+        `Unidade ${unitId}: nenhum funcionário trouxe DepartamentoId — vigência não avaliada.`,
+      );
+      continue;
+    }
+    observacoesGestor.push({ unitId, secullumDepartamentoId, estruturas });
+  }
+
+  const vigenciasGestor = await repo.listCurrentDepartmentManagers();
+  const transicoesGestor = decideDepartmentManagerTransitions(observacoesGestor, vigenciasGestor);
+  for (const transicao of transicoesGestor) {
+    await repo.transitionDepartmentManager(transicao);
+  }
+  summary.departmentManagerTransitions = transicoesGestor.length;
+
   // ADR-009: um único INSERT em lote de employee_status_event, comparando o
   // snapshot recém-derivado (employeeInputs) com o snapshot PERSISTIDO (lido
   // acima, antes do upsert) — nunca um insert por funcionário.
@@ -3379,4 +3458,97 @@ export async function runCadastroSync(
 
   flushSuppressedWarnings();
   return summary;
+}
+
+// ---------------------------------------------------------------------------
+// `secullum.departamento_gestor` — qual "Estrutura" responde por um
+// "Departamento", COM VIGÊNCIA (ADR-013).
+//
+// ⚠️ O ADR-013 não está neste repositório. A regra abaixo foi DERIVADA das 25
+// linhas de produção em 01/09/2026 e dos comentários da própria tabela, e a
+// premissa está declarada porque ela pode estar errada:
+//
+//   • Eleição por MAIORIA é proibida — o comentário de `funcionarios_observados`
+//     diz isso literalmente ("proibido eleição por maioria — ADR-013 §4/§4.1").
+//     O campo é diagnóstico humano, não critério.
+//   • Atribuição inicial só acontece quando o departamento é INEQUÍVOCO: os
+//     colaboradores ativos apontam para uma única "Estrutura". Medido: dos dois
+//     departamentos ambíguos de produção, o que nunca teve momento inequívoco
+//     não tem linha nenhuma.
+//   • Uma vez vigente, a atribuição GRUDA enquanto ainda for observada, mesmo
+//     que outra "Estrutura" apareça no departamento. Medido: o outro ambíguo
+//     mantém a "Estrutura" que tinha 3 observados quando a linha foi escrita, e
+//     hoje tem 2, com uma segunda "Estrutura" ao lado.
+//   • Não existe FECHAR SEM SUBSTITUTO: a RPC `departamento_gestor_transition`
+//     exige `p_estrutura_id`, então toda transição abre uma linha. Confere com
+//     produção, onde um departamento sem nenhum ativo hoje segue com a linha
+//     aberta.
+// ---------------------------------------------------------------------------
+
+/** Uma "Estrutura" observada num departamento, com quantos ativos a apontam. */
+export interface EstruturaObservada {
+  managerId: string;
+  secullumEstruturaId: number;
+  ativos: number;
+}
+
+/** O que este ciclo observou para um departamento. */
+export interface ObservacaoGestor {
+  unitId: string;
+  secullumDepartamentoId: number;
+  estruturas: EstruturaObservada[];
+}
+
+/** A linha vigente hoje, se houver. */
+export interface VigenciaGestor {
+  /** `p_close_id` da RPC. */
+  id: string;
+  unitId: string;
+  managerId: string;
+}
+
+/** Uma chamada de `secullum.departamento_gestor_transition`. */
+export interface TransicaoGestor {
+  closeId: string | null;
+  unitId: string;
+  managerId: string;
+  secullumDepartamentoId: number;
+  secullumEstruturaId: number;
+  funcionariosObservados: number;
+}
+
+/**
+ * Decide quais transições este ciclo deve gravar.
+ *
+ * Pura de propósito: a regra é a única parte deste trabalho que foi inferida em
+ * vez de lida, então ela mora onde um teste pode contradizê-la sem banco.
+ */
+export function decideDepartmentManagerTransitions(
+  observacoes: ObservacaoGestor[],
+  vigentes: VigenciaGestor[],
+): TransicaoGestor[] {
+  const vigentePorUnidade = new Map(vigentes.map((v) => [v.unitId, v]));
+  const transicoes: TransicaoGestor[] = [];
+
+  for (const obs of observacoes) {
+    if (obs.estruturas.length === 0) continue; // nada observado: nada a dizer
+    const vigente = vigentePorUnidade.get(obs.unitId);
+
+    // Gruda: a vigente continua sendo observada, então não houve substituição.
+    if (vigente && obs.estruturas.some((e) => e.managerId === vigente.managerId)) continue;
+
+    // Sem unanimidade não há candidato — e eleger por maioria é proibido.
+    if (obs.estruturas.length > 1) continue;
+
+    const escolhida = obs.estruturas[0];
+    transicoes.push({
+      closeId: vigente?.id ?? null,
+      unitId: obs.unitId,
+      managerId: escolhida.managerId,
+      secullumDepartamentoId: obs.secullumDepartamentoId,
+      secullumEstruturaId: escolhida.secullumEstruturaId,
+      funcionariosObservados: escolhida.ativos,
+    });
+  }
+  return transicoes;
 }

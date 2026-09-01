@@ -52,6 +52,7 @@ import type {
   InsertHorarioFaixasExtrasItemInput,
   InsertHorarioToleranciaEspecificaItemInput,
   SyncRepository,
+  TransicaoGestor,
   UpsertCentroCustoInput,
   UpsertCidadeInput,
   UpsertDepartamentoInput,
@@ -65,8 +66,9 @@ import type {
   UpsertHorarioDiaInput,
   UpsertHorarioExtrasInput,
   UpsertHorarioInput,
-  UpsertHorariosOpcoesInput,
   UpsertHorarioToleranciaEspecificaInput,
+  UpsertHorariosOpcoesInput,
+  VigenciaGestor,
 } from "./cadastro-sync.ts";
 
 // Colunas de "Funcionario" reusadas por upsertEmployees E por
@@ -574,6 +576,39 @@ export class SupabaseSyncRepository implements SyncRepository {
       email: row.email ?? null,
       emailSource: row.email_origem,
     }));
+  }
+
+  async listCurrentDepartmentManagers(): Promise<VigenciaGestor[]> {
+    // Tabela pequena — uma linha vigente por departamento, garantida por índice
+    // único parcial. Leitura única, nunca uma consulta por departamento.
+    const rows = await this.sql<
+      { id: string; departamento_id: string; estrutura_id: string }[]
+    >`
+      select id, departamento_id, estrutura_id
+      from secullum.departamento_gestor
+      where observado_ate is null
+    `;
+    return rows.map((row) => ({
+      id: row.id,
+      unitId: row.departamento_id,
+      managerId: row.estrutura_id,
+    }));
+  }
+
+  async transitionDepartmentManager(transicao: TransicaoGestor): Promise<void> {
+    // A RPC fecha a anterior e abre a nova numa transação só (ADR-013 §4). Ela
+    // é `security invoker` e concedida a `service_role`; o retorno é a linha
+    // nova, que ninguém aqui consome.
+    await this.sql`
+      select secullum.departamento_gestor_transition(
+        ${transicao.closeId}::uuid,
+        ${transicao.unitId}::uuid,
+        ${transicao.managerId}::uuid,
+        ${transicao.secullumDepartamentoId}::integer,
+        ${transicao.secullumEstruturaId}::integer,
+        ${transicao.funcionariosObservados}::integer
+      )
+    `;
   }
 
   async listEmployees(): Promise<ExistingFuncionarioRow[]> {

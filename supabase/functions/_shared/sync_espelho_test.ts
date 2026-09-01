@@ -173,6 +173,16 @@ Deno.test({
     assert(resumo.scheduleDaysUpserted > 0, "nenhum dia de escala foi escrito");
     assert(resumo.citiesUpserted > 0, "a cidade não foi escrita");
     assert(resumo.functionsUpserted > 0, "a função não foi escrita");
+    // A vigência de gestor é a escrita mais nova, e a única que passa por uma
+    // RPC da outra equipe — `secullum.departamento_gestor_transition`. O
+    // funcionário do ensaio é o único ativo da unidade dele e aponta para uma
+    // "Estrutura" só, então é o caso inequívoco: uma transição, sem fechar
+    // nada.
+    assertEquals(
+      resumo.departmentManagerTransitions,
+      1,
+      "a vigência de gestor não foi gravada — a RPC do espelho não foi exercitada",
+    );
   },
 });
 

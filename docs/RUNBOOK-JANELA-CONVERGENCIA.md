@@ -652,8 +652,27 @@ com ela. Registrado para não ser diagnosticado do zero na próxima janela.
    e uma segunda passada zeraria os contadores: sem isso a asserção "escreveu"
    só valeria em banco recém-criado.
 
-   ⏳ Falta decidir se a sincronização passa a manter
-   `secullum.departamento_gestor`. Hoje não mantém, e ninguém lê.
+   ✅ **`secullum.departamento_gestor` passou a ser mantida** — com premissa
+   declarada, porque o ADR-013 não está neste repositório. A regra foi derivada
+   das 25 linhas de produção medidas em 01/09 e dos comentários da própria
+   tabela, e mora numa função pura (`decideDepartmentManagerTransitions`) para
+   que um teste possa contradizê-la:
+
+   | Evidência | Regra que ela sustenta |
+   |---|---|
+   | `funcionarios_observados`: *"proibido eleição por maioria — ADR-013 §4/§4.1"* | maioria **não** elege; o campo é diagnóstico |
+   | departamento `192733c0`: 2 Estruturas (2 e 1 ativos), **zero linhas** | atribuição inicial só quando **inequívoco** |
+   | departamento `d9b91b52`: vigente com 2 ativos, segunda Estrutura com 1 | uma vez vigente, **gruda** enquanto observada |
+   | a RPC exige `p_estrutura_id`; um departamento sem ativos segue aberto | **não existe fechar sem substituto** |
+
+   ⚠️ **Era aqui que eu ia errar.** A regra que eu inferiria — maioria dos
+   colaboradores — é exatamente a que o comentário da tabela proíbe. Foi ler o
+   espelho, e não raciocinar sobre ele, que evitou escrever história errada numa
+   tabela de outra equipe.
+
+   A escrita vai pela RPC `secullum.departamento_gestor_transition`, que é o
+   único caminho permitido: ela fecha a anterior e abre a nova numa transação
+   só. O ensaio exercita essa chamada contra o espelho real.
 3. ✅ **O bloqueio real do item 2 caiu em 01/09: `secullum-cadastro-types.ts`
    não existia.** `cadastro-sync.ts` importava 15 tipos dele, e o módulo não
    estava nem aqui nem na nuvem — `import type` some na transpilação, então ele
