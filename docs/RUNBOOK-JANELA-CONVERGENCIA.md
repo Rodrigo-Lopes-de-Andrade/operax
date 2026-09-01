@@ -633,10 +633,30 @@ com ela. Registrado para não ser diagnosticado do zero na próxima janela.
    funções contra o banco descartável e rodar um ciclo.
    ⏳ Falta também decidir se a sincronização passa a manter
    `secullum.departamento_gestor`. Hoje não mantém, e ninguém lê.
-3. ⛔ **`deno check` não está em nenhum gate** e acusa 13 erros de tipo em
-   `supabase/functions/_shared/` — pré-existentes, medidos em 01/09 contra o
-   `HEAD`. Quem for mexer nas funções tropeça neles antes de tropeçar no
-   próprio trabalho.
+3. ✅ **O bloqueio real do item 2 caiu em 01/09: `secullum-cadastro-types.ts`
+   não existia.** `cadastro-sync.ts` importava 15 tipos dele, e o módulo não
+   estava nem aqui nem na nuvem — `import type` some na transpilação, então ele
+   nunca chegou ao deploy e o `functions download` não o trazia. O deploy
+   funcionava; o `deno check` não passava; e **não havia tipo contra o qual
+   construir a carga de um ensaio**. Era esse o motivo de fundo de "as funções
+   nunca correram contra o espelho", não a falta de alvo.
+
+   Reconstruído pelo método do irmão `secullum-batida-types.ts`: **pelo
+   compilador, campo a campo, a partir de cada acesso que o código faz** — não
+   do que a origem promete, e não do que o espelho guardou. Com as 15
+   interfaces vazias, `deno check` lista cada propriedade que falta e em qual
+   tipo; foram **275**, em quatro rodadas. O espelho serviu de conferência
+   (`RawFuncionario` 72 campos x 77 colunas), não de fonte.
+
+   A tipagem é permissiva de propósito: os leitores recebem `unknown` e validam
+   em runtime, e tipo forte só onde o código atribui direto. Declarar
+   `Nome: string` sem isso afirmaria sobre o Secullum uma garantia que ninguém
+   pode conferir — não há sandbox dele para este cliente.
+
+   Resultado medido: `deno check _shared/cadastro-sync.ts` **passa**, e
+   `deno task check` agora o cobre. Sobram **12 erros** nos dois repositórios,
+   todos do helper `sql(rows, ...columns)` do driver `postgres` — tipagem do
+   driver, não contrato com a origem, e fora do escopo desta rodada.
 4. Só então os passos 4 a 7, na ordem em que já estão escritos.
 
 ---

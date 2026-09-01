@@ -1,8 +1,8 @@
 {
   "tasks": {
-    "//test": "--no-check é obrigatório e o motivo está em _shared/secullum-batida-types.ts: `secullum-cadastro-types.ts` não existe — nem aqui, nem na nuvem. `import type` some na transpilação, então o módulo nunca chegou ao deploy e o `functions download` não o traz. Enquanto ele não for reconstruído, `deno check` não passa em nada que dependa de cadastro-sync.ts. Os testes rodam; o type-check não.",
+    "//test": "--no-check continua obrigatório, mas o motivo MUDOU em 01/09/2026. Era `secullum-cadastro-types.ts` não existir — nem aqui, nem na nuvem: `import type` some na transpilação, então o módulo nunca chegou ao deploy e o `functions download` não o trazia. Ele foi reconstruído pelo compilador, campo a campo, e `deno task check` agora cobre cadastro-sync.ts. O que sobra são 12 erros nos dois repositórios, todos do helper `sql(rows, ...columns)` do driver `postgres` — problema de tipagem do driver, não de contrato com a origem.",
     "test": "deno test --allow-net --allow-env --no-check _shared",
-    "check": "deno check _shared/secullum-batida-types.ts _shared/postgres-client.ts",
+    "check": "deno check _shared/secullum-batida-types.ts _shared/secullum-cadastro-types.ts _shared/postgres-client.ts _shared/cadastro-sync.ts",
     "lint": "deno lint .",
     "fmt": "deno fmt ."
   },
