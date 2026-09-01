@@ -176,6 +176,29 @@ runner trocar.
 que entra no `CORS_ORIGINS` e nas Redirect URLs — o **alias do projeto**, nunca a
 URL de deployment com hash, que muda a cada publicação e levaria o login junto.
 
+⚠️ **Deixou de ser verdade, e a lista de produção ainda não sabe.** Medido em
+01/09/2026 pela Management API e por HTTP: o painel vive em
+**`app.fastparks.com.br`**, e `operaxfonted.vercel.app` responde **307** para lá.
+A Redirect URL de produção nomeia o *redirecionador*, não o painel:
+
+| Projeto | `site_url` | `uri_allow_list` |
+|---|---|---|
+| produção `nklob…` | `operaxfonted.vercel.app` | só ele e `/**` |
+| staging `wbzaq…` | `app.fastparks.com.br` | os dois hosts + `localhost:3000` |
+
+**Isso não quebra nada hoje, e o motivo importa mais do que o fato.** O painel
+só usa `supabase.auth.signInWithPassword` — não há magic link, OAuth nem
+recuperação de senha em `frontend/src/` (nenhum `emailRedirectTo`, nenhuma rota
+`/auth/callback`). Fluxo de senha não consulta a allow list. O 307 também
+preserva a query, conferido: `?code=TESTE123` chega inteiro ao outro host.
+
+⛔ **Vira defeito no dia em que alguém adicionar "esqueci minha senha".** Aí o
+painel pede `emailRedirectTo` do próprio host, produção recusa por não estar na
+lista e cai calado no `site_url` — o usuário recebe um e-mail que o leva ao lugar
+errado, sem erro em lugar nenhum. Corrigir é aditivo (acrescentar
+`https://app.fastparks.com.br` e `/**` à lista), mas é escrita em configuração de
+produção: **decisão do dono**, não item que se resolve de passagem.
+
 ⚠️ **A ordem entre os dois deploys não é livre.** `frontend/src/lib/env.ts`
 valida `NEXT_PUBLIC_API_URL` como URL obrigatória e falha alto sem ela — medido
 em 28/08: com o projeto sem variável nenhuma, `operaxfonted.vercel.app` respondia
@@ -621,13 +644,43 @@ com ela. Registrado para não ser diagnosticado do zero na próxima janela.
   a sincronização. Foi o incidente de 27/08
 - ⛔ Backend do Railway ainda apontado para staging
 
+### 01/09/2026 — a linha de base que a janela não pode piorar
+
+Medido hoje pelo `app.job_execucao` de produção, que é o diário do runner atual.
+Existe porque "a sincronização voltou" não é afirmação verificável sem um número
+de antes:
+
+| Classe de erro | Ocorrências em 48 h | Primeira | Última |
+|---|---|---|---|
+| gatilho `updated_at` em `app.batida_marcacao` | 16 | 31/08 21:45 | **01/09 01:30** |
+| `Falha ao autenticar no Secullum (HTTP 500)` | 2 | 01/09 03:30 | 01/09 19:30 |
+| `Secullum retornou HTTP 503` (GET Batidas / Funcionarios) | 2 | 31/08 00:00 | 31/08 00:00 |
+
+✅ **A migration 33 está provada por comportamento, não por ledger.** A série de
+16 falhas termina às 01:30 de hoje e não reaparece em 81 execuções seguintes de
+`sync_batidas`. Ledger em 46 diz que ela foi *aplicada*; o fim da série diz que
+ela **funcionou**.
+
+O que sobra são 4 falhas em 48 h, todas do lado da origem (500 e 503 do
+Secullum), contra 96 execuções de batidas e 48 de cadastro por dia. **~2 % de
+falha transitória é o normal a bater depois da troca de runner** — acima disso,
+o problema é a troca, não o Secullum.
+
+Volume no mesmo momento: 176 funcionários, 1.576 linhas em `secullum."Batida"`,
+5.118 em `app.batida_marcacao` (eram 4.822 em 31/08 — está crescendo), última
+data de batida **01/09**. Zero tabelas de `app` sem RLS, 8 views em `public`.
+
+✅ **O espelho confere contra produção** — `scripts/verificar_espelho.py
+nklobmlxyidqxarzisph`, 1.305 linhas de DDL idênticas. É a conferência que o
+`CLAUDE.md` exige antes de marcar data, e ela está verde hoje.
+
 ### O que a próxima janela precisa antes de ser marcada
 
 1. ✅ **Feito em 01/09.** O schema real de `secullum` capturado neste
    repositório e, mais importante, **conferido a cada `make db-test`** — a
    captura sozinha era o que já existia e mentia. Ver o adendo de 01/09 acima.
 2. ✅ **O ciclo de cadastro correu contra o espelho, e passou** — primeira vez
-   nesta base. `_shared/cadastro-sync_espelho_test.ts` roda `runCadastroSync`
+   nesta base. `_shared/sync_espelho_test.ts` roda `runCadastroSync`
    com origem falsa e **banco real**, e reprova alto em `42703`/`42P01`. O
    caminho curto que o torna barato: `column does not exist` é erro de *parse*,
    levantado antes de qualquer constraint — então um ciclo que atravessa sem

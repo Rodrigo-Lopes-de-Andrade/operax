@@ -86,7 +86,7 @@ if [ -n "${ENSAIO_DATABASE_URL:-}" ]; then
     echo "--- ensaio dos ciclos de sincronização contra o espelho"
     ( cd supabase/functions \
       && DATABASE_URL="$ENSAIO_DATABASE_URL" deno test --allow-net --allow-env \
-           --no-check _shared/sync_espelho_test.ts ) || exit 1
+           _shared/sync_espelho_test.ts ) || exit 1
   else
     echo "!!! ENSAIO PULADO: deno não está instalado, e ENSAIO_DATABASE_URL foi definida"
     exit 1
