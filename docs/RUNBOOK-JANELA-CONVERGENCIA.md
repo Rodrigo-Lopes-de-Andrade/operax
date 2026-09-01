@@ -626,13 +626,27 @@ com ela. Registrado para não ser diagnosticado do zero na próxima janela.
 1. ✅ **Feito em 01/09.** O schema real de `secullum` capturado neste
    repositório e, mais importante, **conferido a cada `make db-test`** — a
    captura sozinha era o que já existia e mentia. Ver o adendo de 01/09 acima.
-2. ⚠️ **As Edge Functions alinhadas a esse schema — parcial.** `Estrutura`
-   fechou: `upsertManagers` não grava mais a coluna que produção não tem, e a
-   suíte reprova se voltar. O resto das funções **nunca correu contra o
-   espelho**: a fixture dá o alvo, e falta o ensaio de fato — subir as duas
-   funções contra o banco descartável e rodar um ciclo.
-   ⏳ Falta também decidir se a sincronização passa a manter
+2. ✅ **O ciclo de cadastro correu contra o espelho, e passou** — primeira vez
+   nesta base. `_shared/cadastro-sync_espelho_test.ts` roda `runCadastroSync`
+   com origem falsa e **banco real**, e reprova alto em `42703`/`42P01`. O
+   caminho curto que o torna barato: `column does not exist` é erro de *parse*,
+   levantado antes de qualquer constraint — então um ciclo que atravessa sem
+   ele já provou que as 21 escritas são dizíveis contra o schema de produção.
+   Roda no `make db-test` quando `ENSAIO_DATABASE_URL` está definida, e diz
+   alto quando não roda.
+
+   ⚠️ **Ele reprovou de primeira, e por um defeito da ferramenta da manhã.**
+   `secullum."Empresa".ativo` é coluna GERADA em produção
+   (`coalesce(not "Desativada", true)`), e a captura perdia a cláusula
+   `generated always as`: no ensaio ela virava coluna comum `not null` sem
+   default, e o `upsertCompanies` — que a omite justamente por ela ser gerada —
+   estourava. **O verificador de drift jamais pegaria isso**, porque passa os
+   dois lados pelo mesmo renderizador e a perda se cancela. Consertado nos dois
+   geradores; quatro fixtures de teste que escreviam `ativo` foram alinhadas.
+
+   ⏳ Falta decidir se a sincronização passa a manter
    `secullum.departamento_gestor`. Hoje não mantém, e ninguém lê.
+   ⏳ Falta o ensaio equivalente para `sync-batidas`.
 3. ✅ **O bloqueio real do item 2 caiu em 01/09: `secullum-cadastro-types.ts`
    não existia.** `cadastro-sync.ts` importava 15 tipos dele, e o módulo não
    estava nem aqui nem na nuvem — `import type` some na transpilação, então ele
