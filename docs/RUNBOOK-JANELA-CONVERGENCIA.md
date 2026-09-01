@@ -644,9 +644,16 @@ com ela. Registrado para não ser diagnosticado do zero na próxima janela.
    dois lados pelo mesmo renderizador e a perda se cancela. Consertado nos dois
    geradores; quatro fixtures de teste que escreviam `ativo` foram alinhadas.
 
+   ✅ **`sync-batidas` também.** `_shared/sync_espelho_test.ts` roda os dois
+   ciclos na ordem em que a realidade os põe — cadastro cria o funcionário,
+   batidas se correlaciona a ele — e juntos atravessam as 17 tabelas do espelho
+   que os repositórios escrevem, mais `app.batida_marcacao` e os dois diários
+   de evento. A carga é única por execução, porque a sincronização é idempotente
+   e uma segunda passada zeraria os contadores: sem isso a asserção "escreveu"
+   só valeria em banco recém-criado.
+
    ⏳ Falta decidir se a sincronização passa a manter
    `secullum.departamento_gestor`. Hoje não mantém, e ninguém lê.
-   ⏳ Falta o ensaio equivalente para `sync-batidas`.
 3. ✅ **O bloqueio real do item 2 caiu em 01/09: `secullum-cadastro-types.ts`
    não existia.** `cadastro-sync.ts` importava 15 tipos dele, e o módulo não
    estava nem aqui nem na nuvem — `import type` some na transpilação, então ele

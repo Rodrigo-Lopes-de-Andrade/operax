@@ -77,22 +77,22 @@ RC=${PIPESTATUS[0]}
 [ $RC -ne 0 ] && exit $RC
 
 # ---------------------------------------------------------------------------
-# O ciclo de cadastro contra o espelho — o ensaio que as Edge Functions nunca
-# tiveram. Opt-in porque o Deno roda no HOST e o psql daqui pode estar atrás de
-# um wrapper: a porta que o teste precisa não dá para derivar de PGPORT.
+# Os dois ciclos de sincronização contra o espelho — o ensaio que as Edge
+# Functions nunca tiveram. Opt-in porque o Deno roda no HOST e o psql daqui
+# pode estar atrás de um wrapper: a porta não dá para derivar de PGPORT.
 # ---------------------------------------------------------------------------
 if [ -n "${ENSAIO_DATABASE_URL:-}" ]; then
   if command -v deno >/dev/null 2>&1; then
-    echo "--- ensaio do ciclo de cadastro contra o espelho"
+    echo "--- ensaio dos ciclos de sincronização contra o espelho"
     ( cd supabase/functions \
       && DATABASE_URL="$ENSAIO_DATABASE_URL" deno test --allow-net --allow-env \
-           --no-check _shared/cadastro-sync_espelho_test.ts ) || exit 1
+           --no-check _shared/sync_espelho_test.ts ) || exit 1
   else
     echo "!!! ENSAIO PULADO: deno não está instalado, e ENSAIO_DATABASE_URL foi definida"
     exit 1
   fi
 else
-  echo "!!! ensaio do ciclo de cadastro NÃO RODOU — defina ENSAIO_DATABASE_URL, ex.:"
+  echo "!!! ensaio dos ciclos de sincronização NÃO RODOU — defina ENSAIO_DATABASE_URL, ex.:"
   echo "    ENSAIO_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55322/$DB"
 fi
 
