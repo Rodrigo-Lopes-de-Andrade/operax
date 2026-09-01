@@ -63,6 +63,30 @@ janela ia fazer, ela fez, e a outra metade está bloqueada. Desfecho completo em
 | Serviços no Railway | 1 · `operax-api`, ambiente `production` | idem |
 | `GET /health` da API | **200 `{"status":"ok"}`** | idem |
 
+### 01/09/2026 — o painel está no ar, e num domínio que nenhum documento citava
+
+Descoberto ao empurrar o backend: **`https://app.fastparks.com.br`** serve uma
+tela de login com a marca FastPark, e `operaxfonted.vercel.app` redireciona 307
+para lá. Lido do bundle público (`NEXT_PUBLIC_*` viajam para todo navegador),
+ele aponta **ponta a ponta para staging** — `wbzaqjlfpqteesehapnn` e a API do
+Railway, que também aponta para staging. `api.fastparks.com.br` não resolve.
+
+Três desalinhos, medidos e consertados no mesmo dia com autorização do dono:
+
+| O quê | Antes | Depois |
+|---|---|---|
+| `CORS_ORIGINS` | só `operaxfonted.vercel.app`; preflight do domínio real dava **400**, igual a origem invasora | domínio real primeiro, o antigo mantido |
+| `site_url` / `uri_allow_list` (staging) | só `operaxfonted.vercel.app` | domínio real incluído |
+| `disable_signup` (staging) | `false` | `true` |
+
+O CORS quebrado tinha uma consequência exata: **Caminho 1 funcionava e Caminho 2
+não.** Login e agregados iam direto ao Supabase; dado individual, escrita e o
+assistente morriam no navegador. Um painel que abre e não carrega metade — e que
+passava por "no ar" em qualquer verificação que só olhasse `/health`.
+
+⚠️ **Requisição simples não testa CORS:** `/health` devolve 200 sem header para
+qualquer origem. Só o **preflight** distingue (200 com `allow-origin` x 400 sem).
+
 ⚠️ **A API responde, e isso não significa que produção funciona.** As variáveis
 do `operax-api` apontam para **staging** (registro do runbook, 28/08 — não reli
 os valores, e não pretendo: uma delas é a `service_role`). Um `/health` verde é

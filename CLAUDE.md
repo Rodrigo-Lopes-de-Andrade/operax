@@ -108,7 +108,7 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 
 ### Deploy
 
-- **Backend:** Railway (via `Dockerfile`). Migrações rodam no **pre-deploy command** (`supabase db push`) — nunca aplicar manualmente em produção.
+- **Backend:** Railway, serviço `operax-api`, deploy automático a cada push em `feature/s5-gestao-de-ponto`, root `/backend`. ⚠️ **Medido em 01/09/2026:** o builder configurado é **RAILPACK**, não o `Dockerfile`, e **não existe pre-deploy command** — ao contrário do que esta linha afirmava. **Nenhum deploy aplica migration alguma**, em nenhum ambiente. Quem quiser schema novo aplica à mão, e é por isso que staging está sem a `33`.
 - **Frontend:** Vercel.
 - **Banco:** Supabase gerenciado. **Exposed schemas deve conter apenas `public` e `graphql_public`** — checar após qualquer mudança de projeto.
 - **Topologia:** instância única no Railway — rate limiting in-memory é aceitável; revisar antes de escalar horizontalmente.
@@ -247,6 +247,11 @@ Só agregado não sensível: `vw_deviation_summary_by_unit`, `vw_deviation_daily
 - Sessão gerenciada pelo `@supabase/ssr`; refresh é responsabilidade do SDK.
 - **Domínios (produção):** frontend em `app.<dominio>` (Vercel) e API em
   `api.<dominio>` (Railway) — mesmo domínio raiz.
+  ⚠️ **O desenho ainda não é o que está no ar.** Medido em 01/09/2026: o painel
+  vive em **`app.fastparks.com.br`** (`operaxfonted.vercel.app` redireciona 307
+  para lá), mas **`api.fastparks.com.br` não resolve** — o painel chama a API
+  pelo endereço do Railway. E o painel aponta ponta a ponta para **staging**,
+  não para produção. Ver `docs/RUNBOOK-JANELA-CONVERGENCIA.md`.
 - **CORS:** origem exata do frontend com `allow_credentials=True`. Com credenciais,
   `*` é proibido.
 
