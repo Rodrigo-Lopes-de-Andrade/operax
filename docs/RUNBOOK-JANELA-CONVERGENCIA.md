@@ -521,17 +521,27 @@ com `status_code` e `content`.
 python3 scripts/90_reconciliar_sync.py --dias 2
 ```
 
-⛔ **E nem 200 basta.** O script afirma três coisas, e a terceira é a que não se
+⛔ **E nem 200 basta.** O script afirma quatro coisas, e a última é a que não se
 deduz de relatório nenhum:
 
-1. a última execução de `Batida` terminou `completed`;
-2. ela gravou linha (`records_written > 0`);
-3. **nenhuma `Batida` na janela está sem marcação** — verificado contra o dado, e
+1. **as duas entidades deixaram rastro** — `Batida` e `Funcionario`. Conferir só
+   uma deixa passar o modo de falha que o diário existe para pegar: entidade que
+   nunca escreve vira ausência, e ausência não alarma em lugar nenhum;
+2. a última execução **terminada** de cada uma acabou `completed`;
+3. ela gravou linha (`records_written > 0`);
+4. **nenhuma `Batida` na janela está sem marcação** — verificado contra o dado, e
    não contra o resumo, porque um resumo é o que o código achou que fez.
 
-O item 3 é o estado que o motor lê como `no_punches` e transforma em indício
+O item 4 é o estado que o motor lê como `no_punches` e transforma em indício
 contra quem bateu ponto. Sai com código 1 em qualquer falha, para servir de
 portão.
+
+⚠️ **Uma execução `running` no instante em que você roda o script não reprova.**
+Desde a migration 34 a função reivindica a linha antes de ler a origem, então a
+mais recente pode estar legitimamente em andamento — as afirmações 2 e 3 olham a
+última **terminada**. O que reprova é uma reivindicação passada do lease de 10
+min: ela diz que a função morreu no meio e que a execução seguinte, que a
+encerraria, não chegou.
 
 Rodar de novo **depois** de a janela deslizante ter passado sobre a parada
 inteira. Não existe backfill a esperar — ver passo 6.
@@ -559,14 +569,15 @@ Medido em produção em 27/08/2026, por leitura:
 A inferência estrutural do §4b do plano deixa de ser inferência. E a consequência
 é exata: com o lote aplicado e o runner intocado, `app.sync_run` segue vazio,
 `fn_data_freshness` devolve **zero linha**, e `90_reconciliar_sync.py` para na
-**afirmação 1** — *"app.sync_run não tem nenhuma execução de 'Batida'"* — saindo
-com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 4.
+**afirmação 1** — *"app.sync_run não tem nenhuma execução terminada de
+'Batida'"* — saindo com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 4.
 
 #### O que a conversão de diário exige — medido, não suposto
 
 1. **Grão.** `app.job_execucao` tem uma linha por **job**: `job` só assume
    `sync_batidas` e `sync_cadastro`. `fn_data_freshness` agrupa por **entidade**, e
-   `90_reconciliar_sync.py` procura `entity = 'Batida'`. Uma passada de cadastro
+   `90_reconciliar_sync.py` procura `Batida` e `Funcionario` — as duas, desde
+   02/09; até então só a primeira. Uma passada de cadastro
    carimba **17 entidades** no `resumo` (`companiesUpserted`, `unitsUpserted`,
    `employeesUpserted`, `schedulesUpserted`, `absencesUpserted`, …).
    ⚠️ **A conclusão que este item tirava daí — "uma linha de job vira N linhas
@@ -664,7 +675,8 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
    `app.sync_run`, não confere uma lista de entidades esperadas. Entidade que
    nunca escreve não vira linha velha — **vira ausência**, que nenhum painel lê
    como problema. E o passo 7 não reprovaria, porque `90_reconciliar_sync.py`
-   só procura `entity = 'Batida'`.
+   só procurava `entity = 'Batida'` — ✅ passou a exigir as duas em 02/09, senão
+   escrever o diário e não conferi-lo seria meio conserto.
 
    ⚠️ **Foi UMA linha por passada, e não uma por entidade** — o que este item
    e o item 1 diziam antes. A razão de mudar é medida:
