@@ -429,6 +429,40 @@ intervalo é a janela real.
 
    As três seguem **dormentes**: o `pg_cron` continua chamando a Vercel até o
    item 2 abaixo.
+
+   ✅ **A `sync-batidas` nova rodou contra produção — 02/09, cinco vezes.** Era o
+   que faltava: o ensaio usa origem falsa contra um espelho do schema, e nada
+   tinha exercitado o runner novo com dado real. Invocada à mão, com o segredo,
+   entre ciclos da Vercel:
+
+   | escopo | lidos | gravados | pulados | duração | status |
+   |---|---|---|---|---|---|
+   | `incremental` (4x) | 231 | 231 | 0 | 3,5–5 s | `completed` |
+   | `backfill` (1x) | **618** | 618 | 0 | 5,2 s | `completed` |
+
+   O que isso fecha, e não é pouco: a conexão direta escreve; a reivindicação e
+   o fechamento funcionam (5 linhas em `app.sync_run`, nenhuma fora de
+   `completed`); `batidaIdMismatches` = 0; e o **escopo `backfill` existe de
+   verdade** — 618 registros contra 231, que é o contrato de D-7 da
+   `SPEC-TECNICA.md` rodando pela primeira vez. Cinco passadas seguidas deixaram
+   `app.batida_marcacao` em 5.404 e `secullum."Batida"` em 1.653, praticamente
+   inalterados: a idempotência é medida, não presumida.
+
+   ⚠️ **O que continua sem prova em produção é o lock composto.** O índice foi
+   exercitado lá (o bloco da migration 34 correu em produção) e `claimSyncRun`
+   foi provado contra Postgres real no ensaio, mas as duas metades nunca se
+   encontraram fora do ensaio: duas tentativas de sobrepor invocações falharam
+   por 2,2 s e por **58 ms**, porque a execução (≈4 s) é mais curta que a
+   latência entre chamadas. Não é bloqueio para a janela — sem lock nenhum é
+   exatamente o estado de hoje —, mas fica dito em vez de suposto.
+
+   ⛔ **A `sync-cadastro` nova ainda NÃO rodou contra produção.** A diferença
+   dela é escrever em `secullum.departamento_gestor`, tabela da outra equipe.
+   Simulado sem escrever, com a função pura `decideDepartmentManagerTransitions`
+   alimentada pelo dado real de 02/09: **uma transição**, no departamento 3
+   (`U-053 - Evidence Offices`), para a Estrutura 6 — 3 ativos, todos sob ela, e
+   **zero vigência aberta**. É o caso inequívoco de atribuição inicial, e não
+   fecha vigência de ninguém. Decisão de quando fazê-la é do dono.
 2. Reescrever o comando dos dois jobs de `pg_cron`: hoje fazem **GET** no
    `vercel_jobs_base_url`; passam a invocar as funções. É a reescrita do comando
    que desliga a chamada à Vercel — não há gesto separado para isso.
