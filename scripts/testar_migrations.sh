@@ -76,6 +76,26 @@ psql -q -v ON_ERROR_STOP=1 -f scripts/88_teste_espelho.sql 2>&1 \
 RC=${PIPESTATUS[0]}
 [ $RC -ne 0 ] && exit $RC
 
+echo "--- a integração que destrava app.sync_run (tudo em rollback)"
+psql -q -v ON_ERROR_STOP=1 <<'SQL' 2>&1 \
+  | grep -Ev '^(DO|SET|BEGIN|ROLLBACK)' | sed "s/^psql:[^ ]* //"
+begin;
+\i scripts/janela_integracao_secullum.sql
+\i scripts/janela_integracao_secullum.sql
+do $g$ begin
+  if (select count(*) from app.integration where provider='secullum' and active) <> 1 then
+    raise exception 'esperava exatamente 1 integração secullum ativa';
+  end if;
+  if exists (select 1 from app.sync_run where entity = '__prova_janela__') then
+    raise exception 'a linha de prova ficou em app.sync_run';
+  end if;
+  raise notice 'OK: 1 integração, idempotente, e a prova não deixou rastro';
+end $g$;
+rollback;
+SQL
+RC=${PIPESTATUS[0]}
+[ $RC -ne 0 ] && exit $RC
+
 echo "--- troca de runner da janela (cron simulado, tudo em rollback)"
 psql -q -v ON_ERROR_STOP=1 -f scripts/ensaio_janela_cron.sql 2>&1 \
   | grep -Ev '^(DO|SET|BEGIN|ROLLBACK|CREATE|INSERT|UPDATE|SAVEPOINT)' | sed "s/^psql:[^ ]* //"

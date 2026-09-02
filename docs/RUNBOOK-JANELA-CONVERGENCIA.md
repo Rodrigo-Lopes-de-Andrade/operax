@@ -160,6 +160,9 @@ recusa como parâmetro desconhecido.
       rollback. O banco de verificação foi apagado — tinha PII de 176 pessoas.
       ⚠️ O arquivo carrega `secullum` com PII completa e precisa de casa
       definitiva antes da janela; onde ele fica é decisão do dono.
+- [ ] **A linha de `app.integration`** — `scripts/janela_integracao_secullum.sql`.
+      Sem ela a janela fecha verde e o critério de saída reprova, porque
+      `recordSyncRun` falha macio. Ver passo 7, item 3.
 - [ ] **Dois segredos novos no Vault de produção** — `edge_functions_base_url`
       (`https://<ref>.supabase.co/functions/v1`, sem barra final) e
       `edge_functions_token` (um JWT do projeto). Criados com
@@ -555,10 +558,31 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
    não é `completed`, e o índice de frescor da 12 filtra exatamente por
    `completed` — um mapeamento errado aqui sobe verde e mede nada.
 3. ⛔ **Não há integração para referenciar.** `app.sync_run.integration_id` e
-   `tenant_id` são `not null` com FK. Em produção, `app.integracao` tem **0
-   linhas** (`app.tenant` tem 1). A primeira escrita em `app.sync_run` é
-   impossível antes de alguém criar essa linha — **é linha nova em `app`, então é
-   decisão do dono**, e ela precisa existir *antes* de o runner novo subir.
+   `tenant_id` são `not null` com FK. Em produção, `app.integration` tem **0
+   linhas** (`app.tenant` tem 1) — remedido em **01/09/2026**, ainda vale. A
+   primeira escrita em `app.sync_run` é impossível antes de alguém criar essa
+   linha — **é linha nova em `app`, então é decisão do dono**, e ela precisa
+   existir *antes* de o runner novo subir.
+
+   ⚠️ **E a falta dela não faz barulho.** `recordSyncRun` não acha a integração,
+   escreve no log e **volta**: a sincronização termina `ok: true`, as batidas
+   entram, e `app.sync_run` fica vazia. A janela "dá certo" e o passo 7 reprova
+   na afirmação 1 — o que se lê como "o runner novo não funciona", que é a
+   conclusão errada.
+
+   ✅ **`scripts/janela_integracao_secullum.sql`** cria a linha, é idempotente, e
+   a guarda dela não confere só a existência: ela **grava de verdade** em
+   `app.sync_run` com a integração recém-criada e desfaz a gravação num bloco
+   aninhado. A consulta da guarda é copiada palavra por palavra do
+   `recordSyncRun` — conferir por outro caminho provaria outra coisa. Ensaiado no
+   `make db-test`, duas passadas, sem rastro.
+
+   Efeito colateral conferido em 01/09: nenhum. Os dois leitores de
+   `app.integration` são o `recordSyncRun` e o `_PROVIDER_SQL` de
+   `backend/operax/alertas/outbox.py`, que filtra
+   `provider in ('meta_cloud','z_api','uazapi')` — uma linha `secullum` é
+   invisível para ele. O índice único da 14 também só alcança os três de
+   WhatsApp, e nenhuma view de `public` lê a tabela.
 4. **Contadores.** `records_read`/`records_written` saem prontos do `resumo`:
    `batidasFetched`/`batidasUpserted` para `Batida`, os `*Upserted` por entidade
    no cadastro. O `records_skipped` da 21 também tem origem —
@@ -570,6 +594,34 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
    diário sem trocar de lock entrega sobreposição silenciosa. Então o alvo do
    passo 4 **não é "mudar de tabela"**: é escrever nos dois, ou dar o lock a
    `app.sync_run` antes de aposentar o outro. Decidir **antes** da janela.
+
+   ⛔ **E o índice sozinho não serve — medido em 01/09/2026.** `app.sync_run`
+   tem `status` com default `'running'` e o check aceita
+   `running/completed/failed/partial`: o schema foi desenhado para reivindicar
+   antes e fechar depois. Só que **ninguém reivindica**. `recordSyncRun` é
+   chamado uma vez, no fim, já com status terminal — `grep 'running'` em
+   `supabase/functions/` não devolve nenhuma escrita. Copiar o índice parcial
+   para `app.sync_run` produziria um lock que nunca tranca. O conserto tem duas
+   metades, e a de schema é a menor: a função precisa gravar `running` ao
+   começar e fechar a mesma linha ao terminar.
+
+6. ⛔ **A `sync-cadastro` não escreve diário nenhum — e isso é perda de
+   observabilidade, não empate.** Só a `sync-batidas` chama `recordSyncRun`.
+   Hoje `app.job_execucao` tem uma linha a cada 30 min para `sync_cadastro`, e
+   foi por ela que a falha de autenticação de 01/09 03:30 ficou visível. Depois
+   da troca, uma falha de cadastro **não aparece em tabela nenhuma** — só no log
+   da Edge Function.
+
+   `fn_data_freshness` não cobre o buraco: ela agrupa pelo que existe em
+   `app.sync_run`, não confere uma lista de entidades esperadas. Entidade que
+   nunca escreve não vira linha velha — **vira ausência**, que nenhum painel lê
+   como problema. O passo 7 não reprova por isso, porque
+   `90_reconciliar_sync.py` só procura `entity = 'Batida'`.
+
+   O conserto é aditivo — `sync-cadastro/index.ts` chamar `recordSyncRun` por
+   entidade, com os `*Upserted` que o resumo já carrega — mas é mudança de
+   comportamento numa função que vai para produção, então é decisão, não
+   preparo.
 
 ---
 
