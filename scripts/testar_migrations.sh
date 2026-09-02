@@ -76,6 +76,12 @@ psql -q -v ON_ERROR_STOP=1 -f scripts/88_teste_espelho.sql 2>&1 \
 RC=${PIPESTATUS[0]}
 [ $RC -ne 0 ] && exit $RC
 
+echo "--- troca de runner da janela (cron simulado, tudo em rollback)"
+psql -q -v ON_ERROR_STOP=1 -f scripts/ensaio_janela_cron.sql 2>&1 \
+  | grep -Ev '^(DO|SET|BEGIN|ROLLBACK|CREATE|INSERT|UPDATE|SAVEPOINT)' | sed "s/^psql:[^ ]* //"
+RC=${PIPESTATUS[0]}
+[ $RC -ne 0 ] && exit $RC
+
 # ---------------------------------------------------------------------------
 # Os dois ciclos de sincronização contra o espelho — o ensaio que as Edge
 # Functions nunca tiveram. Opt-in porque o Deno roda no HOST e o psql daqui

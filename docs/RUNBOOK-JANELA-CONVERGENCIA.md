@@ -160,6 +160,19 @@ recusa como parâmetro desconhecido.
       rollback. O banco de verificação foi apagado — tinha PII de 176 pessoas.
       ⚠️ O arquivo carrega `secullum` com PII completa e precisa de casa
       definitiva antes da janela; onde ele fica é decisão do dono.
+- [ ] **Dois segredos novos no Vault de produção** — `edge_functions_base_url`
+      (`https://<ref>.supabase.co/functions/v1`, sem barra final) e
+      `edge_functions_token` (um JWT do projeto). Criados com
+      `vault.create_secret()`. Sem eles `scripts/janela_cron_runner.sql` reprova
+      antes de escrever, o que é o desenho — mas reprovar às 2h da manhã é
+      preparo que não foi feito. Ver passo 4, item 2.
+- [ ] **Decidir se o endpoint da sincronização pode ficar disparável por
+      qualquer um.** Depois da troca, quem barra as Edge Functions é o
+      `verify_jwt` do gateway, que aceita a anon key — que é pública. Não é
+      vazamento; é custo, carga na origem, e passadas concorrentes, porque
+      `app.sync_run` não tem o lock de sobreposição que o `app.job_execucao`
+      tem. Fechar exige conferir um segredo compartilhado **dentro** das
+      funções: é mudança de contrato, e por isso está no preparo.
 - [x] **Ao menos um usuário em `auth.users`** — item que faltava nesta lista e é
       pré-requisito da curadoria, não da janela. Criado em 31/08 pelo Admin API,
       já confirmado (`mailer_autoconfirm` é `false`), com vínculo `owner` em
@@ -367,10 +380,61 @@ intervalo é a janela real.
 2. Reescrever o comando dos dois jobs de `pg_cron`: hoje fazem **GET** no
    `vercel_jobs_base_url`; passam a invocar as funções. É a reescrita do comando
    que desliga a chamada à Vercel — não há gesto separado para isso.
-3. ⚠️ **Conferir se o projeto da Vercel tem cron próprio** (`vercel.json`). Se
-   tiver, ele precisa ser desligado lá: dois runners escrevendo o mesmo dado por
-   dois caminhos mantêm dois cursores, e o upsert idempotente não protege contra
-   isso.
+
+   ✅ **Deixou de ser comando na hora.** `scripts/janela_cron_runner.sql`, com
+   as pré-condições falhando alto **antes** de qualquer escrita e uma guarda
+   final que confere o que ficou. Reescreve os jobids 3 e 4 por
+   `cron.alter_job` (que preserva o id; `update` direto em `cron.job` é negado)
+   e agenda um terceiro:
+
+   | job | cadência | destino |
+   |---|---|---|
+   | `sync-cadastro-cron` (3) | `*/30 * * * *` | `POST .../sync-cadastro` |
+   | `sync-batidas-cron` (4) | `*/15 * * * *` | `POST .../sync-batidas` |
+   | `sync-batidas-backfill` (novo) | `7 4 * * *` | `POST .../sync-batidas {"scope":"backfill"}` |
+
+   O backfill é o que devolve o contrato da `SPEC-TECNICA.md` — correção na
+   origem até D-7 vira revogação do indício. Com o runner da Vercel ele não
+   existia. ⚠️ **O minuto 7 sai da grade de 15 de propósito**: em múltiplo de 15
+   ele colidiria com o incremental, e não há lock de sobreposição. A heurística
+   de contagem do §3b passa a ser "96 + 48 + 1 por dia, e a única fora da grade
+   é o backfill das 04:07 UTC".
+
+   ✅ **Ensaiado** por `scripts/ensaio_janela_cron.sql`, que roda no
+   `make db-test`: `cron` simulado, Vault de verdade, duas passadas provando
+   idempotência, os jobids preservados e a guarda final exercitada **falhando**
+   com um job deixado para trás. O que ele não prova é o `pg_cron` real — as
+   funções ali são de mentira com a mesma assinatura.
+
+   ⛔ **Dois pré-requisitos que não se resolvem dentro da janela:**
+
+   - **Dois segredos novos no Vault**, `edge_functions_base_url` e
+     `edge_functions_token`. Hoje só existem `vercel_jobs_base_url` e
+     `vercel_cron_secret` (medido em 01/09). Reaproveitar os nomes deixaria o
+     comando mentindo sobre para onde chama.
+   - **O token não é o que protege o endpoint, e isso é decisão.** As três
+     funções não conferem autorização nenhuma no corpo delas: quem barra é o
+     `verify_jwt` do gateway, e ele aceita **qualquer** JWT do projeto —
+     inclusive a anon key, que é pública. Depois da troca, quem tiver a anon key
+     dispara uma sincronização. Não é vazamento (a resposta não carrega PII, por
+     contrato das funções); é custo, carga na origem e — pior — `app.sync_run`
+     **não tem** o equivalente do `job_execucao_em_andamento_key`, o índice único
+     parcial que hoje impede duas passadas simultâneas. Fechar isso é mudança de
+     contrato das funções, não do script.
+3. ✅ **Não há cron próprio na Vercel — medido em 01/09/2026, e não por leitura
+   de `vercel.json`.** O diário responde melhor que o arquivo: se houvesse um
+   segundo invocador, apareceria execução fora da cadência do `pg_cron`. Em
+   **7 dias e 928 execuções**, `sync_batidas` caiu 618 vezes e `sync_cadastro`
+   310, e o minuto de início é sempre múltiplo de 15 — `{0,15,30,45}` para
+   batidas, `{0,30}` para cadastro. **Uma única linha fora**, e ela tem
+   explicação: `27/08 15:18:00`, 21 segundos depois de o último deploy da Vercel
+   ficar `READY` (`15:17:49`) — é o smoke test de quem publicou, não um
+   agendador.
+
+   Isso fecha o item sem depender de ler o repositório de terceiro, que o `gh`
+   desta conta não resolve. Fica valendo enquanto ninguém publicar lá: o último
+   deploy do `kastropark-jobs` é de **27/08 15:17 UTC**, e não houve outro desde.
+   Vale reconferir a contagem no dia da janela — é uma consulta só.
 4. **Só então** corrigir os exposed schemas para `public,graphql_public` — nesta
    ordem, e nunca antes de o passo 2 do item 2 estar valendo.
 
