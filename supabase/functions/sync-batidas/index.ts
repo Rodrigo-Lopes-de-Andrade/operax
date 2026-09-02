@@ -31,6 +31,7 @@ import { BatidaCorrelationBrokenError, runBatidaSync } from "../_shared/batida-s
 import { createSupabaseBatidaRepositoryFromEnv } from "../_shared/supabase-batida-repository.ts";
 import { getSql, type Sql } from "../_shared/postgres-client.ts";
 import { claimSyncRun, closeSyncRun } from "../_shared/sync-run.ts";
+import { requireSyncSecret } from "../_shared/require-secret.ts";
 import { resolveRunOptions } from "../_shared/run-options.ts";
 
 /** Prefixo de log — o mesmo que o resto da função usa. */
@@ -40,6 +41,11 @@ const LOG = "[sync-batidas]";
 const ENTITY = "Batida";
 
 async function handleRequest(request: Request): Promise<Response> {
+  // Antes de tudo, inclusive de ler o corpo: metade do que o segredo protege é
+  // a carga que uma invocação não autorizada geraria.
+  const recusa = await requireSyncSecret(request, LOG);
+  if (recusa) return recusa;
+
   const { scope, windowDays } = await resolveRunOptions(request);
   let sql: Sql | null = null;
   let runId: string | null = null;

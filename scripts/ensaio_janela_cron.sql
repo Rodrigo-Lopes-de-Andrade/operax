@@ -78,7 +78,10 @@ declare
     ['vercel_jobs_base_url',    'https://exemplo.vercel.app'],
     ['edge_functions_base_url', 'https://nklobmlxyidqxarzisph.supabase.co/functions/v1'],
     ['edge_functions_token',
-     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.assinatura-de-ensaio']
+     'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJyb2xlIjoic2VydmljZV9yb2xlIn0.assinatura-de-ensaio'],
+    -- 44 caracteres, acima do piso de 32 que o script exige. Um valor curto
+    -- aqui faria o ensaio passar por um caminho que produção reprovaria.
+    ['sync_shared_secret', 'ensaio-de-segredo-compartilhado-com-44-chars']
   ];
   i int;
 begin
@@ -98,7 +101,7 @@ begin
       end if;
       perform vault.create_secret(v_valores[i][2], v_valores[i][1], 'ensaio da troca de runner');
     end loop;
-    raise notice 'vault real, três segredos de ensaio criados (desfeitos no rollback)';
+    raise notice 'vault real, quatro segredos de ensaio criados (desfeitos no rollback)';
   end if;
 end $$;
 

@@ -11,7 +11,7 @@
 -- um segredo do Vault estava errado. Aqui as pré-condições falham alto e ANTES
 -- de qualquer escrita, e o arquivo pode ser lido com calma dias antes.
 --
--- ⛔ PRÉ-REQUISITO QUE NÃO SE RESOLVE AQUI: DOIS SEGREDOS NOVOS NO VAULT
+-- ⛔ PRÉ-REQUISITO QUE NÃO SE RESOLVE AQUI: TRÊS SEGREDOS NOVOS NO VAULT
 -- Hoje o Vault de produção tem só `vercel_jobs_base_url` e `vercel_cron_secret`
 -- (medido em 01/09/2026). Reaproveitar esses nomes para apontar ao Supabase
 -- deixaria o comando mentindo sobre para onde ele chama, então este arquivo
@@ -19,25 +19,36 @@
 --
 --     edge_functions_base_url  -> https://<ref>.supabase.co/functions/v1
 --     edge_functions_token     -> um JWT válido do projeto (ver a nota abaixo)
+--     sync_shared_secret       -> o segredo que fecha o endpoint (>= 32 chars)
 --
 -- Criar antes da janela, com:
 --     select vault.create_secret('<valor>', '<nome>', '<descrição>');
 --
--- ⚠️ O TOKEN NÃO É O QUE PROTEGE O ENDPOINT — E ISSO É DECISÃO DO DONO
--- As três funções não conferem autorização nenhuma no corpo delas: quem barra é
--- o `verify_jwt` do gateway do Supabase, e ele aceita QUALQUER JWT do projeto,
--- inclusive a anon key, que é pública por definição. Ou seja: depois desta
--- troca, qualquer um que tenha a anon key consegue disparar uma sincronização.
+-- ⚠️ O `sync_shared_secret` tem de ser o MESMO valor do secret
+-- `SYNC_SHARED_SECRET` das Edge Functions. São dois lugares porque são dois
+-- lados: aqui quem envia, lá quem confere. Divergir entre eles dá 401 a cada
+-- ciclo — sincronização parada respondendo, que é o pior modo de falha.
 --
--- O que isso custa, medido e não estimado: a resposta não carrega PII (é
--- contrato das funções, e os avisos referenciam por Id), então não é vazamento.
--- É custo e carga na origem — e, pior, `app.sync_run` NÃO tem o equivalente do
--- `job_execucao_em_andamento_key`, o índice único parcial que hoje impede duas
--- passadas simultâneas. Disparos repetidos rodam concorrentes.
+-- ✅ O TOKEN NÃO É O QUE PROTEGE O ENDPOINT — E POR ISSO EXISTE O TERCEIRO SEGREDO
+-- Quem barra uma Edge Function é o `verify_jwt` do gateway do Supabase, e ele
+-- aceita QUALQUER JWT do projeto, inclusive a anon key, que é pública por
+-- definição: ela vive no bundle do painel. Sem mais nada, qualquer um que abrisse
+-- o DevTools dispararia uma sincronização.
 --
--- Fechar isso é mudança de contrato das funções (um segredo compartilhado
--- conferido dentro delas), não deste arquivo. Fica nomeado para ser decidido
--- antes da janela, não descoberto depois.
+-- ⛔ E não era risco futuro. Medido em 02/09/2026: as três funções já estavam
+-- ACTIVE em produção desde 31/08, com `verify_jwt=true` — publicadas na noite da
+-- janela e nunca religadas ao cron. Ficaram invocáveis por qualquer um durante
+-- dois dias.
+--
+-- Decisão do dono em 02/09: fechar. As três funções passaram a exigir o header
+-- `x-sync-secret`, conferido contra o secret `SYNC_SHARED_SECRET` delas — ver
+-- `supabase/functions/_shared/require-secret.ts`. Este arquivo é o outro lado:
+-- os três comandos enviam o header, com o valor lido do Vault.
+--
+-- Não se confere o papel do JWT em vez disso — seria de graça, já que o gateway
+-- validou a assinatura — porque exigir `service_role` obrigaria a chave mestra a
+-- morar no Vault para o `pg_cron` enviá-la, e a Regra 4 do CLAUDE.md diz que ela
+-- só vive no backend FastAPI.
 --
 -- O QUE MUDA, JOB A JOB
 --   jobid 3  sync-cadastro-cron    */30  -> POST .../sync-cadastro
@@ -61,16 +72,17 @@
 
 do $$
 declare
-  v_base   text;
-  v_token  text;
-  v_faltam text[] := '{}';
-  v_nome   text;
+  v_base    text;
+  v_token   text;
+  v_segredo text;
+  v_faltam  text[] := '{}';
+  v_nome    text;
 begin
   ---------------------------------------------------------------------------
   -- 1. Pré-condições. Tudo que falta é nomeado de uma vez: descobrir a segunda
   --    pendência só depois de resolver a primeira custa uma rodada de janela.
   ---------------------------------------------------------------------------
-  foreach v_nome in array array['edge_functions_base_url', 'edge_functions_token'] loop
+  foreach v_nome in array array['edge_functions_base_url', 'edge_functions_token', 'sync_shared_secret'] loop
     if not exists (select 1 from vault.decrypted_secrets where name = v_nome) then
       v_faltam := v_faltam || v_nome;
     end if;
@@ -98,6 +110,16 @@ begin
     raise exception 'edge_functions_token não parece um JWT do projeto';
   end if;
 
+  -- Um segredo curto é pior que nenhum: ele faz o endpoint parecer fechado.
+  -- 32 caracteres é o piso de quem gera com `openssl rand -base64 32`.
+  select decrypted_secret into strict v_segredo
+    from vault.decrypted_secrets where name = 'sync_shared_secret';
+  if length(v_segredo) < 32 then
+    raise exception
+      'sync_shared_secret tem % caracteres; abaixo de 32 ele fecha o endpoint só na aparência',
+      length(v_segredo);
+  end if;
+
   ---------------------------------------------------------------------------
   -- 2. Os dois jobs existentes. `cron.alter_job` preserva o jobid, e é o
   --    caminho que funciona: `update` direto em `cron.job` é negado, porque a
@@ -122,7 +144,10 @@ begin
             'Content-Type', 'application/json',
             'Authorization', 'Bearer ' || (
                 select decrypted_secret from vault.decrypted_secrets
-                 where name = 'edge_functions_token')
+                 where name = 'edge_functions_token'),
+            'x-sync-secret', (
+                select decrypted_secret from vault.decrypted_secrets
+                 where name = 'sync_shared_secret')
         ),
         timeout_milliseconds := 590000
     );
@@ -141,7 +166,10 @@ begin
             'Content-Type', 'application/json',
             'Authorization', 'Bearer ' || (
                 select decrypted_secret from vault.decrypted_secrets
-                 where name = 'edge_functions_token')
+                 where name = 'edge_functions_token'),
+            'x-sync-secret', (
+                select decrypted_secret from vault.decrypted_secrets
+                 where name = 'sync_shared_secret')
         ),
         timeout_milliseconds := 590000
     );
@@ -164,7 +192,10 @@ begin
             'Content-Type', 'application/json',
             'Authorization', 'Bearer ' || (
                 select decrypted_secret from vault.decrypted_secrets
-                 where name = 'edge_functions_token')
+                 where name = 'edge_functions_token'),
+            'x-sync-secret', (
+                select decrypted_secret from vault.decrypted_secrets
+                 where name = 'sync_shared_secret')
         ),
         timeout_milliseconds := 590000
     );
@@ -180,11 +211,13 @@ end $$;
 -- ----------------------------------------------------------------------------
 do $$
 declare
-  v_vercel int;
-  v_supa   int;
+  v_vercel    int;
+  v_supa      int;
+  v_fechados  int;
 begin
   select count(*) into v_vercel from cron.job where command ilike '%vercel_jobs_base_url%';
   select count(*) into v_supa   from cron.job where command ilike '%edge_functions_base_url%';
+  select count(*) into v_fechados from cron.job where command ilike '%x-sync-secret%';
 
   if v_vercel > 0 then
     raise exception
@@ -196,5 +229,13 @@ begin
       'esperava 3 jobs apontando para as Edge Functions, encontrei % — conferir cron.job antes de religar', v_supa;
   end if;
 
-  raise notice 'OK: nenhum job chama a Vercel, e os 3 apontam para as Edge Functions';
+  -- Sem o header, o job toma 401 a cada ciclo e a sincronização fica parada
+  -- respondendo — exatamente a classe de falha que este arquivo existe para não
+  -- deixar acontecer às 2h da manhã.
+  if v_fechados <> 3 then
+    raise exception
+      'esperava 3 jobs enviando x-sync-secret, encontrei % — os outros tomariam 401', v_fechados;
+  end if;
+
+  raise notice 'OK: nenhum job chama a Vercel, os 3 apontam para as Edge Functions e enviam o segredo';
 end $$;

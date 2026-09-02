@@ -160,30 +160,47 @@ recusa como parâmetro desconhecido.
       rollback. O banco de verificação foi apagado — tinha PII de 176 pessoas.
       ⚠️ O arquivo carrega `secullum` com PII completa e precisa de casa
       definitiva antes da janela; onde ele fica é decisão do dono.
-- [ ] **A linha de `app.integration`** — `scripts/janela_integracao_secullum.sql`.
-      Sem ela a janela fecha verde e o critério de saída reprova, porque a
-      reivindicação da execução falha macio. Ver passo 7, item 3.
-- [ ] **A migration 34 aplicada em produção** — o lock de sobreposição de
-      `app.sync_run`. É pré-requisito do `functions deploy`, não item da janela:
-      sem o índice, as funções novas param na primeira invocação. Produção está
-      convergida até a 33 (ledger em 46), então esta é a única pendente. Ver
-      passo 7, item 5.
-- [ ] **Dois segredos novos no Vault de produção** — `edge_functions_base_url`
-      (`https://<ref>.supabase.co/functions/v1`, sem barra final) e
-      `edge_functions_token` (um JWT do projeto). Criados com
-      `vault.create_secret()`. Sem eles `scripts/janela_cron_runner.sql` reprova
-      antes de escrever, o que é o desenho — mas reprovar às 2h da manhã é
-      preparo que não foi feito. Ver passo 4, item 2.
-- [ ] **Decidir se o endpoint da sincronização pode ficar disparável por
-      qualquer um.** Depois da troca, quem barra as Edge Functions é o
-      `verify_jwt` do gateway, que aceita a anon key — que é pública. Não é
-      vazamento; é custo e carga na origem. ✅ **A metade "passadas
-      concorrentes" caiu em 02/09**: a migration 34 e a reivindicação em
-      `sync-run.ts` deram a `app.sync_run` o lock que o `app.job_execucao`
-      tinha, e uma invocação sobreposta agora recebe 409 sem chamar o Secullum.
-      O que sobra é uma invocação de cada vez, fora de hora — fechar isso exige
-      conferir um segredo compartilhado **dentro** das funções, que é mudança de
-      contrato, e por isso segue no preparo.
+- [x] **A linha de `app.integration`** — aplicada em produção em **02/09/2026**
+      por `scripts/janela_integracao_secullum.sql`. Sem ela a janela fecharia
+      verde e o critério de saída reprovaria, porque a reivindicação da execução
+      falha macio. Conferido depois: 1 linha `secullum` ativa, `app.sync_run`
+      ainda em zero (a guarda grava e desfaz). Ver passo 7, item 3.
+- [x] **A migration 34 aplicada em produção** — **02/09/2026**, ledger em **47**.
+      É o lock de sobreposição de `app.sync_run`, e é pré-requisito do
+      `functions deploy`: sem o índice, as funções novas param na primeira
+      invocação. Conferido: índice criado com o predicado certo, e zero resíduo
+      do bloco de prova. Ver passo 7, item 5.
+- [x] **Três segredos novos no Vault de produção — criados em 02/09/2026.**
+      `edge_functions_base_url`
+      (`https://<ref>.supabase.co/functions/v1`, sem barra final),
+      `edge_functions_token` (um JWT do projeto) e `sync_shared_secret` (o que
+      fecha o endpoint, ≥ 32 caracteres). Criados com `vault.create_secret()`.
+      Sem eles `scripts/janela_cron_runner.sql` reprova antes de escrever, o que
+      é o desenho — mas reprovar às 2h da manhã é preparo que não foi feito. Ver
+      passo 4, item 2. O `edge_functions_token` recebeu a **anon key legada**, e
+      não a `service_role`: depois do segredo compartilhado, o JWT só satisfaz o
+      `verify_jwt` do gateway, então usar a chave mestra ali seria dar alcance
+      sem ganhar proteção.
+      ⚠️ O `sync_shared_secret` tem de ser o **mesmo valor** do secret
+      `SYNC_SHARED_SECRET` das Edge Functions: aqui quem envia, lá quem confere.
+      Divergir dá 401 a cada ciclo — sincronização parada respondendo.
+- [x] **O endpoint da sincronização deixou de ser disparável por qualquer um —
+      decisão do dono em 02/09, e o item era mais urgente do que parecia.** Quem
+      barra as Edge Functions é o `verify_jwt` do gateway, que aceita a anon key
+      — pública por desenho, ela vive no bundle do painel.
+      ⛔ **E não era risco futuro:** as três funções já estavam ACTIVE em
+      produção desde 31/08 (ver passo 4), então durante dois dias qualquer um
+      com a anon key disparava uma sincronização real.
+      As três passaram a exigir o header `x-sync-secret`, conferido contra o
+      secret `SYNC_SHARED_SECRET` delas (`_shared/require-secret.ts`), e
+      `janela_cron_runner.sql` passou a enviá-lo, lido do Vault. Falha fechada:
+      sem o secret configurado tudo é recusado com **503**, e segredo errado dá
+      **401** — separados de propósito, porque "não configurei" e "mandou
+      errado" lidos como a mesma coisa custam a rodada inteira de diagnóstico.
+      Não se confere o papel do JWT em vez disso: exigir `service_role`
+      obrigaria a chave mestra a morar no Vault para o `pg_cron` enviá-la, e a
+      Regra 4 diz que ela só vive no backend FastAPI.
+      ⚠️ `supabase functions invoke` sem o header passa a receber 401.
 - [x] **Ao menos um usuário em `auth.users`** — item que faltava nesta lista e é
       pré-requisito da curadoria, não da janela. Criado em 31/08 pelo Admin API,
       já confirmado (`mailer_autoconfirm` é `false`), com vínculo `owner` em
@@ -387,13 +404,31 @@ do passo 2. `app.sync_run.scope` e `records_skipped` dependem da migration 21.
 Entre o passo 2 e o fim deste passo **não existe sincronização funcional** — esse
 intervalo é a janela real.
 
-1. ⚠️ **A migration 34 primeiro, o `functions deploy` depois.** Ela cria
-   `sync_run_em_andamento_key`, o lock de sobreposição, e sem ela
-   `claimSyncRun` estoura `there is no unique or exclusion constraint matching
-   the ON CONFLICT specification` — a função falha alto, que é o desfecho certo
-   e ainda assim é sincronização parada. Nenhum deploy aplica migration neste
-   projeto; é passo à mão. Depois, `supabase functions deploy` das três, com os
-   cinco secrets já configurados.
+1. ✅ **As três já estão publicadas — 02/09/2026, v4, e isso NÃO é passo de
+   janela.** Ordem seguida, e ela importa: migration 34 primeiro (ela cria
+   `sync_run_em_andamento_key`; sem o índice `claimSyncRun` estoura
+   `there is no unique or exclusion constraint matching the ON CONFLICT
+   specification` e a função falha alto), depois a linha de `app.integration`,
+   depois o secret `SYNC_SHARED_SECRET`, e só então `supabase functions deploy`.
+
+   ⛔ **Não foi primeiro deploy — foi conserto.** As três estavam ACTIVE em
+   produção desde **31/08 21:35 UTC**, publicadas na noite da janela e nunca
+   religadas ao cron, e nenhum documento registrava isso. A `sync-cadastro`
+   publicada ali gravava `departamento_id` em `secullum."Estrutura"`, coluna que
+   produção não tem desde 21/08 — qualquer invocação estourava `42703`. O
+   conserto é o commit `601ac3b`, de 01/09 07:04, **dez horas depois daquele
+   deploy**. Conferido nos bundles baixados da própria API: o de 31/08 grava a
+   coluna em `upsertManagers`, o v4 não.
+
+   ⚠️ **E elas ficaram dois dias invocáveis por qualquer um.** É por isso que o
+   segredo compartilhado deixou de ser item de janela e foi feito agora — ver o
+   preparo. Provado contra produção depois do deploy: anon key sozinha toma
+   **401**, segredo errado toma **401**, segredo certo passa **200** (e a
+   `secullum-test-auth` devolveu os mesmos 94 horários medidos em 31/08, então a
+   credencial da origem segue válida).
+
+   As três seguem **dormentes**: o `pg_cron` continua chamando a Vercel até o
+   item 2 abaixo.
 2. Reescrever o comando dos dois jobs de `pg_cron`: hoje fazem **GET** no
    `vercel_jobs_base_url`; passam a invocar as funções. É a reescrita do comando
    que desliga a chamada à Vercel — não há gesto separado para isso.

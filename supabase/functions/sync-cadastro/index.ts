@@ -42,6 +42,7 @@ import { runCadastroSync } from "../_shared/cadastro-sync.ts";
 import { createSupabaseSyncRepositoryFromEnv } from "../_shared/supabase-cadastro-repository.ts";
 import { getSql, type Sql } from "../_shared/postgres-client.ts";
 import { claimSyncRun, closeSyncRun } from "../_shared/sync-run.ts";
+import { requireSyncSecret } from "../_shared/require-secret.ts";
 
 /** Prefixo de log — o mesmo que o resto da função usa. */
 const LOG = "[sync-cadastro]";
@@ -59,7 +60,12 @@ const LOG = "[sync-cadastro]";
  */
 const ENTITY = "Funcionario";
 
-async function handleRequest(): Promise<Response> {
+async function handleRequest(request: Request): Promise<Response> {
+  // Antes de tudo: antes de abrir conexão e antes de falar com a origem. Metade
+  // do que o segredo protege é a carga que uma invocação não autorizada geraria.
+  const recusa = await requireSyncSecret(request, LOG);
+  if (recusa) return recusa;
+
   let sql: Sql | null = null;
   let runId: string | null = null;
 
@@ -127,4 +133,4 @@ async function handleRequest(): Promise<Response> {
   }
 }
 
-Deno.serve(() => handleRequest());
+Deno.serve((request) => handleRequest(request));

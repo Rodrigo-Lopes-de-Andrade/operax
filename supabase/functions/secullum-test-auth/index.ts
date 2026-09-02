@@ -26,6 +26,7 @@ import {
   SecullumHttpError,
   SecullumValidationError,
 } from "../_shared/secullum-client.ts";
+import { requireSyncSecret } from "../_shared/require-secret.ts";
 
 interface HorarioResumo {
   Id?: number | string;
@@ -46,7 +47,12 @@ function describeErrorSafely(error: unknown): string {
   return "Erro desconhecido.";
 }
 
-async function handleRequest(): Promise<Response> {
+async function handleRequest(request: Request): Promise<Response> {
+  // Diagnóstico também gasta credencial e chamada na origem — o mesmo segredo
+  // das duas funções de sincronização vale aqui.
+  const recusa = await requireSyncSecret(request, "[secullum-test-auth]");
+  if (recusa) return recusa;
+
   try {
     const client = createSecullumClientFromEnv();
     await client.login();
@@ -98,4 +104,4 @@ async function handleRequest(): Promise<Response> {
   }
 }
 
-Deno.serve(() => handleRequest());
+Deno.serve((request) => handleRequest(request));

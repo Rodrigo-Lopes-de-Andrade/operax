@@ -324,7 +324,6 @@ export class SupabaseBatidaRepository implements BatidaSyncRepository {
         atualizado_em = excluded.atualizado_em
     `;
   }
-
 }
 
 /**
