@@ -18,7 +18,7 @@ QUATRO AFIRMAÇÕES, E A ÚLTIMA É A QUE IMPORTA
 2. A última execução **terminada** de cada uma acabou como `completed`.
 3. Ela gravou linha: `records_written > 0`. Uma execução que lê e não grava é o
    modo de falha do risco 3 — correlação quebrada respondendo sucesso.
-4. **Nenhuma `Batida` na janela está sem marcação.** Esta é a que não se deduz do
+4. **A janela não perdeu marcação em massa.** Esta é a que não se deduz do
    relatório: é o estado que o risco 1 produzia quando `upsertBatidas` commitava
    e a leitura seguinte falhava. Ele não se lê como "faltando dado" — o motor de
    detecção o lê como `no_punches`, "o colaborador não bateu ponto naquele dia",
@@ -26,6 +26,25 @@ QUATRO AFIRMAÇÕES, E A ÚLTIMA É A QUE IMPORTA
 
 O item 4 é verificado **contra o dado**, e não contra o summary, de propósito: um
 resumo é o que o código achou que fez. A tabela é o que ficou.
+
+⛔ **A primeira versão dele afirmava "NENHUMA `Batida` sem marcação", e isso é
+falso em produção saudável.** Medido em 02/09/2026, na primeira vez que este
+script correu contra produção: 18 órfãs em 2 dias, todas de **seis supervisores**
+no horário 4401 ("U-000 - Seg a Sex - 08:00h ás 18:00h (Supervisão)"), ativos e
+sem demissão — cinco deles nunca tiveram marcação nenhuma. O Secullum emite a
+linha-dia para quem não bate ponto. Em 14 dias a taxa de órfãs é **26,7%**, contra
+7,8% na janela: "batida sem marcação" é o normal, não a exceção.
+
+Então a afirmação passou a ser **comparativa e auto-calibrada**: reprova quando a
+taxa da janela é ao menos o dobro da taxa dos 14 dias anteriores E passa de
+metade. Fim de semana, folga e supervisor entram nos dois lados da conta e se
+cancelam; uma escrita interrompida não — ela empurra a janela para perto de 100%
+sem tocar na referência.
+
+⚠️ **O que ele deixa de pegar, dito de frente:** um punhado de marcações perdidas
+não muda taxa e passa. Quem impede esse caso é a transação em
+`SupabaseBatidaRepository.transaction`, não este script. Um portão que reprova
+produção saudável às 2h da manhã não é mais rigoroso — é ignorado.
 
 ⚠️ **`running` não é falha, e nem sempre é sucesso.** Desde a migration 34 a
 Edge Function reivindica a linha antes de ler a origem, então a mais recente
@@ -35,6 +54,22 @@ ela quer dizer que a função morreu no meio, e o reaper só a encerra quando a
 próxima execução chegar. Ou seja, um lock preso é exatamente o sintoma de que a
 próxima execução não chegou.
 
+ONDE ELE OLHA — E POR QUE ISSO PRECISOU DE UM ARGUMENTO
+
+    python3 scripts/90_reconciliar_sync.py --ref nklobmlxyidqxarzisph   # produção
+    python3 scripts/90_reconciliar_sync.py                             # banco local
+
+⛔ Até 02/09/2026 só existia o caminho local, por `psql`, com o padrão apontando
+para `operax_test` — o banco descartável da suíte. Mas **não há caminho psql para
+produção neste repositório**: todo o resto do runbook chega lá pelo
+`scripts/sb_sql.sh`, que usa a Management API. Rodado no passo 7 numa máquina de
+desenvolvimento, este script conferiria o banco de teste e imprimiria
+"INGESTÃO RELIGADA" — um verde sobre a base errada, que é a mesma patologia que
+ele existe para pegar.
+
+Por isso o alvo é impresso como primeira linha, sempre. Um portão que não diz o
+que olhou não é portão.
+
 Sai com código 1 em qualquer falha, para servir de portão num roteiro de
 manutenção.
 """
@@ -42,6 +77,7 @@ manutenção.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import subprocess
 import sys
@@ -55,7 +91,15 @@ ENV = {
 }
 
 
+# Preenchido por `main()`. `None` = banco local por psql.
+REF: str | None = None
+
+
 def consultar(sql: str) -> list[list[str]]:
+    return _pela_api(sql) if REF else _pelo_psql(sql)
+
+
+def _pelo_psql(sql: str) -> list[list[str]]:
     r = subprocess.run(
         ["psql", "-tAF\t", "-v", "ON_ERROR_STOP=1", "-c", sql],
         capture_output=True,
@@ -65,6 +109,29 @@ def consultar(sql: str) -> list[list[str]]:
     if r.returncode != 0:
         sys.exit(f"psql falhou:\n{r.stderr}")
     return [linha.split("\t") for linha in r.stdout.split("\n") if linha.strip()]
+
+
+def _pela_api(sql: str) -> list[list[str]]:
+    """A mesma porta que o resto do runbook usa para produção.
+
+    `sb_sql.sh` devolve um array de objetos JSON. As chaves vêm na ordem do
+    `select`, e é essa ordem que os chamadores desempacotam — igual ao `-tA` do
+    psql. Nulo vira string vazia pelo mesmo motivo: as consultas daqui já
+    aplicam `coalesce` onde o vazio tem significado.
+    """
+    raiz = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    r = subprocess.run(
+        [os.path.join(raiz, "scripts", "sb_sql.sh"), str(REF), sql],
+        capture_output=True,
+        text=True,
+    )
+    if r.returncode != 0:
+        sys.exit(f"sb_sql.sh falhou:\n{r.stderr or r.stdout}")
+    try:
+        linhas = json.loads(r.stdout)
+    except json.JSONDecodeError:
+        sys.exit(f"resposta da Management API não é JSON:\n{r.stdout[:400]}")
+    return [["" if v is None else str(v) for v in linha.values()] for linha in linhas]
 
 
 # As duas entidades que a sincronização escreve depois da troca de runner:
@@ -137,6 +204,56 @@ def conferir_entidade(entidade: str) -> list[str]:
     return problemas
 
 
+# Referência com que a janela é comparada. Catorze dias cobrem dois fins de
+# semana, que é o que faz a taxa de órfãs oscilar — abaixo disso a referência
+# vira ruído em vez de linha de base.
+REFERENCIA_DIAS = 14
+
+
+def conferir_marcacoes_perdidas(dias: int) -> list[str]:
+    """A afirmação 4: a janela não perdeu marcação em massa."""
+    linhas = consultar(
+        "with d as ("
+        '  select b.id, b."Data"::date as dia,'
+        "         exists (select 1 from app.batida_marcacao m where m.batida_id = b.id) as tem"
+        '    from secullum."Batida" b'
+        f"   where b.\"Data\" >= current_date - interval '{dias + REFERENCIA_DIAS} days'"
+        ") select"
+        f"   count(*) filter (where dia >= current_date - interval '{dias} days') as janela,"
+        f"   count(*) filter (where dia >= current_date - interval '{dias} days' and not tem) as janela_sem,"
+        f"   count(*) filter (where dia <  current_date - interval '{dias} days') as ref,"
+        f"   count(*) filter (where dia <  current_date - interval '{dias} days' and not tem) as ref_sem"
+        "  from d"
+    )
+    janela, janela_sem, ref, ref_sem = (int(v or 0) for v in linhas[0])
+
+    if not janela:
+        print(f"  Batida na janela de {dias} dia(s): nenhuma")
+        return [
+            f"nenhuma 'Batida' nos últimos {dias} dia(s) — a ingestão não trouxe nada, "
+            f"e as afirmações acima podem estar olhando uma execução antiga."
+        ]
+
+    taxa = 100.0 * janela_sem / janela
+    taxa_ref = (100.0 * ref_sem / ref) if ref else 0.0
+    print(
+        f"  Batida sem marcação: {janela_sem}/{janela} na janela ({taxa:.1f}%) "
+        f"· {ref_sem}/{ref} nos {REFERENCIA_DIAS} dias anteriores ({taxa_ref:.1f}%)"
+    )
+
+    # Metade é o piso: abaixo disso o número não se distingue de gente que não
+    # bateu ponto — em produção a referência mede 26,7%. O dobro é o detector de
+    # degrau: folga, fim de semana e supervisor entram nos dois lados da conta.
+    if taxa > 50.0 and taxa >= 2 * taxa_ref:
+        return [
+            f"{janela_sem} de {janela} 'Batida' na janela estão sem marcação "
+            f"({taxa:.1f}%), contra {taxa_ref:.1f}% nos {REFERENCIA_DIAS} dias anteriores. "
+            f"Um degrau desse tamanho não é gente que não bateu ponto — é escrita "
+            f"interrompida no meio, o estado que o motor lê como 'não bateu'."
+        ]
+    return []
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -145,26 +262,35 @@ def main() -> None:
         default=2,
         help="Janela conferida, em dias antes de hoje (padrão 2 — a janela incremental).",
     )
-    dias = parser.parse_args().dias
+    parser.add_argument(
+        "--ref",
+        default=None,
+        help=(
+            "Project ref do Supabase. Com ele, a leitura vai pela Management API "
+            "(scripts/sb_sql.sh) — o único caminho deste repositório até produção. "
+            "Sem ele, psql no banco apontado por PGHOST/PGPORT/PGDATABASE."
+        ),
+    )
+    args = parser.parse_args()
+    dias = args.dias
+
+    global REF
+    REF = args.ref
+    # Primeira linha, sempre: um portão que não diz o que olhou não é portão. Foi
+    # o padrão silencioso apontando para `operax_test` que tornou isto necessário.
+    if REF:
+        print(f"  alvo: Management API · projeto {REF}")
+    else:
+        print(f"  alvo: psql · {ENV['PGHOST']}:{ENV['PGPORT']}/{ENV['PGDATABASE']}")
+
     problemas: list[str] = []
 
     # 1 a 3 — as duas entidades, cada uma com o seu diário.
     for entidade in ENTIDADES:
         problemas.extend(conferir_entidade(entidade))
 
-    # 4 — o estado que o risco 1 produzia.
-    orfas = consultar(
-        "select count(*) from secullum.\"Batida\" b "
-        "where b.\"Data\" >= current_date - interval '%d days' "
-        "and not exists (select 1 from app.batida_marcacao m where m.batida_id = b.id)" % dias
-    )
-    quantas = int(orfas[0][0]) if orfas else 0
-    print(f"  Batida sem nenhuma marcação nos últimos {dias} dia(s): {quantas}")
-    if quantas:
-        problemas.append(
-            f"{quantas} 'Batida' sem nenhuma marcação na janela — é o estado que o motor "
-            f"lê como 'não bateu ponto'. Confira se a escrita foi interrompida no meio."
-        )
+    # 4 — o estado que o risco 1 produzia, medido contra a própria base.
+    problemas.extend(conferir_marcacoes_perdidas(dias))
 
     if problemas:
         for p in problemas:

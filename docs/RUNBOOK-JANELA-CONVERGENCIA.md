@@ -553,8 +553,16 @@ com `status_code` e `content`.
 **Depois, que a ingestão voltou:**
 
 ```
-python3 scripts/90_reconciliar_sync.py --dias 2
+python3 scripts/90_reconciliar_sync.py --ref nklobmlxyidqxarzisph --dias 2
 ```
+
+⛔ **O `--ref` não é enfeite, e faltava até 02/09.** O script fala com o banco por
+`psql`, e o padrão dele aponta para `operax_test` — o banco descartável da suíte.
+Não existe caminho psql para produção neste repositório: todo o resto deste
+runbook chega lá pelo `scripts/sb_sql.sh`. Rodado sem `--ref` numa máquina de
+desenvolvimento, ele conferiria a base de teste e imprimiria
+"INGESTÃO RELIGADA" — verde sobre o banco errado. Com `--ref`, a leitura vai pela
+Management API, e a **primeira linha da saída diz sempre qual alvo foi olhado**.
 
 ⛔ **E nem 200 basta.** O script afirma quatro coisas, e a última é a que não se
 deduz de relatório nenhum:
@@ -564,12 +572,24 @@ deduz de relatório nenhum:
    nunca escreve vira ausência, e ausência não alarma em lugar nenhum;
 2. a última execução **terminada** de cada uma acabou `completed`;
 3. ela gravou linha (`records_written > 0`);
-4. **nenhuma `Batida` na janela está sem marcação** — verificado contra o dado, e
-   não contra o resumo, porque um resumo é o que o código achou que fez.
+4. **a janela não perdeu marcação em massa** — verificado contra o dado, e não
+   contra o resumo, porque um resumo é o que o código achou que fez.
 
 O item 4 é o estado que o motor lê como `no_punches` e transforma em indício
 contra quem bateu ponto. Sai com código 1 em qualquer falha, para servir de
 portão.
+
+⛔ **Ele afirmava "nenhuma" até 02/09, e isso reprovaria produção saudável.**
+Primeira execução contra produção, no mesmo dia: 18 órfãs em 2 dias, todas de
+**seis supervisores** no horário 4401 (`U-000 - Seg a Sex - 08:00h ás 18:00h
+(Supervisão)`) — ativos, sem demissão, e cinco deles sem marcação alguma na
+história. O Secullum emite a linha-dia para quem não bate ponto, e em 14 dias a
+taxa de órfãs é **26,7%** contra 7,8% na janela. A afirmação passou a ser
+comparativa: reprova quando a taxa da janela é ao menos o **dobro** da referência
+de 14 dias **e** passa de **metade**. Folga, fim de semana e supervisor entram
+nos dois lados e se cancelam; escrita interrompida empurra só a janela.
+⚠️ Em troca, um punhado de marcações perdidas não muda taxa e passa — quem
+impede esse caso é a transação de `SupabaseBatidaRepository`, não este script.
 
 ⚠️ **Uma execução `running` no instante em que você roda o script não reprova.**
 Desde a migration 34 a função reivindica a linha antes de ler a origem, então a
