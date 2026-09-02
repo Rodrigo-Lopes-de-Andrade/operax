@@ -128,10 +128,33 @@ def _pela_api(sql: str) -> list[list[str]]:
     if r.returncode != 0:
         sys.exit(f"sb_sql.sh falhou:\n{r.stderr or r.stdout}")
     try:
-        linhas = json.loads(r.stdout)
+        linhas = json.loads(r.stdout, object_pairs_hook=_sem_chave_repetida)
     except json.JSONDecodeError:
         sys.exit(f"resposta da Management API não é JSON:\n{r.stdout[:400]}")
-    return [["" if v is None else str(v) for v in linha.values()] for linha in linhas]
+    return [["" if v is None else str(v) for _, v in linha] for linha in linhas]
+
+
+def _sem_chave_repetida(pares: list[tuple[str, object]]) -> list[tuple[str, object]]:
+    """Recusa a resposta quando duas colunas voltaram com o MESMO nome.
+
+    A API nomeia expressão sem alias pela função de fora — duas
+    `coalesce(...)` num mesmo `select` viram duas chaves `coalesce`, e um `dict`
+    ficaria com uma. O desempacotamento posicional então estoura com
+    "not enough values to unpack", longe da causa. Pior seria se as colunas
+    fossem do mesmo tipo: o desempacotamento daria certo, deslocado em um.
+
+    O `psql -tA` é posicional e nunca viu isso — foi por aqui que a diferença
+    entre os dois caminhos apareceu, em 02/09/2026, na primeira execução com
+    dado de verdade em `app.sync_run`.
+    """
+    nomes = [k for k, _ in pares]
+    repetidas = {n for n in nomes if nomes.count(n) > 1}
+    if repetidas:
+        sys.exit(
+            f"a consulta devolveu colunas com nome repetido ({', '.join(sorted(repetidas))}) — "
+            "dê alias a TODA expressão do `select` no caminho da Management API."
+        )
+    return pares
 
 
 # As duas entidades que a sincronização escreve depois da troca de runner:
@@ -153,8 +176,8 @@ def conferir_entidade(entidade: str) -> list[str]:
     # A reivindicação viva ou presa vem primeiro: ela é o estado que não existia
     # antes do lock, e é o único que muda a leitura das linhas terminais.
     emandamento = consultar(
-        "select coalesce(scope, ''), "
-        "(extract(epoch from (now() - started_at)) / 60)::int "
+        "select coalesce(scope, '') as escopo, "
+        "(extract(epoch from (now() - started_at)) / 60)::int as idade_min "
         f"from app.sync_run where entity = '{entidade}' and status = 'running' "
         "order by started_at desc limit 1"
     )
@@ -175,7 +198,7 @@ def conferir_entidade(entidade: str) -> list[str]:
     # instante em que alguém rodou o script.
     execucao = consultar(
         "select status, scope, records_read, records_written, records_skipped, "
-        "coalesce(error, ''), coalesce(finished_at::text, '') "
+        "coalesce(error, '') as erro, coalesce(finished_at::text, '') as fim "
         f"from app.sync_run where entity = '{entidade}' and finished_at is not null "
         "order by finished_at desc limit 1"
     )
