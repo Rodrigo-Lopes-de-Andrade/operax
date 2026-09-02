@@ -24,9 +24,10 @@
 // do espelho que os repositórios escrevem, mais `app.batida_marcacao` e os dois
 // diários de evento.
 //
-// O terceiro bloco não é ciclo: é o rastro que o ciclo de cadastro deixa em
-// `app.sync_run`. Ele exige a linha de `app.integration` de pé — sem ela
-// `writeSyncRun` falha MACIO, e o teste reprova dizendo isso.
+// Os dois últimos blocos não são ciclo: são o diário e o lock que a execução
+// deixa em `app.sync_run`. Eles exigem a linha de `app.integration` de pé — sem
+// ela a reivindicação devolve `sem_integracao` e a sincronização roda sem lock
+// nenhum, que é falha macia e por isso é conferida alto.
 //
 //   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55322/operax_test \
 //     deno test --allow-net --allow-env --no-check _shared/sync_espelho_test.ts
@@ -41,6 +42,7 @@ import { SupabaseSyncRepository } from "./supabase-cadastro-repository.ts";
 import { runBatidaSync } from "./batida-sync.ts";
 import { SupabaseBatidaRepository } from "./supabase-batida-repository.ts";
 import { getSql } from "./postgres-client.ts";
+import { claimSyncRun, closeSyncRun } from "./sync-run.ts";
 
 const TEM_BANCO = Boolean(Deno.env.get("DATABASE_URL"));
 
@@ -266,48 +268,60 @@ Deno.test({
   },
 });
 
+/** A entidade que a `sync-cadastro` reivindica — ver `sync-cadastro/index.ts`. */
+const ENTIDADE_CADASTRO = "Funcionario";
+
+/** Prefixo de log do ensaio, para não se passar por uma das funções. */
+const LOG = "[ensaio]";
+
+/** Falha alto se a linha de `app.integration` não estiver de pé. */
+async function exigirIntegracao(sql: ReturnType<typeof getSql>): Promise<void> {
+  const integracao = await sql<{ id: string }[]>`
+    select id from app.integration where provider = 'secullum' and active
+  `;
+  assertEquals(
+    integracao.length,
+    1,
+    "app.integration não tem a linha do Secullum — a reivindicação devolveria " +
+      "`sem_integracao` e a sincronização rodaria sem lock. Rode " +
+      "scripts/janela_integracao_secullum.sql (o scripts/testar_migrations.sh já o faz).",
+  );
+}
+
 /**
- * O rastro da execução de cadastro em `app.sync_run`.
+ * O diário e o lock da execução de cadastro.
  *
  * A guarda de `scripts/janela_integracao_secullum.sql` já prova que a tabela
- * aceita a linha — mas prova por uma **cópia** da instrução, escrita à mão em
- * SQL. O que ela não alcança é se alguém chama: até 02/09/2026 a
- * `sync-cadastro` não chamava ninguém, e nada ficava vermelho por isso. Depois
- * da troca de runner esse silêncio custa o diário inteiro do cadastro —
- * `app.job_execucao`, que hoje registra as passadas de 30 em 30 min, é do
- * runner que sai.
+ * aceita a linha, e o bloco de prova da migration 34 já prova que o índice
+ * barra a segunda — mas os dois provam por SQL escrito à mão. O que nenhum
+ * deles alcança é se o **código** reivindica: até 02/09/2026 a `sync-cadastro`
+ * não escrevia diário nenhum, e a `sync-batidas` gravava uma linha só, no fim,
+ * já terminal — em cima da qual o índice seria um lock que nunca tranca.
  *
- * Roda depois do ciclo de cadastro, e usa os contadores dele.
+ * Roda depois do ciclo de cadastro, e fecha a linha com os contadores dele.
  */
 Deno.test({
-  name: "a execução de cadastro deixa rastro em app.sync_run",
+  name: "a execução de cadastro reivindica o lock, fecha a linha, e libera o par",
   ignore: !TEM_BANCO,
   sanitizeResources: false,
   sanitizeOps: false,
   async fn() {
     assert(resumoCadastro, "o ciclo de cadastro não correu — este teste depende dele");
     const sql = getSql();
+    await exigirIntegracao(sql);
 
-    // Pré-condição explícita, porque a falha dela é MACIA: sem integração ativa,
-    // `writeSyncRun` escreve no log e volta, e a asserção seguinte reprovaria
-    // acusando o código em vez do preparo.
-    const integracao = await sql<{ id: string }[]>`
-      select id from app.integration where provider = 'secullum' and active
-    `;
-    assertEquals(
-      integracao.length,
-      1,
-      "app.integration não tem a linha do Secullum — rode scripts/janela_integracao_secullum.sql " +
-        "(o scripts/testar_migrations.sh já a aplica antes deste ensaio)",
+    const claim = await claimSyncRun(sql, LOG, ENTIDADE_CADASTRO, "incremental");
+    assert(claim.ok, "a primeira reivindicação foi recusada");
+
+    // O escopo é OUTRO de propósito: a chave do lock não o inclui, porque
+    // incremental e backfill escrevem as mesmas tabelas.
+    const concorrente = await claimSyncRun(sql, LOG, ENTIDADE_CADASTRO, "backfill");
+    assert(
+      !concorrente.ok && concorrente.reason === "em_andamento",
+      "uma segunda execução da mesma entidade passou — o lock não tranca",
     );
 
-    const repo = new SupabaseSyncRepository();
-    const startedAt = new Date().toISOString();
-    await repo.recordSyncRun({
-      entity: "Funcionario",
-      scope: "incremental",
-      startedAt,
-      finishedAt: new Date().toISOString(),
+    await closeSyncRun(sql, LOG, claim.id, {
       status: "completed",
       recordsRead: resumoCadastro.employeesFetched,
       recordsWritten: resumoCadastro.employeesUpserted,
@@ -322,17 +336,93 @@ Deno.test({
         records_read: number;
         records_written: number;
         records_skipped: number;
+        finished_at: Date | null;
       }[]
     >`
-      select status, scope, records_read, records_written, records_skipped
-        from app.sync_run
-       where entity = 'Funcionario' and started_at = ${startedAt}
+      select status, scope, records_read, records_written, records_skipped, finished_at
+        from app.sync_run where id = ${claim.id}
     `;
-    assertEquals(linhas.length, 1, "a execução de cadastro não deixou linha em app.sync_run");
+    assertEquals(linhas.length, 1, "a linha reivindicada sumiu");
     assertEquals(linhas[0].status, "completed");
     assertEquals(linhas[0].scope, "incremental");
+    assert(linhas[0].finished_at !== null, "a execução foi fechada sem finished_at");
     assertEquals(linhas[0].records_read, 1, "records_read não trouxe o que o ciclo leu");
     assertEquals(linhas[0].records_written, 1, "records_written não trouxe o que o ciclo escreveu");
     assertEquals(linhas[0].records_skipped, 0, "records_skipped não trouxe o que o ciclo pulou");
+
+    // Fechada a anterior, o ciclo seguinte tem de conseguir reivindicar — é o
+    // que um índice sem o `where status = 'running'` quebraria.
+    const seguinte = await claimSyncRun(sql, LOG, ENTIDADE_CADASTRO, "incremental");
+    assert(seguinte.ok, "o par não liberou depois de a execução fechar");
+    await closeSyncRun(sql, LOG, seguinte.id, {
+      status: "completed",
+      recordsRead: 0,
+      recordsWritten: 0,
+      recordsSkipped: 0,
+      error: null,
+    });
+  },
+});
+
+/**
+ * O reaper — a metade sem a qual o lock é pior que a doença.
+ *
+ * Uma função que morre depois de reivindicar (timeout, deploy no meio, OOM)
+ * deixa a linha `running` para sempre, e daí em diante TODA execução é
+ * recusada: um crash transitório viraria parada permanente da sincronização.
+ * Por isso `claimSyncRun` encerra como `failed` o que passou do lease antes de
+ * reivindicar.
+ */
+Deno.test({
+  name: "uma reivindicação abandonada é encerrada e não tranca a próxima",
+  ignore: !TEM_BANCO,
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    const sql = getSql();
+    await exigirIntegracao(sql);
+    const entidade = `__ensaio_reaper_${SEQ}__`;
+
+    const [integracao] = await sql<{ id: string; tenant_id: string }[]>`
+      select id, tenant_id from app.integration
+       where provider = 'secullum' and active order by created_at limit 1
+    `;
+    // Uma execução reivindicada há 20 min e nunca fechada. O lease é de 10.
+    const [abandonada] = await sql<{ id: string }[]>`
+      insert into app.sync_run (
+        tenant_id, integration_id, entity, scope, started_at, status
+      ) values (
+        ${integracao.tenant_id}, ${integracao.id}, ${entidade}, 'incremental',
+        now() - interval '20 minutes', 'running'
+      ) returning id
+    `;
+
+    const claim = await claimSyncRun(sql, LOG, entidade, "incremental");
+    assert(claim.ok, "o lock abandonado recusou a execução seguinte — parada permanente");
+
+    const [velha] = await sql<{ status: string; error: string | null }[]>`
+      select status, error from app.sync_run where id = ${abandonada.id}
+    `;
+    assertEquals(velha.status, "failed", "a execução abandonada continuou 'running'");
+    assert(
+      velha.error?.includes("abandonada"),
+      "a execução abandonada foi encerrada sem dizer por quê",
+    );
+
+    // Uma execução ainda DENTRO do lease continua trancando — sem isto o reaper
+    // seria só um jeito lento de não ter lock nenhum.
+    const concorrente = await claimSyncRun(sql, LOG, entidade, "incremental");
+    assert(
+      !concorrente.ok && concorrente.reason === "em_andamento",
+      "a reivindicação recém-criada não trancou",
+    );
+
+    await closeSyncRun(sql, LOG, claim.id, {
+      status: "completed",
+      recordsRead: 0,
+      recordsWritten: 0,
+      recordsSkipped: 0,
+      error: null,
+    });
   },
 });

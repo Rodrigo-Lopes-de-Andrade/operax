@@ -28,38 +28,54 @@
 
 import { createSecullumClientFromEnv } from "../_shared/secullum-client.ts";
 import { BatidaCorrelationBrokenError, runBatidaSync } from "../_shared/batida-sync.ts";
-import {
-  createSupabaseBatidaRepositoryFromEnv,
-  type SupabaseBatidaRepository,
-} from "../_shared/supabase-batida-repository.ts";
+import { createSupabaseBatidaRepositoryFromEnv } from "../_shared/supabase-batida-repository.ts";
+import { getSql, type Sql } from "../_shared/postgres-client.ts";
+import { claimSyncRun, closeSyncRun } from "../_shared/sync-run.ts";
 import { resolveRunOptions } from "../_shared/run-options.ts";
+
+/** Prefixo de log — o mesmo que o resto da função usa. */
+const LOG = "[sync-batidas]";
 
 /** Nome da entidade em `app.sync_run.entity` — o mesmo que `fn_data_freshness` agrupa. */
 const ENTITY = "Batida";
 
 async function handleRequest(request: Request): Promise<Response> {
   const { scope, windowDays } = await resolveRunOptions(request);
-  const startedAt = new Date().toISOString();
-  let repo: SupabaseBatidaRepository | null = null;
+  let sql: Sql | null = null;
+  let runId: string | null = null;
 
   try {
+    // Reivindicar antes de falar com a origem: reivindicar depois protegeria o
+    // banco e deixaria o Secullum tomar as duas chamadas. Os dois escopos
+    // disputam o MESMO lock (migration 34) porque escrevem as mesmas tabelas —
+    // é o que aposenta a heurística do minuto 7 do backfill.
+    sql = getSql();
+    const claim = await claimSyncRun(sql, LOG, ENTITY, scope);
+    if (!claim.ok && claim.reason === "em_andamento") {
+      console.warn(`${LOG} já há uma execução em andamento — esta invocação não faz nada.`);
+      return new Response(
+        JSON.stringify({ ok: false, error: "sincronização já em andamento" }, null, 2),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    // `sem_integracao` segue sem diário e sem lock — está logado alto lá dentro.
+    runId = claim.ok ? claim.id : null;
+
     const secullum = createSecullumClientFromEnv();
     await secullum.login();
 
-    repo = createSupabaseBatidaRepositoryFromEnv();
+    const repo = createSupabaseBatidaRepositoryFromEnv();
     const summary = await runBatidaSync(secullum, repo, undefined, undefined, windowDays, scope);
 
-    await repo.recordSyncRun({
-      entity: ENTITY,
-      scope,
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      status: "completed",
-      recordsRead: summary.batidasFetched,
-      recordsWritten: summary.batidasUpserted,
-      recordsSkipped: summary.batidasSkippedMissingFuncionario,
-      error: null,
-    });
+    if (runId) {
+      await closeSyncRun(sql, LOG, runId, {
+        status: "completed",
+        recordsRead: summary.batidasFetched,
+        recordsWritten: summary.batidasUpserted,
+        recordsSkipped: summary.batidasSkippedMissingFuncionario,
+        error: null,
+      });
+    }
 
     return new Response(JSON.stringify({ ok: true, summary }, null, 2), {
       status: 200,
@@ -71,24 +87,22 @@ async function handleRequest(request: Request): Promise<Response> {
     // permite ler "parou" sem abrir o log. Antes ela era um HTTP 200 `{ok:true}`
     // com zero batidas gravadas, e o único sinal era um aviso dentro de um JSON.
     const summary = error instanceof BatidaCorrelationBrokenError ? error.summary : null;
-    console.error(`[sync-batidas] Falha na sincronização (${scope}):`, message);
+    console.error(`${LOG} Falha na sincronização (${scope}):`, message);
 
-    // A gravação da execução falha aberto: um erro ao registrar não pode
-    // esconder o erro que estamos reportando.
-    try {
-      await repo?.recordSyncRun({
-        entity: ENTITY,
-        scope,
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        status: "failed",
-        recordsRead: summary?.batidasFetched ?? 0,
-        recordsWritten: summary?.batidasUpserted ?? 0,
-        recordsSkipped: summary?.batidasSkippedMissingFuncionario ?? 0,
-        error: message,
-      });
-    } catch (registro) {
-      console.error("[sync-batidas] Falha também ao registrar a execução:", registro);
+    // O fechamento falha aberto: um erro ao registrar não pode esconder o erro
+    // que estamos reportando.
+    if (sql && runId) {
+      try {
+        await closeSyncRun(sql, LOG, runId, {
+          status: "failed",
+          recordsRead: summary?.batidasFetched ?? 0,
+          recordsWritten: summary?.batidasUpserted ?? 0,
+          recordsSkipped: summary?.batidasSkippedMissingFuncionario ?? 0,
+          error: message,
+        });
+      } catch (registro) {
+        console.error(`${LOG} Falha também ao fechar a execução:`, registro);
+      }
     }
 
     return new Response(JSON.stringify({ ok: false, error: message, summary }, null, 2), {

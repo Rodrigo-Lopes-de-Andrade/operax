@@ -161,8 +161,13 @@ recusa como parâmetro desconhecido.
       ⚠️ O arquivo carrega `secullum` com PII completa e precisa de casa
       definitiva antes da janela; onde ele fica é decisão do dono.
 - [ ] **A linha de `app.integration`** — `scripts/janela_integracao_secullum.sql`.
-      Sem ela a janela fecha verde e o critério de saída reprova, porque
-      `recordSyncRun` falha macio. Ver passo 7, item 3.
+      Sem ela a janela fecha verde e o critério de saída reprova, porque a
+      reivindicação da execução falha macio. Ver passo 7, item 3.
+- [ ] **A migration 34 aplicada em produção** — o lock de sobreposição de
+      `app.sync_run`. É pré-requisito do `functions deploy`, não item da janela:
+      sem o índice, as funções novas param na primeira invocação. Produção está
+      convergida até a 33 (ledger em 46), então esta é a única pendente. Ver
+      passo 7, item 5.
 - [ ] **Dois segredos novos no Vault de produção** — `edge_functions_base_url`
       (`https://<ref>.supabase.co/functions/v1`, sem barra final) e
       `edge_functions_token` (um JWT do projeto). Criados com
@@ -172,10 +177,13 @@ recusa como parâmetro desconhecido.
 - [ ] **Decidir se o endpoint da sincronização pode ficar disparável por
       qualquer um.** Depois da troca, quem barra as Edge Functions é o
       `verify_jwt` do gateway, que aceita a anon key — que é pública. Não é
-      vazamento; é custo, carga na origem, e passadas concorrentes, porque
-      `app.sync_run` não tem o lock de sobreposição que o `app.job_execucao`
-      tem. Fechar exige conferir um segredo compartilhado **dentro** das
-      funções: é mudança de contrato, e por isso está no preparo.
+      vazamento; é custo e carga na origem. ✅ **A metade "passadas
+      concorrentes" caiu em 02/09**: a migration 34 e a reivindicação em
+      `sync-run.ts` deram a `app.sync_run` o lock que o `app.job_execucao`
+      tinha, e uma invocação sobreposta agora recebe 409 sem chamar o Secullum.
+      O que sobra é uma invocação de cada vez, fora de hora — fechar isso exige
+      conferir um segredo compartilhado **dentro** das funções, que é mudança de
+      contrato, e por isso segue no preparo.
 - [x] **Ao menos um usuário em `auth.users`** — item que faltava nesta lista e é
       pré-requisito da curadoria, não da janela. Criado em 31/08 pelo Admin API,
       já confirmado (`mailer_autoconfirm` é `false`), com vínculo `owner` em
@@ -379,7 +387,13 @@ do passo 2. `app.sync_run.scope` e `records_skipped` dependem da migration 21.
 Entre o passo 2 e o fim deste passo **não existe sincronização funcional** — esse
 intervalo é a janela real.
 
-1. `supabase functions deploy` das três, com os cinco secrets já configurados.
+1. ⚠️ **A migration 34 primeiro, o `functions deploy` depois.** Ela cria
+   `sync_run_em_andamento_key`, o lock de sobreposição, e sem ela
+   `claimSyncRun` estoura `there is no unique or exclusion constraint matching
+   the ON CONFLICT specification` — a função falha alto, que é o desfecho certo
+   e ainda assim é sincronização parada. Nenhum deploy aplica migration neste
+   projeto; é passo à mão. Depois, `supabase functions deploy` das três, com os
+   cinco secrets já configurados.
 2. Reescrever o comando dos dois jobs de `pg_cron`: hoje fazem **GET** no
    `vercel_jobs_base_url`; passam a invocar as funções. É a reescrita do comando
    que desliga a chamada à Vercel — não há gesto separado para isso.
@@ -399,7 +413,10 @@ intervalo é a janela real.
    O backfill é o que devolve o contrato da `SPEC-TECNICA.md` — correção na
    origem até D-7 vira revogação do indício. Com o runner da Vercel ele não
    existia. ⚠️ **O minuto 7 sai da grade de 15 de propósito**: em múltiplo de 15
-   ele colidiria com o incremental, e não há lock de sobreposição. A heurística
+   ele colidiria com o incremental. ✅ Desde 02/09 há lock (migration 34 + a
+   reivindicação em `sync-run.ts`), e o minuto 7 passou de única proteção a
+   redundância — fica como está, porque uma colisão que o lock resolve com 409
+   é um backfill que não rodou naquele dia. A heurística
    de contagem do §3b passa a ser "96 + 48 + 1 por dia, e a única fora da grade
    é o backfill das 04:07 UTC".
 
@@ -590,23 +607,51 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
    `employeesFetched`/`employeesUpserted` para `Funcionario`. O
    `records_skipped` da 21 também tem origem —
    `batidasSkippedMissingFuncionario` e `employeesSkipped`.
-5. ⛔ **`app.job_execucao` também é o lock, e `app.sync_run` não tem equivalente.**
-   O índice único parcial `job_execucao_em_andamento_key` — `(job) where status =
-   'running'` — é o que impede duas passadas sobrepostas; o comentário da tabela
-   em produção o declara ("lock de sobreposição dos jobs agendados"). Trocar de
-   diário sem trocar de lock entrega sobreposição silenciosa. Então o alvo do
-   passo 4 **não é "mudar de tabela"**: é escrever nos dois, ou dar o lock a
-   `app.sync_run` antes de aposentar o outro. Decidir **antes** da janela.
+5. ✅ **`app.sync_run` ganhou o lock — 02/09/2026.** O índice único parcial
+   `job_execucao_em_andamento_key` — `(job) where status = 'running'` — é o que
+   impede duas passadas sobrepostas no diário do runner antigo; o comentário da
+   tabela em produção o declara ("lock de sobreposição dos jobs agendados").
+   Trocar de diário sem trocar de lock entregaria sobreposição silenciosa.
 
-   ⛔ **E o índice sozinho não serve — medido em 01/09/2026.** `app.sync_run`
-   tem `status` com default `'running'` e o check aceita
-   `running/completed/failed/partial`: o schema foi desenhado para reivindicar
-   antes e fechar depois. Só que **ninguém reivindica**. `recordSyncRun` é
-   chamado uma vez, no fim, já com status terminal — `grep 'running'` em
-   `supabase/functions/` não devolve nenhuma escrita. Copiar o índice parcial
-   para `app.sync_run` produziria um lock que nunca tranca. O conserto tem duas
-   metades, e a de schema é a menor: a função precisa gravar `running` ao
-   começar e fechar a mesma linha ao terminar.
+   O conserto tinha duas metades, e a de schema era a menor: a **migration 34**
+   cria `sync_run_em_andamento_key` em `(tenant_id, entity) where status =
+   'running'`, e `_shared/sync-run.ts` passou a **reivindicar antes e fechar
+   depois** (`claimSyncRun` / `closeSyncRun`), nas duas funções. Enquanto era
+   uma escrita só, no fim, já terminal, o índice seria um lock que nunca tranca.
+
+   **A chave não inclui `scope`, de propósito:** `incremental` e `backfill`
+   escrevem as MESMAS tabelas, então deixá-los correr juntos é a sobreposição
+   que se quer evitar, não uma exceção a ela. Isso aposenta a heurística do
+   minuto 7 do `scripts/janela_cron_runner.sql` — o backfill saía da grade de 15
+   por não haver lock. O agendamento fica como está: agora é redundância, não
+   a única proteção.
+
+   ⛔ **O lease é a metade que faltava no enunciado, e sem ela o lock é pior que
+   a doença.** Uma função que morre depois de reivindicar (timeout, deploy no
+   meio, OOM) deixaria a linha `running` para sempre, e daí em diante **toda**
+   execução seria recusada: crash transitório vira parada permanente. Por isso
+   `claimSyncRun` encerra como `failed` o que passou do lease antes de
+   reivindicar — o mesmo papel do "reaper de job_execucao" que apareceu no log
+   do incidente de 27/08.
+
+   **O lease de 10 min é medido, não escolhido.** Diário de produção em
+   02/09/2026, 954 execuções: `sync_batidas` 3,5 s de média (máx 27 s),
+   `sync_cadastro` 7,4 s (máx 31 s), e **zero linhas `running` presas**. Dez
+   minutos são 20x o pior caso medido e menos que a menor cadência (15 min) —
+   um `running` abandonado nunca sobrevive para bloquear o ciclo seguinte.
+
+   ⚠️ **Ordem no passo 4: a migration 34 vem ANTES do `functions deploy`.**
+   Conferido derrubando o índice e rodando o ensaio: sem ele o
+   `on conflict ... where status = 'running'` estoura
+   `there is no unique or exclusion constraint matching the ON CONFLICT
+   specification`. A função **falha alto** (500) em vez de rodar sem lock — que
+   é o desfecho certo, mas é sincronização parada se a ordem for invertida.
+
+   ⚠️ **Uma invocação sobreposta passa a responder 409**, e isso não é o runner
+   quebrado: é o lock funcionando. O critério de saída pede
+   `net._http_response` com 200 — um 409 ali quer dizer que alguém disparou a
+   função fora da cadência, que é exatamente o que a anon key pública permite
+   (item 2 do passo 4).
 
 6. ✅ **A `sync-cadastro` passou a escrever diário — 02/09/2026.** Até aqui só
    a `sync-batidas` chamava `recordSyncRun`, e isso era perda de

@@ -1764,6 +1764,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 - `sync_run_falha_idx` — `app.sync_run USING btree (tenant_id, started_at DESC) WHERE (status = 'failed'::text)`
 - `sync_run_freshness_idx` — `app.sync_run USING btree (tenant_id, entity, finished_at DESC) WHERE (status = 'completed'::text)`
 - `sync_run_idx` — `app.sync_run USING btree (integration_id, entity, started_at DESC)`
+- `UNIQUE sync_run_em_andamento_key` — `app.sync_run USING btree (tenant_id, entity) WHERE (status = 'running'::text)`
 
 </details>
 

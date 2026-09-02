@@ -30,13 +30,21 @@
 // então entidade que nunca escreve não vira linha velha — vira ausência, que
 // nenhum painel lê como problema. Ver docs/RUNBOOK-JANELA-CONVERGENCIA.md,
 // passo 7, item 6.
+//
+// A linha é reivindicada ANTES de a origem ser lida, e é ela o lock de
+// sobreposição (migration 34): uma segunda invocação simultânea recebe 409 e
+// não chama o Secullum. Depois da troca de runner isso deixa de ser hipótese —
+// quem barra a função é o `verify_jwt` do gateway, que aceita a anon key, que é
+// pública.
 
 import { createSecullumClientFromEnv } from "../_shared/secullum-client.ts";
 import { runCadastroSync } from "../_shared/cadastro-sync.ts";
-import {
-  createSupabaseSyncRepositoryFromEnv,
-  type SupabaseSyncRepository,
-} from "../_shared/supabase-cadastro-repository.ts";
+import { createSupabaseSyncRepositoryFromEnv } from "../_shared/supabase-cadastro-repository.ts";
+import { getSql, type Sql } from "../_shared/postgres-client.ts";
+import { claimSyncRun, closeSyncRun } from "../_shared/sync-run.ts";
+
+/** Prefixo de log — o mesmo que o resto da função usa. */
+const LOG = "[sync-cadastro]";
 
 /**
  * Nome da entidade em `app.sync_run.entity` — o exemplo que a própria migration
@@ -52,31 +60,40 @@ import {
 const ENTITY = "Funcionario";
 
 async function handleRequest(): Promise<Response> {
-  const startedAt = new Date().toISOString();
-  // O repositório nasce ANTES do login, e a ordem é o ponto: a falha que mais
-  // precisa de rastro é a de autenticação no Secullum, e criá-lo depois
-  // deixaria justamente ela sem com o que gravar.
-  let repo: SupabaseSyncRepository | null = null;
+  let sql: Sql | null = null;
+  let runId: string | null = null;
 
   try {
-    repo = createSupabaseSyncRepositoryFromEnv();
+    // A reivindicação vem ANTES do login, e a ordem é o ponto duas vezes: a
+    // falha que mais precisa de rastro é a de autenticação, e o lock só protege
+    // a origem se for tomado antes de alguém falar com ela.
+    sql = getSql();
+    const claim = await claimSyncRun(sql, LOG, ENTITY, "incremental");
+    if (!claim.ok && claim.reason === "em_andamento") {
+      console.warn(`${LOG} já há uma execução em andamento — esta invocação não faz nada.`);
+      return new Response(
+        JSON.stringify({ ok: false, error: "sincronização já em andamento" }, null, 2),
+        { status: 409, headers: { "Content-Type": "application/json" } },
+      );
+    }
+    // `sem_integracao` segue sem diário e sem lock — está logado alto lá dentro.
+    runId = claim.ok ? claim.id : null;
 
     const secullum = createSecullumClientFromEnv();
     await secullum.login();
 
+    const repo = createSupabaseSyncRepositoryFromEnv();
     const summary = await runCadastroSync(secullum, repo);
 
-    await repo.recordSyncRun({
-      entity: ENTITY,
-      scope: "incremental",
-      startedAt,
-      finishedAt: new Date().toISOString(),
-      status: "completed",
-      recordsRead: summary.employeesFetched,
-      recordsWritten: summary.employeesUpserted,
-      recordsSkipped: summary.employeesSkipped,
-      error: null,
-    });
+    if (runId) {
+      await closeSyncRun(sql, LOG, runId, {
+        status: "completed",
+        recordsRead: summary.employeesFetched,
+        recordsWritten: summary.employeesUpserted,
+        recordsSkipped: summary.employeesSkipped,
+        error: null,
+      });
+    }
 
     return new Response(JSON.stringify({ ok: true, summary }, null, 2), {
       status: 200,
@@ -84,26 +101,23 @@ async function handleRequest(): Promise<Response> {
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Erro desconhecido.";
-    console.error("[sync-cadastro] Falha na sincronização cadastral:", message);
+    console.error(`${LOG} Falha na sincronização cadastral:`, message);
 
-    // A gravação da execução falha aberto: um erro ao registrar não pode
-    // esconder o erro que estamos reportando. Os contadores vão zerados porque
-    // `runCadastroSync` lançou — o resumo dele morreu junto —, e é o `error`
-    // que carrega o motivo.
-    try {
-      await repo?.recordSyncRun({
-        entity: ENTITY,
-        scope: "incremental",
-        startedAt,
-        finishedAt: new Date().toISOString(),
-        status: "failed",
-        recordsRead: 0,
-        recordsWritten: 0,
-        recordsSkipped: 0,
-        error: message,
-      });
-    } catch (registro) {
-      console.error("[sync-cadastro] Falha também ao registrar a execução:", registro);
+    // O fechamento falha aberto: um erro ao registrar não pode esconder o erro
+    // que estamos reportando. Os contadores vão zerados porque `runCadastroSync`
+    // lançou — o resumo dele morreu junto —, e é o `error` que carrega o motivo.
+    if (sql && runId) {
+      try {
+        await closeSyncRun(sql, LOG, runId, {
+          status: "failed",
+          recordsRead: 0,
+          recordsWritten: 0,
+          recordsSkipped: 0,
+          error: message,
+        });
+      } catch (registro) {
+        console.error(`${LOG} Falha também ao fechar a execução:`, registro);
+      }
     }
 
     return new Response(JSON.stringify({ ok: false, error: message }, null, 2), {

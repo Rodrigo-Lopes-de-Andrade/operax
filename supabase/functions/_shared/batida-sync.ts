@@ -81,7 +81,7 @@ import {
   type TodayProvider,
 } from "./cadastro-sync.ts";
 import type { RawBatida, RawFonteDados } from "./secullum-batida-types.ts";
-import type { SyncRunRecord, SyncScope } from "./sync-run.ts";
+import type { SyncScope } from "./sync-run.ts";
 
 // ---------------------------------------------------------------------------
 // Contrato mínimo exigido do client Secullum (compatível com SecullumClient).
@@ -226,16 +226,13 @@ export interface BatidaSyncRepository {
    * commita, ou nada — ver o comentário em `SupabaseBatidaRepository`.
    */
   transaction<T>(work: (tx: BatidaSyncRepository) => Promise<T>): Promise<T>;
-
-  /** Grava o resultado da execução em `app.sync_run`. Nunca derruba a ingestão. */
-  recordSyncRun(record: SyncRunRecord): Promise<void>;
 }
 
-// `SyncScope` e `SyncRunRecord` moraram aqui enquanto a `sync-batidas` era a
-// única a escrever o diário. Passaram para `sync-run.ts`, junto da gravação,
-// quando a `sync-cadastro` também passou a escrever — e continuam reexportados
-// daqui porque é deste módulo que o resto do código (e os testes) os importa.
-export type { SyncRunRecord, SyncScope };
+// `SyncScope` morou aqui enquanto a `sync-batidas` era a única a escrever o
+// diário. Passou para `sync-run.ts`, junto da reivindicação e do fechamento, e
+// continua reexportado daqui porque é deste módulo que `run-options.ts` o
+// importa.
+export type { SyncScope };
 
 /**
  * A origem devolveu registros e **nenhum** deles encontrou funcionário local.

@@ -22,7 +22,6 @@ import {
   runBatidaSync,
   type SecullumReader,
   type SyncLogger,
-  type SyncRunRecord,
   type UpsertBatidaInput,
   type UpsertMarcacaoInput,
 } from "./batida-sync.ts";
@@ -61,7 +60,6 @@ function leitor(itens: unknown[]): SecullumReader {
 class RepoFalso implements BatidaSyncRepository {
   readonly committed: string[] = [];
   readonly chamadas: string[] = [];
-  readonly runs: SyncRunRecord[] = [];
   emTransacao = false;
   falharEm: string | null = null;
   funcionarios: FuncionarioLookupRow[] = [{ id: "uuid-10", secullumFuncionarioId: 10 }];
@@ -137,10 +135,6 @@ class RepoFalso implements BatidaSyncRepository {
   }
   setCursor(): Promise<void> {
     this.registra("setCursor");
-    return Promise.resolve();
-  }
-  recordSyncRun(record: SyncRunRecord): Promise<void> {
-    this.runs.push(record);
     return Promise.resolve();
   }
 }

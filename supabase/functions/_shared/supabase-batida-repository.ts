@@ -17,7 +17,6 @@
 // racional completo de cada tabela.
 
 import { getSql, type Sql } from "./postgres-client.ts";
-import { writeSyncRun } from "./sync-run.ts";
 import type {
   BatidaRow,
   BatidaSyncRepository,
@@ -26,7 +25,6 @@ import type {
   FuncionarioLookupRow,
   InsertFonteDadosInput,
   MarcacaoRow,
-  SyncRunRecord,
   UpsertBatidaInput,
   UpsertMarcacaoInput,
 } from "./batida-sync.ts";
@@ -327,10 +325,6 @@ export class SupabaseBatidaRepository implements BatidaSyncRepository {
     `;
   }
 
-  /** Grava o resultado da execução em `app.sync_run` — ver `sync-run.ts`. */
-  async recordSyncRun(record: SyncRunRecord): Promise<void> {
-    await writeSyncRun(this.sql, "[sync-batidas]", record);
-  }
 }
 
 /**

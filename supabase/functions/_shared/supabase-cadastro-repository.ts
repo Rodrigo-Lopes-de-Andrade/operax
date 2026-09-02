@@ -28,7 +28,6 @@
 // template.
 
 import { getSql } from "./postgres-client.ts";
-import { type SyncRunRecord, writeSyncRun } from "./sync-run.ts";
 import type {
   CentroCustoRow,
   CidadeRow,
@@ -1616,18 +1615,6 @@ export class SupabaseSyncRepository implements SyncRepository {
       )
     }
     `;
-  }
-
-  /**
-   * Grava o resultado da execução em `app.sync_run` — ver `sync-run.ts`.
-   *
-   * Não faz parte de `SyncRepository`, e é de propósito: quem registra a
-   * execução é a Edge Function, não o motor. `runCadastroSync` não sabe se
-   * terminou — quem sabe é quem o chamou, porque o caso que mais precisa de
-   * rastro é justamente aquele em que ele lançou.
-   */
-  async recordSyncRun(record: SyncRunRecord): Promise<void> {
-    await writeSyncRun(this.sql, "[sync-cadastro]", record);
   }
 }
 
