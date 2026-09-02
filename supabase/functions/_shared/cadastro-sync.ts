@@ -880,6 +880,14 @@ export interface SyncSummary {
   companiesUpserted: number;
   unitsUpserted: number;
   managersUpserted: number;
+  /**
+   * Funcionários LIDOS da origem nesta execução — o `records_read` do diário.
+   *
+   * Contado da resposta, e não derivado de `employeesUpserted + employeesSkipped`:
+   * derivar tornaria a soma verdadeira por construção, e é justamente ela que
+   * denuncia um caminho de saída novo no laço que não incrementa contador nenhum.
+   */
+  employeesFetched: number;
   employeesUpserted: number;
   employeesSkipped: number;
   schedulesUpserted: number;
@@ -927,6 +935,7 @@ function emptySummary(): SyncSummary {
     departmentManagerTransitions: 0,
     unitsUpserted: 0,
     managersUpserted: 0,
+    employeesFetched: 0,
     employeesUpserted: 0,
     employeesSkipped: 0,
     schedulesUpserted: 0,
@@ -2395,6 +2404,7 @@ export async function runCadastroSync(
   // abaixo. Nenhuma chamada a GET /Empresas: `Funcionario.Empresa` já traz
   // tudo que `company` precisa (Documento, Nome).
   const funcionarios = await secullum.get<RawFuncionario[]>("Funcionarios");
+  summary.employeesFetched = funcionarios.length;
 
   // 1.0) "Cidade" / "Funcao" (ADR-011) — resolvidos ANTES de company/employee,
   // porque ambos precisam da FK (cidade_id/funcao_id) já pronta. Deduplicado

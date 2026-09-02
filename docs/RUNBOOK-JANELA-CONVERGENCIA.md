@@ -551,8 +551,10 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
    `sync_batidas` e `sync_cadastro`. `fn_data_freshness` agrupa por **entidade**, e
    `90_reconciliar_sync.py` procura `entity = 'Batida'`. Uma passada de cadastro
    carimba **17 entidades** no `resumo` (`companiesUpserted`, `unitsUpserted`,
-   `employeesUpserted`, `schedulesUpserted`, `absencesUpserted`, …). Uma linha de
-   job vira **N linhas** de `app.sync_run`, uma por entidade.
+   `employeesUpserted`, `schedulesUpserted`, `absencesUpserted`, …).
+   ⚠️ **A conclusão que este item tirava daí — "uma linha de job vira N linhas
+   de `app.sync_run`, uma por entidade" — foi revista em 02/09.** É uma linha
+   por passada, `entity = 'Funcionario'`; o porquê está no item 6.
 2. **Vocabulário de status.** O runner grava `running` / `success` / `error`;
    `app.sync_run` exige `running` / `completed` / `failed` / `partial`. `success`
    não é `completed`, e o índice de frescor da 12 filtra exatamente por
@@ -584,8 +586,9 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
    invisível para ele. O índice único da 14 também só alcança os três de
    WhatsApp, e nenhuma view de `public` lê a tabela.
 4. **Contadores.** `records_read`/`records_written` saem prontos do `resumo`:
-   `batidasFetched`/`batidasUpserted` para `Batida`, os `*Upserted` por entidade
-   no cadastro. O `records_skipped` da 21 também tem origem —
+   `batidasFetched`/`batidasUpserted` para `Batida`,
+   `employeesFetched`/`employeesUpserted` para `Funcionario`. O
+   `records_skipped` da 21 também tem origem —
    `batidasSkippedMissingFuncionario` e `employeesSkipped`.
 5. ⛔ **`app.job_execucao` também é o lock, e `app.sync_run` não tem equivalente.**
    O índice único parcial `job_execucao_em_andamento_key` — `(job) where status =
@@ -605,23 +608,47 @@ com código 1. O passo 7 reprova, e reprova certo: quem não fechou foi o passo 
    metades, e a de schema é a menor: a função precisa gravar `running` ao
    começar e fechar a mesma linha ao terminar.
 
-6. ⛔ **A `sync-cadastro` não escreve diário nenhum — e isso é perda de
-   observabilidade, não empate.** Só a `sync-batidas` chama `recordSyncRun`.
-   Hoje `app.job_execucao` tem uma linha a cada 30 min para `sync_cadastro`, e
-   foi por ela que a falha de autenticação de 01/09 03:30 ficou visível. Depois
-   da troca, uma falha de cadastro **não aparece em tabela nenhuma** — só no log
-   da Edge Function.
+6. ✅ **A `sync-cadastro` passou a escrever diário — 02/09/2026.** Até aqui só
+   a `sync-batidas` chamava `recordSyncRun`, e isso era perda de
+   observabilidade, não empate: hoje `app.job_execucao` tem uma linha a cada
+   30 min para `sync_cadastro`, e foi por ela que a falha de autenticação de
+   01/09 03:30 ficou visível. Depois da troca, uma falha de cadastro não
+   apareceria em tabela nenhuma — só no log da Edge Function.
 
-   `fn_data_freshness` não cobre o buraco: ela agrupa pelo que existe em
+   `fn_data_freshness` não cobriria o buraco: ela agrupa pelo que existe em
    `app.sync_run`, não confere uma lista de entidades esperadas. Entidade que
    nunca escreve não vira linha velha — **vira ausência**, que nenhum painel lê
-   como problema. O passo 7 não reprova por isso, porque
-   `90_reconciliar_sync.py` só procura `entity = 'Batida'`.
+   como problema. E o passo 7 não reprovaria, porque `90_reconciliar_sync.py`
+   só procura `entity = 'Batida'`.
 
-   O conserto é aditivo — `sync-cadastro/index.ts` chamar `recordSyncRun` por
-   entidade, com os `*Upserted` que o resumo já carrega — mas é mudança de
-   comportamento numa função que vai para produção, então é decisão, não
-   preparo.
+   ⚠️ **Foi UMA linha por passada, e não uma por entidade** — o que este item
+   e o item 1 diziam antes. A razão de mudar é medida:
+   `runCadastroSync` **não tem `try/catch` em fase nenhuma**, então uma falha
+   em qualquer ponto derruba a passada inteira. As 17 entidades do resumo
+   sairiam sempre com o mesmo `started_at`, o mesmo `finished_at` e o mesmo
+   `status` — 17 linhas idênticas nas três colunas que alguém lê, a cada meia
+   hora, para um consumidor (`frontend/src/lib/freshness.ts`) que já reduz tudo
+   à entidade mais velha. A entidade é `Funcionario`, que é o exemplo que a
+   própria migration 09 dá para a coluna, e os contadores são
+   `employeesFetched` / `employeesUpserted` / `employeesSkipped`.
+
+   `employeesFetched` é novo no resumo, e não é enfeite: `records_read` derivado
+   de `escrito + pulado` seria verdadeiro por construção, e é justamente essa
+   soma que denuncia um caminho de saída novo no laço de funcionários que não
+   incremente contador nenhum.
+
+   O repositório nasce **antes** do `login()` na Edge Function, ao contrário da
+   `sync-batidas`: a falha que mais precisa de rastro é a de autenticação, e
+   criá-lo depois deixaria justamente ela sem com o que gravar. ⚠️ A
+   `sync-batidas` mantém a ordem antiga e por isso continua sem registrar falha
+   de login — o deadman de frescor ainda a pega (25 min sem `Batida`), mas o
+   motivo fica só no log. Não foi mexido aqui: é a função que já está de pé.
+
+   Provado no `make db-test`: `_shared/sync_espelho_test.ts` grava a linha com
+   os contadores do ciclo real e a lê de volta. A guarda SQL de
+   `janela_integracao_secullum.sql` prova que a tabela aceita a escrita, mas por
+   uma cópia da instrução — só o ensaio prova que **alguém chama**. Conferido
+   por sabotagem: sem a chamada, o teste reprova.
 
 ---
 
@@ -896,6 +923,11 @@ nklobmlxyidqxarzisph`, 1.305 linhas de DDL idênticas. É a conferência que o
       em `app.job_execucao` e o passo 4 não fechou. Conferir com
       `select entity, max(finished_at) from app.sync_run group by 1` antes de
       culpar a sync
+- [ ] **Duas entidades em `fn_data_freshness`, não uma** — `Batida` e
+      `Funcionario`. Desde 02/09 a `sync-cadastro` também escreve o diário
+      (passo 7, item 6), e é aqui que se vê se ela escreveu: entidade que nunca
+      grava **não fica velha, some** — e um `is_stale` limpo com uma entidade só
+      é o mesmo verde de quando o cadastro não estava rodando
 - [ ] O painel abre contra produção e lista unidade e ocorrência
 - [x] `select count(*) from supabase_migrations.schema_migrations` = 45 (23 + 22)
       — atingido em 31/08. **Passou a 46** com a migration 33, que consertou

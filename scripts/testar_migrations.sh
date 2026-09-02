@@ -76,10 +76,15 @@ psql -q -v ON_ERROR_STOP=1 -f scripts/88_teste_espelho.sql 2>&1 \
 RC=${PIPESTATUS[0]}
 [ $RC -ne 0 ] && exit $RC
 
-echo "--- a integração que destrava app.sync_run (tudo em rollback)"
+# Aplicado PARA VALER, e não mais dentro de um rollback: a linha é o que
+# destrava `writeSyncRun`, e o ensaio dos ciclos (mais abaixo) precisa dela de
+# pé para provar que a `sync-cadastro` grava o diário. Sem ela aquele ensaio
+# passaria pelo caminho macio — que é exatamente a falha que este arquivo
+# existe para não repetir. As duas passadas seguidas continuam provando a
+# idempotência; a guarda continua provando que a prova não deixa rastro.
+echo "--- a integração que destrava app.sync_run"
 psql -q -v ON_ERROR_STOP=1 <<'SQL' 2>&1 \
-  | grep -Ev '^(DO|SET|BEGIN|ROLLBACK)' | sed "s/^psql:[^ ]* //"
-begin;
+  | grep -Ev '^(DO|SET)' | sed "s/^psql:[^ ]* //"
 \i scripts/janela_integracao_secullum.sql
 \i scripts/janela_integracao_secullum.sql
 do $g$ begin
@@ -91,7 +96,6 @@ do $g$ begin
   end if;
   raise notice 'OK: 1 integração, idempotente, e a prova não deixou rastro';
 end $g$;
-rollback;
 SQL
 RC=${PIPESTATUS[0]}
 [ $RC -ne 0 ] && exit $RC

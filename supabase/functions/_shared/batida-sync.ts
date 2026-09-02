@@ -81,6 +81,7 @@ import {
   type TodayProvider,
 } from "./cadastro-sync.ts";
 import type { RawBatida, RawFonteDados } from "./secullum-batida-types.ts";
+import type { SyncRunRecord, SyncScope } from "./sync-run.ts";
 
 // ---------------------------------------------------------------------------
 // Contrato mínimo exigido do client Secullum (compatível com SecullumClient).
@@ -230,21 +231,11 @@ export interface BatidaSyncRepository {
   recordSyncRun(record: SyncRunRecord): Promise<void>;
 }
 
-/** As duas palavras que o schema já usa em `app.detection_run.scope` (migration 13). */
-export type SyncScope = "incremental" | "backfill";
-
-/** Uma linha de `app.sync_run`, do jeito que a Edge Function a monta. */
-export interface SyncRunRecord {
-  entity: string;
-  scope: SyncScope;
-  startedAt: string;
-  finishedAt: string;
-  status: "completed" | "failed";
-  recordsRead: number;
-  recordsWritten: number;
-  recordsSkipped: number;
-  error: string | null;
-}
+// `SyncScope` e `SyncRunRecord` moraram aqui enquanto a `sync-batidas` era a
+// única a escrever o diário. Passaram para `sync-run.ts`, junto da gravação,
+// quando a `sync-cadastro` também passou a escrever — e continuam reexportados
+// daqui porque é deste módulo que o resto do código (e os testes) os importa.
+export type { SyncRunRecord, SyncScope };
 
 /**
  * A origem devolveu registros e **nenhum** deles encontrou funcionário local.

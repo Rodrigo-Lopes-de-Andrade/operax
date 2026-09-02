@@ -24,6 +24,10 @@
 // do espelho que os repositórios escrevem, mais `app.batida_marcacao` e os dois
 // diários de evento.
 //
+// O terceiro bloco não é ciclo: é o rastro que o ciclo de cadastro deixa em
+// `app.sync_run`. Ele exige a linha de `app.integration` de pé — sem ela
+// `writeSyncRun` falha MACIO, e o teste reprova dizendo isso.
+//
 //   DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55322/operax_test \
 //     deno test --allow-net --allow-env --no-check _shared/sync_espelho_test.ts
 //
@@ -32,10 +36,11 @@
 
 import { assert, assertEquals } from "jsr:@std/assert@1";
 
-import { runCadastroSync, type SecullumReader } from "./cadastro-sync.ts";
+import { runCadastroSync, type SecullumReader, type SyncSummary } from "./cadastro-sync.ts";
 import { SupabaseSyncRepository } from "./supabase-cadastro-repository.ts";
 import { runBatidaSync } from "./batida-sync.ts";
 import { SupabaseBatidaRepository } from "./supabase-batida-repository.ts";
+import { getSql } from "./postgres-client.ts";
 
 const TEM_BANCO = Boolean(Deno.env.get("DATABASE_URL"));
 
@@ -59,6 +64,13 @@ const DIVERGENCIA_DE_SCHEMA: Record<string, string> = {
  * identificadores próprios, toda execução é uma primeira execução.
  */
 const SEQ = Date.now() % 100_000;
+
+/**
+ * O resumo do ciclo de cadastro, para o teste do diário usar os contadores
+ * REAIS — os mesmos três que `sync-cadastro/index.ts` passa a `recordSyncRun`.
+ * Inventar números aqui provaria que a linha entra, não que ela diz a verdade.
+ */
+let resumoCadastro: SyncSummary | null = null;
 
 /**
  * A origem, respondendo o mínimo que o parser aceita.
@@ -183,6 +195,13 @@ Deno.test({
       1,
       "a vigência de gestor não foi gravada — a RPC do espelho não foi exercitada",
     );
+    assertEquals(
+      resumo.employeesFetched,
+      1,
+      "a origem falsa devolveu um funcionário e o resumo não contou a leitura",
+    );
+
+    resumoCadastro = resumo;
   },
 });
 
@@ -244,5 +263,76 @@ Deno.test({
     assertEquals(resumo.batidasUpserted, 1, 'a "Batida" não foi escrita');
     assert(resumo.marcacoesUpserted > 0, "nenhuma marcação foi escrita");
     assert(resumo.fonteDadosInserted > 0, "a fonte de dados da marcação não foi escrita");
+  },
+});
+
+/**
+ * O rastro da execução de cadastro em `app.sync_run`.
+ *
+ * A guarda de `scripts/janela_integracao_secullum.sql` já prova que a tabela
+ * aceita a linha — mas prova por uma **cópia** da instrução, escrita à mão em
+ * SQL. O que ela não alcança é se alguém chama: até 02/09/2026 a
+ * `sync-cadastro` não chamava ninguém, e nada ficava vermelho por isso. Depois
+ * da troca de runner esse silêncio custa o diário inteiro do cadastro —
+ * `app.job_execucao`, que hoje registra as passadas de 30 em 30 min, é do
+ * runner que sai.
+ *
+ * Roda depois do ciclo de cadastro, e usa os contadores dele.
+ */
+Deno.test({
+  name: "a execução de cadastro deixa rastro em app.sync_run",
+  ignore: !TEM_BANCO,
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    assert(resumoCadastro, "o ciclo de cadastro não correu — este teste depende dele");
+    const sql = getSql();
+
+    // Pré-condição explícita, porque a falha dela é MACIA: sem integração ativa,
+    // `writeSyncRun` escreve no log e volta, e a asserção seguinte reprovaria
+    // acusando o código em vez do preparo.
+    const integracao = await sql<{ id: string }[]>`
+      select id from app.integration where provider = 'secullum' and active
+    `;
+    assertEquals(
+      integracao.length,
+      1,
+      "app.integration não tem a linha do Secullum — rode scripts/janela_integracao_secullum.sql " +
+        "(o scripts/testar_migrations.sh já a aplica antes deste ensaio)",
+    );
+
+    const repo = new SupabaseSyncRepository();
+    const startedAt = new Date().toISOString();
+    await repo.recordSyncRun({
+      entity: "Funcionario",
+      scope: "incremental",
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      status: "completed",
+      recordsRead: resumoCadastro.employeesFetched,
+      recordsWritten: resumoCadastro.employeesUpserted,
+      recordsSkipped: resumoCadastro.employeesSkipped,
+      error: null,
+    });
+
+    const linhas = await sql<
+      {
+        status: string;
+        scope: string;
+        records_read: number;
+        records_written: number;
+        records_skipped: number;
+      }[]
+    >`
+      select status, scope, records_read, records_written, records_skipped
+        from app.sync_run
+       where entity = 'Funcionario' and started_at = ${startedAt}
+    `;
+    assertEquals(linhas.length, 1, "a execução de cadastro não deixou linha em app.sync_run");
+    assertEquals(linhas[0].status, "completed");
+    assertEquals(linhas[0].scope, "incremental");
+    assertEquals(linhas[0].records_read, 1, "records_read não trouxe o que o ciclo leu");
+    assertEquals(linhas[0].records_written, 1, "records_written não trouxe o que o ciclo escreveu");
+    assertEquals(linhas[0].records_skipped, 0, "records_skipped não trouxe o que o ciclo pulou");
   },
 });
