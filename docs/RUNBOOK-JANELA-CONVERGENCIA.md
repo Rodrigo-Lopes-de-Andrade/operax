@@ -170,6 +170,16 @@ recusa como parâmetro desconhecido.
       `functions deploy`: sem o índice, as funções novas param na primeira
       invocação. Conferido: índice criado com o predicado certo, e zero resíduo
       do bloco de prova. Ver passo 7, item 5.
+- [ ] **A migration 35 aplicada em produção** — o limiar de frescor de `Foto`.
+      Ela não trava função nenhuma, e é justamente por isso que precisa estar na
+      lista: sem ela a `sync-fotos` roda perfeita e o painel **inteiro** diz
+      "atrasado" para sempre. `fn_data_freshness` daria a uma entidade diária o
+      padrão de 45 min, e `frontend/src/lib/freshness.ts` reduz o quadro à
+      entidade mais velha. A 35 dá 36 h a `Foto` — 1,5x a cadência, a mesma
+      regra das outras duas. ⚠️ **Ordem: antes de religar o jobid 5**, senão o
+      primeiro ciclo de fotos entrega um painel vermelho com a sincronização
+      correta, que é o pior tipo de falso positivo — o que faz desconfiar do
+      sistema certo.
 - [x] **Três segredos novos no Vault de produção — criados em 02/09/2026.**
       `edge_functions_base_url`
       (`https://<ref>.supabase.co/functions/v1`, sem barra final),
@@ -343,6 +353,14 @@ deste repositório (`sync-cadastro`, `sync-batidas`, `secullum-test-auth`)
 assumem a sincronização de produção. Este passo deixa de estar bloqueado — o
 código dele nunca precisou ser lido, porque ele não vai continuar.
 
+⚠️ **Em 02/09/2026 a lista ganhou uma quarta: `sync-fotos`.** A decisão acima é
+de 28/08 e não podia citá-la — o job de fotos só apareceu em produção quatro dias
+depois. A decisão do dono em 02/09 foi resolver aqui em vez de dar uma porta
+pública ao serviço da outra equipe, e é o que mantém a premissa deste passo de
+pé: com as quatro funções deste repositório, **nenhum** job de `pg_cron` fala
+PostgREST, e é isso — não a troca de runner por si — que destrava tirar `app` e
+`secullum` dos exposed schemas.
+
 **O que a decisão destrava, e não é pouco:**
 
 | | Com o `kastropark-jobs` | Com as funções daqui |
@@ -430,6 +448,23 @@ intervalo é a janela real.
    As três seguem **dormentes**: o `pg_cron` continua chamando a Vercel até o
    item 2 abaixo.
 
+   ⛔ **E desde 02/09 são QUATRO funções, não três — a `sync-fotos` ainda NÃO
+   está publicada.** Ela nasceu neste repositório no mesmo dia em que a outra
+   equipe subiu o `sync-fotos-cron` em produção falando PostgREST; trazê-la para
+   cá é o que impede a alternativa, que era abrir uma porta pública ao serviço
+   deles. Consequência direta para este passo: **o `functions deploy` da janela
+   tem uma função a mais que o de 02/09**, e ela é a única das quatro que sobe
+   pela primeira vez — as outras três são redeploy de algo já provado contra
+   produção.
+
+   ⚠️ **A `sync-fotos` é a menos provada das quatro, e o motivo é nomeável:**
+   ninguém mediu em que chave a data URI vem da origem. O parser aceita string
+   solta, data URI com ou sem mime, base64 puro, e varre valores string dentro de
+   objeto — e quando não acha, o aviso nomeia as **chaves**, nunca os valores,
+   que podem ser a imagem. Por isso a invocação aceita `{"limit": 1}`: dá para
+   medir o payload real com uma foto só antes de soltar a fila inteira. Faça isso
+   **antes** de religar o jobid 5, não depois.
+
    ✅ **A `sync-batidas` nova rodou contra produção — 02/09, cinco vezes.** Era o
    que faltava: o ensaio usa origem falsa contra um espelho do schema, e nada
    tinha exercitado o runner novo com dado real. Invocada à mão, com o segredo,
@@ -463,21 +498,31 @@ intervalo é a janela real.
    (`U-053 - Evidence Offices`), para a Estrutura 6 — 3 ativos, todos sob ela, e
    **zero vigência aberta**. É o caso inequívoco de atribuição inicial, e não
    fecha vigência de ninguém. Decisão de quando fazê-la é do dono.
-2. Reescrever o comando dos dois jobs de `pg_cron`: hoje fazem **GET** no
+2. Reescrever o comando dos **três** jobs de `pg_cron`: hoje fazem **GET** no
    `vercel_jobs_base_url`; passam a invocar as funções. É a reescrita do comando
    que desliga a chamada à Vercel — não há gesto separado para isso.
 
+   ⚠️ **Eram dois até 02/09.** O `sync-fotos-cron` (jobid 5) apareceu em produção
+   naquela noite, criado pela outra equipe sem aviso, e reabriu o bloqueio dos
+   exposed schemas: um terceiro job falando PostgREST derruba de novo quem tirar
+   `app`/`secullum` da lista. Ele entra aqui pelo mesmo motivo que os outros dois.
+
    ✅ **Deixou de ser comando na hora.** `scripts/janela_cron_runner.sql`, com
    as pré-condições falhando alto **antes** de qualquer escrita e uma guarda
-   final que confere o que ficou. Reescreve os jobids 3 e 4 por
+   final que confere o que ficou. Reescreve os jobids 3, 4 e 5 por
    `cron.alter_job` (que preserva o id; `update` direto em `cron.job` é negado)
-   e agenda um terceiro:
+   e agenda um quarto:
 
    | job | cadência | destino |
    |---|---|---|
    | `sync-cadastro-cron` (3) | `*/30 * * * *` | `POST .../sync-cadastro` |
    | `sync-batidas-cron` (4) | `*/15 * * * *` | `POST .../sync-batidas` |
+   | `sync-fotos-cron` (5) | `17 3 * * *` | `POST .../sync-fotos` |
    | `sync-batidas-backfill` (novo) | `7 4 * * *` | `POST .../sync-batidas {"scope":"backfill"}` |
+
+   📌 **A cadência do jobid 5 é herdada, não escolhida.** Este arquivo reescreve
+   o destino e preserva `17 3 * * *` — mudar o horário de um job da outra equipe
+   dentro da janela seria trocar duas coisas de uma vez e não saber qual quebrou.
 
    O backfill é o que devolve o contrato da `SPEC-TECNICA.md` — correção na
    origem até D-7 vira revogação do indício. Com o runner da Vercel ele não
@@ -486,8 +531,11 @@ intervalo é a janela real.
    reivindicação em `sync-run.ts`), e o minuto 7 passou de única proteção a
    redundância — fica como está, porque uma colisão que o lock resolve com 409
    é um backfill que não rodou naquele dia. A heurística
-   de contagem do §3b passa a ser "96 + 48 + 1 por dia, e a única fora da grade
-   é o backfill das 04:07 UTC".
+   de contagem do §3b passa a ser "96 + 48 + 1 + 1 por dia, e as **duas** fora da
+   grade são as fotos às 03:17 UTC e o backfill às 04:07 UTC".
+   ⛔ **Duas, não uma.** Foi contando cadência que o `sync-fotos-cron` teria sido
+   achado, e é assim que se acha o próximo. Quem usar a heurística esperando uma
+   linha fora da grade vai chamar as fotos de intruso, ou um intruso de fotos.
 
    ✅ **Ensaiado** por `scripts/ensaio_janela_cron.sql`, que roda no
    `make db-test`: `cron` simulado, Vault de verdade, duas passadas provando
@@ -1074,6 +1122,17 @@ nklobmlxyidqxarzisph`, 1.305 linhas de DDL idênticas. É a conferência que o
       (passo 7, item 6), e é aqui que se vê se ela escreveu: entidade que nunca
       grava **não fica velha, some** — e um `is_stale` limpo com uma entidade só
       é o mesmo verde de quando o cadastro não estava rodando
+- [ ] **`Foto` é a terceira entidade, e ela NÃO fecha no relógio da janela.**
+      A cadência é diária (`17 3 * * *`), então esperar a linha aparecer sozinha
+      é esperar até a próxima madrugada. **Invoque a `sync-fotos` à mão** depois
+      do passo 4 — primeiro com `{"limit": 1}`, para medir o payload real da
+      origem com uma foto só, e só então a fila inteira. O critério é a linha
+      `Foto` existindo em `app.sync_run` com `status = 'completed'`.
+      ⚠️ **E confira a migration 35 antes de olhar `is_stale`**: sem ela `Foto`
+      cai no padrão de 45 min, nasce velha por construção, e o painel inteiro
+      fica vermelho porque mostra a entidade mais velha. Um vermelho que é da
+      migration ausente, não da sincronização — e a leitura errada aqui manda
+      investigar o runner que acabou de funcionar
 - [ ] O painel abre contra produção e lista unidade e ocorrência
 - [x] `select count(*) from supabase_migrations.schema_migrations` = 45 (23 + 22)
       — atingido em 31/08. **Passou a 46** com a migration 33, que consertou

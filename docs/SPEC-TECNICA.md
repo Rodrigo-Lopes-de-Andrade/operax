@@ -113,7 +113,7 @@ tenant. Falha em um tenant não interrompe os outros — registra em
 `app.sync_run` com status `falhou` e segue.
 
 > **Onde isto roda, desde 22/08/2026:** em Edge Functions do Supabase
-> (`sync-cadastro`, `sync-batidas`, `secullum-test-auth`), não no worker Python
+> (`sync-cadastro`, `sync-batidas`, `sync-fotos`, `secullum-test-auth`), não no worker Python
 > descrito acima. A decisão está registrada no `CLAUDE.md`. O que segue vale
 > como contrato do que a sincronização precisa garantir, seja onde for que ela
 > execute.

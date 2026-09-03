@@ -18,6 +18,14 @@ mudança de comportamento: é a documentação alcançando o comportamento.
 |---|---|---|---|
 | `Batida` | `sync-batidas` | **15 min** | **96** |
 | `Funcionario` e demais | `sync-cadastro` | **30 min** | 48 |
+| `Foto` | `sync-fotos` | **1x/dia** (`17 3 * * *`) | 1 |
+
+⚠️ **A linha de `Foto` é herdada, não decidida aqui.** A cadência diária e o
+minuto 17 vieram do `sync-fotos-cron` que a outra equipe criou em produção em
+**02/09/2026**; a função passou a ser deste repositório no mesmo dia, e este
+documento registra o que ela pratica. Mudar o horário é decisão em aberto — e
+não se faz dentro da janela de convergência, onde trocar destino *e* cadência ao
+mesmo tempo torna impossível saber qual das duas quebrou.
 
 ### As derivadas que mudam junto
 
@@ -33,7 +41,15 @@ mas a cadência agora difere por entidade, então o limiar também:
 | Entidade | Cadência | Limiar (1,5×) |
 |---|---|---|
 | `Batida` | 15 min | **25 min** (22,5 arredondado para cima) |
+| `Foto` | 1x/dia | **36 h** (2160 min) |
 | demais | 30 min | 45 min |
+
+⛔ **A linha de `Foto` não é conforto, é o que impede um painel inteiro vermelho.**
+Sob o padrão de 45 min uma entidade diária está velha em toda leitura, e
+`frontend/src/lib/freshness.ts` reduz o quadro à entidade **mais velha** — o
+painel diria "atrasado" para sempre com a sincronização perfeita. A regra não
+abriu exceção: 36 h continua sendo 1,5 × a cadência desta entidade. Está na
+**migration 35**, que ainda não foi aplicada em produção.
 
 `public.fn_data_freshness` passa a aplicar o limiar **por entidade** quando
 nenhum valor é passado. Um valor explícito continua valendo para todas, como

@@ -66,7 +66,13 @@
 -- diário: todo início cai em múltiplo de 15. Um backfill em múltiplo de 15
 -- colidiria com o incremental — e sem lock de sobreposição isso é duas passadas
 -- ao mesmo tempo. Então ele sai da grade, e a heurística passa a ser
--- "96 + 48 + 1 por dia, e a única fora da grade é o backfill das 04:07 UTC".
+-- "96 + 48 + 1 + 1 por dia, e as DUAS fora da grade são as fotos às 03:17 UTC e
+-- o backfill às 04:07 UTC".
+--
+-- ⛔ Duas, não uma — e o número importa mais do que parece. Foi essa contagem que
+-- teria achado o `sync-fotos-cron` em 02/09, e é ela que acha o próximo. Quem a
+-- usar esperando UMA linha fora da grade ou vai chamar as fotos de intruso, ou
+-- vai chamar um intruso de fotos. As duas leituras erradas custam o mesmo.
 --
 -- Idempotente: reaplicar deixa exatamente o mesmo estado.
 -- ============================================================================
