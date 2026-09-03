@@ -64,6 +64,15 @@ def corpo(sql: str, somente_tabelas: bool) -> list[str]:
         elif dentro:
             if ln.startswith("  tenant_id "):
                 continue
+            if ln.startswith(");") and blocos and blocos[-1].endswith(","):
+                # `tenant_id` saiu da lista, e se ele era a ÚLTIMA coluna a
+                # anterior fica com vírgula pendurada. Isso não é deriva: é onde
+                # cada lado pôs a coluna. Em produção ela entrou no meio; no
+                # ensaio a migration 03 a acrescenta no fim, depois do que o
+                # baseline criou. Sem esta normalização, uma coluna nova em
+                # produção **depois** de `tenant_id` acusa deriva para sempre —
+                # foi o que aconteceu em 02/09/2026 com as colunas de foto.
+                blocos[-1] = blocos[-1][:-1]
             blocos.append(ln)
             if ln.startswith(");"):
                 dentro = False

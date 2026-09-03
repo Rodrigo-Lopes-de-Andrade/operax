@@ -163,6 +163,38 @@ begin
 end $$;
 rollback to savepoint guarda;
 
+\echo '--- 5. com um job estranho na Vercel, a PRÉ-CONDIÇÃO deve reprovar'
+savepoint estranho;
+-- Inserido direto, com o jobid que produção lhe deu (5), em vez de pelo
+-- `cron.schedule` simulado: a sequence do stub não acompanha os jobids
+-- explícitos do baseline e colidiria em 3.
+insert into cron.job (jobid, jobname, schedule, command) values
+ (5, 'sync-fotos-cron', '17 3 * * *',
+  'select net.http_get(url := (select decrypted_secret from vault.decrypted_secrets where name = ''vercel_jobs_base_url'') || ''/api/sync-fotos'');');
+
+do $$
+declare v_estranhos text[];
+begin
+  -- Mesma condição da pré-condição 1b de `janela_cron_runner.sql`. Vale a
+  -- ressalva do bloco acima: a guarda de lá é a que manda, esta prova que a
+  -- condição morde.
+  --
+  -- ⚠️ O que ESTE ensaio não consegue provar é a ordem — "reprova ANTES de
+  -- escrever". Aqui tudo roda numa transação, então a exceção desfaz os
+  -- `alter_job` de qualquer jeito. A ordem só muda o desfecho fora de
+  -- transação, que é como a janela roda (`sb_sql.sh -f`, um commit por bloco).
+  select array_agg(jobname order by jobid) into v_estranhos
+    from cron.job
+   where command ilike '%vercel_jobs_base_url%'
+     and jobname not in ('sync-cadastro-cron', 'sync-batidas-cron');
+
+  if v_estranhos is null then
+    raise exception 'a pré-condição NÃO veria um job estranho deixado na Vercel';
+  end if;
+  raise notice 'OK: a pré-condição pega o job estranho (%)', array_to_string(v_estranhos, ', ');
+end $$;
+rollback to savepoint estranho;
+
 rollback;
 
 \echo ''

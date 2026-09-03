@@ -238,7 +238,13 @@ create table if not exists public."Funcionario" (
   "BloquearRegistroPontoTeclado" boolean,
   "PermiteInclusaoPontoManual" boolean,
   "PermiteInclusaoDispositivosAutorizados" boolean,
-  "DesabilitarAssinaturaEletronica" boolean
+  "DesabilitarAssinaturaEletronica" boolean,
+  "Foto" bytea,
+  foto_sincronizada_em timestamp with time zone,
+  foto_tentativa_em timestamp with time zone,
+  foto_hash text,
+  foto_bytes integer,
+  foto_mime text
 );
 create table if not exists public."FuncionarioAfastamento" (
   id uuid default gen_random_uuid() not null,
@@ -640,6 +646,7 @@ CREATE INDEX "Funcionario_empresa_id_fkidx" ON public."Funcionario" USING btree 
 CREATE INDEX "Funcionario_horario_id_fkidx" ON public."Funcionario" USING btree (horario_id);
 CREATE INDEX funcionario_afastado_hoje_idx ON public."Funcionario" USING btree (afastado_hoje) WHERE (afastado_hoje = true);
 CREATE INDEX funcionario_cidade_id_idx ON public."Funcionario" USING btree (cidade_id);
+CREATE INDEX funcionario_foto_fila_idx ON public."Funcionario" USING btree (foto_tentativa_em NULLS FIRST) WHERE "PossuiFoto";
 CREATE INDEX funcionario_funcao_id_idx ON public."Funcionario" USING btree (funcao_id);
 CREATE INDEX funcionario_afastamento_funcionario_janela_idx ON public."FuncionarioAfastamento" USING btree (funcionario_id, "Inicio", "Fim");
 CREATE INDEX funcionario_afastamento_janela_idx ON public."FuncionarioAfastamento" USING btree ("Fim", "Inicio");
@@ -743,6 +750,7 @@ comment on column public."Funcionario"."DesabilitarAssinaturaEletronica" is '✅
 comment on column public."Funcionario"."Email" is 'Campo `Email` do funcionario. ⚠️ Ate 2026-08-13 so era lido em memoria para resolver "Estrutura".email quando o funcionario ERA o gestor; agora e persistido para todos. Isso NAO autoriza usa-lo como canal de notificacao: destinatario de relatorio continua sendo apenas "Estrutura".email/"Estrutura".whatsapp.';
 comment on column public."Funcionario"."EmpresaId" is 'Campo `Funcionario.EmpresaId` — INTEIRO do Secullum, como veio. ⚠️ A FK que o sistema usa e empresa_id (uuid). Nunca fazer join por esta coluna.';
 comment on column public."Funcionario"."EstruturaId" is 'Campo `Funcionario.EstruturaId` — INTEIRO do Secullum; e a chave de idempotencia de "Estrutura" (tabela do gestor). Nao ha FK uuid daqui para "Estrutura": o vinculo gestor->departamento e o que importa ao produto, e resolve-lo por funcionario duplicaria a relacao.';
+comment on column public."Funcionario"."Foto" is 'Campo literal do Secullum (imagem do funcionário), vinda do 6º endpoint (GET Funcionarios/fotos?funcionarioId=<Id>), NÃO de /Funcionarios. Guarda os BYTES JÁ DECODIFICADOS (o prefixo "data:<mime>;base64," da data URI NÃO é armazenado aqui — ver foto_mime). NULL = não temos (nunca buscada OU funcionário sem foto). 🔴 A coluna mais restrita do schema: nunca em view exposta ao painel, nunca em log, nunca em relatório (ADR-018 §6.3). ⛔ NUNCA escrita pelo upsert de sync-cadastro — só pelo UPDATE direcionado do job sync-fotos.';
 comment on column public."Funcionario"."FuncionarioId" is 'Campo `Funcionario.Id` — nomeado na forma qualificada porque e literalmente assim que o Secullum o chama de fora (`Batidas.FuncionarioId`). Chave de idempotencia e chave de juncao com /Batidas.';
 comment on column public."Funcionario"."HorarioAlternativo2Id" is 'Campo `HorarioAlternativo2Id` — inteiro BRUTO, sem FK para "Horario" de proposito: o horario referenciado pode nao existir localmente (ou ainda nao ter sido sincronizado no ciclo), e uma FK transformaria isso em falha de job. Resolucao para "Horario".id, se necessaria, e da consulta.';
 comment on column public."Funcionario"."HorarioId" is 'Campo `Funcionario.HorarioId` — INTEIRO do Secullum. A FK usada e horario_id (uuid). ℹ️ Em /Funcionarios o objeto `Horario` aninhado vem com `Dias` = null POR DESIGN: a grade completa so vem de GET /Horarios.';
@@ -759,6 +767,11 @@ comment on column public."Funcionario".afastamento_atual_id is 'Ponteiro para o 
 comment on column public."Funcionario".ativo is 'DERIVADO POR NOS (minusculo, NAO e campo do Secullum): VINCULO EMPREGATICIO, calculado a partir das datas com "hoje" em America/Sao_Paulo: ativo = ("Admissao" is null or "Admissao" <= hoje) and ("Demissao" is null or "Demissao" >= hoje). ⛔ NAO e afetado por ferias/afastamento — para isso existe afastado_hoje. ⚠️ Continua sendo COLUNA NORMAL (ao contrario de "Empresa".ativo, que virou gerada): esta derivacao depende de "hoje", nao e funcao imutavel das colunas, e por isso NAO pode ser GENERATED. Ver ADR-009 e ADR-010.';
 comment on column public."Funcionario".cidade_id is 'NOSSA FK (uuid) -> "Cidade". ⚠️ NAO confundir com "CidadeId" (inteiro do Secullum), ao lado.';
 comment on column public."Funcionario".empresa_id is 'NOSSA FK (uuid). Desnormalizada de proposito em relacao a "Departamento".empresa_id — e assim que o Secullum entrega o dado, e o dashboard agrega por Empresa. ⛔ Agregacao por Empresa usa SEMPRE esta coluna. ⚠️ NAO confundir com "EmpresaId" (inteiro do Secullum), criada em 20260813161000.';
+comment on column public."Funcionario".foto_bytes is 'NOSSA. Tamanho em bytes da imagem DECODIFICADA. Observabilidade/dimensionamento, sem depender de octet_length("Foto") (que exigiria ler o binário).';
+comment on column public."Funcionario".foto_hash is 'NOSSA. sha256 em hex dos BYTES DECODIFICADOS de "Foto" (nunca da string base64/data URI original — duas fotos idênticas com prefixos textualmente diferentes têm o mesmo hash). Permite pular o UPDATE do binário quando nada mudou e é a única forma de dizer "a foto mudou" em log sem citar conteúdo.';
+comment on column public."Funcionario".foto_mime is 'NOSSA. image/jpeg, image/png, ou NULL quando não determinável. Fonte primária: o prefixo da data URI do 6º endpoint (confirmado por payload real, 2026-08-31); o *magic number* dos bytes é usado só como CONFERÊNCIA (diverge => vence o conteúdo real, com aviso agregado foto_mime_divergente). ⛔ Sem CHECK e sem lista fechada — mesma disciplina dos demais enums/mime deste schema. ⛔ Nunca inferir por nome de arquivo, nunca assumir JPEG por padrão.';
+comment on column public."Funcionario".foto_sincronizada_em is 'NOSSA. Timestamp da última sincronização BEM-SUCEDIDA do job sync-fotos — inclui o sucesso "não tem foto" (ausência confirmada pelo Secullum). Distinta de foto_tentativa_em: uma tentativa que deu ERRO atualiza só foto_tentativa_em, nunca esta coluna (ADR-018 §5.3 — erro nunca apaga/mascara dado real).';
+comment on column public."Funcionario".foto_tentativa_em is 'NOSSA. Timestamp da última TENTATIVA do job sync-fotos, com ou sem sucesso. 🔴 É esta coluna (não foto_sincronizada_em) que ordena a fila (funcionario_foto_fila_idx, ORDER BY ... NULLS FIRST) — sem ela, um funcionário cuja busca falha sempre travaria a cabeça da fila para sempre (ADR-018 §4.1).';
 comment on column public."Funcionario".funcao_id is 'NOSSA FK (uuid) -> "Funcao". ⚠️ NAO confundir com "FuncaoId" (inteiro do Secullum), ao lado.';
 comment on column public."Funcionario".horario_id is 'NOSSA FK (uuid) -> "Horario". NULLABLE: funcionario sem horario cadastrado no Secullum nao derruba a sincronizacao (fica sem horario, com aviso em log). ⚠️ NAO confundir com "HorarioId" (inteiro do Secullum).';
 comment on column public."FuncionarioAfastamento"."AfastamentoId" is 'Campo `Id` do registro de afastamento (nao consta da tabela oficial do manual; confirmado em payload real). Forma qualificada pelo mesmo motivo de "FuncionarioId": `Id` puro colidiria por case com o `id` interno. Unicidade global NUNCA verificada — por isso a chave e COMPOSTA com funcionario_id.';

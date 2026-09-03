@@ -72,11 +72,12 @@
 
 do $$
 declare
-  v_base    text;
-  v_token   text;
-  v_segredo text;
-  v_faltam  text[] := '{}';
-  v_nome    text;
+  v_base      text;
+  v_token     text;
+  v_segredo   text;
+  v_faltam    text[] := '{}';
+  v_estranhos text[];
+  v_nome      text;
 begin
   ---------------------------------------------------------------------------
   -- 1. Pré-condições. Tudo que falta é nomeado de uma vez: descobrir a segunda
@@ -92,6 +93,34 @@ begin
     raise exception
       'segredo(s) ausente(s) no Vault: %. Criar com vault.create_secret() antes da janela — ver o cabeçalho deste arquivo',
       array_to_string(v_faltam, ', ');
+  end if;
+
+  ---------------------------------------------------------------------------
+  -- 1b. Job na Vercel que este arquivo NÃO reescreve.
+  --
+  -- A guarda final já exige zero jobs na Vercel, mas ela roda DEPOIS dos
+  -- `alter_job` — e fora de transação (é assim que a janela roda, por
+  -- `sb_sql.sh -f`) cada bloco anônimo commita sozinho. O resultado seria a pior
+  -- combinação possível: dois jobs trocados, um terceiro ainda na Vercel, e o
+  -- script saindo não-zero. Aqui a mesma condição reprova antes de escrever.
+  --
+  -- ⛔ Medido em 02/09/2026: existe `sync-fotos-cron` (jobid 5, `17 3 * * *`),
+  -- criado pela outra equipe no mesmo dia, chamando `/api/sync-fotos` na
+  -- Vercel. Não há equivalente neste repositório, então enquanto ele existir a
+  -- troca de runner não é completa — e tirar `app`/`secullum` dos exposed
+  -- schemas volta a derrubar a sincronização, como em 27/08.
+  ---------------------------------------------------------------------------
+  select array_agg(jobname order by jobid) into v_estranhos
+    from cron.job
+   where command ilike '%vercel_jobs_base_url%'
+     and jobname not in ('sync-cadastro-cron', 'sync-batidas-cron');
+
+  if v_estranhos is not null then
+    raise exception
+      'há job(s) na Vercel que este arquivo não reescreve: %. Trocar só os dois deixaria a '
+      'sincronização partida entre dois runners, e os exposed schemas seguiriam bloqueados. '
+      'Decidir o que fazer com ele(s) ANTES da janela.',
+      array_to_string(v_estranhos, ', ');
   end if;
 
   select decrypted_secret into strict v_base
