@@ -249,8 +249,12 @@ O escopo lista 11 relatórios e diz que devem ser **visualizados e exportados**.
 - ~~**Conflito** com o PRD~~ — **não existe mais, e talvez nunca tenha existido
   nesta versão do PRD.** Conferido em 27/08: o "Não entra" do `PRD-OPERAX.md`
   não menciona exportação. A auditoria de 24/08 já havia registrado isso (A18).
-  O que continua aberto é o **formato** — Excel, PDF ou os dois —, que muda o
-  esforço do sprint e é decisão do dono.
+  ✅ **Formato: ver o item 5 da lista de lacunas** — é lá que o assunto mora, e
+  esta seção passa a apontar para lá em vez de duplicar. Em resumo: **Excel, PDF
+  e arquivo de banco**, os três, e não é decisão em aberto — é requisito
+  observado nas 16 telas do sistema que a FastPark usa hoje.
+  ⛔ O que segue sem definição é **quais são os 11 relatórios**: o escopo os
+  conta e não os nomeia.
 
 ---
 
@@ -436,8 +440,23 @@ ele enxerga**, e o DP lê.
 2. ~~KPIs de headcount~~ — **os 5 entregues em 25/08**; os dois de marcação com o rótulo da leitura, e não como presença (A12)
 3. ~~Filtro por gestor e por departamento~~ — **entregue em 25/08** (migration 22); ~~agregação por gestor~~ — **entregue em 26/08** (migration 27). ⚠️ O `p_manager_id` da 22 filtra por `manager_employee_id`, que continua sem fonte: quem quiser filtrar por gestor hoje tem de usar a dimensão nova
 4. ~~Histórico de marcações na tela individual~~ — **entregue em 25/08**
-5. Catálogo dos 11 relatórios + exportação — **formato decidido em 28/08: Excel
-   *e* PDF**
+5. Catálogo dos 11 relatórios + exportação — **esta linha é a fonte; o §4.9 e o
+   item 21 apontam para cá.**
+   ✅ **Formato: Excel, PDF e arquivo de banco — os três.** Corrigido pelo dono
+   em 02/09/2026, e a natureza da coisa muda junto: **não é decisão em aberto, é
+   requisito observado** nas 16 telas que a FastPark usa hoje. As versões
+   anteriores deste documento tratavam como escolha ("Excel, PDF ou os dois") e
+   por isso o item aparecia aberto em dois lugares e fechado num terceiro.
+   ⚠️ **"Arquivo de banco" precisa de uma linha do dono para virar código** — no
+   vocabulário de sistema de ponto o termo cobre coisas diferentes (remessa
+   bancária, arquivo legal tipo AFD/ACJEF, ou exportação de dados). Fica
+   registrado como o dono o disse, sem interpretação: interpretar aqui é
+   exatamente o tipo de palpite que este projeto paga caro.
+   ⛔ Continua sem definição **quais são os 11** — o escopo os conta e não os
+   nomeia. Encaminhamento acordado: **derivar a lista candidata das telas do
+   legado e levar pronta para conferência**, a mesma jogada que funcionou com as
+   rubricas de folha. ⚠️ Isso depende de uma entrada que este repositório não
+   tem: print, menu ou acesso ao sistema legado
 6. ~~Importação do Excel do Domínio, ponta a ponta~~ — **entregue em 31/08**:
    modelo, preview, gravação, substituição da competência e a tela em
    `/dashboard/administracao/folha`. O que resta é a **curadoria** do plano de
@@ -468,8 +487,9 @@ ele enxerga**, e o DP lê.
 **Ajuste de documento (7 — dois deles já feitos)**
 
 21. ~~PRD: remover "exportação fora do MVP"~~ — **já aplicado**. O "Não entra" do
-    PRD atual não menciona exportação. O que segue aberto é o **formato**
-    (Excel, PDF ou os dois), que é decisão do dono, não ajuste de texto
+    PRD atual não menciona exportação. ~~O que segue aberto é o formato~~ — o
+    assunto mora no **item 5** desta mesma lista; ver lá. Resta a lista dos 11
+    relatórios, que o escopo conta sem nomear
 22. ~~PRD: risco do Domínio deixa de ser alto~~ — **já aplicado**. A tabela de
     riscos do PRD não tem risco de Domínio; tem "Plano de contas de eventos não
     mapeado", que é outro item e continua aberto (item 7)
