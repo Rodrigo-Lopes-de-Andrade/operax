@@ -428,7 +428,11 @@ ele enxerga**, e o DP lê.
 **Bloqueiam entrega do escopo contratado (9)**
 
 1. Saldo de horas — aparece em três seções diferentes. **Decidido em 28/08: o
-   OperaX calcula**, não espelha (ver abaixo)
+   OperaX calcula**, não espelha (ver abaixo). ⛔ **Medido em 02/09: não havia
+   escolha.** `NBanco` é `boolean`, true em 0 de 1.653 batidas; `BancoHorasId`
+   é null nos 80 ativos; `Compensacao` é null nas 94 escalas. Não existe saldo
+   a espelhar nesta conta. A recomendação original desta seção **não é apagada**
+   — ver `docs/DECISAO-SALDO-HORAS.md`
 2. ~~KPIs de headcount~~ — **os 5 entregues em 25/08**; os dois de marcação com o rótulo da leitura, e não como presença (A12)
 3. ~~Filtro por gestor e por departamento~~ — **entregue em 25/08** (migration 22); ~~agregação por gestor~~ — **entregue em 26/08** (migration 27). ⚠️ O `p_manager_id` da 22 filtra por `manager_employee_id`, que continua sem fonte: quem quiser filtrar por gestor hoje tem de usar a dimensão nova
 4. ~~Histórico de marcações na tela individual~~ — **entregue em 25/08**
