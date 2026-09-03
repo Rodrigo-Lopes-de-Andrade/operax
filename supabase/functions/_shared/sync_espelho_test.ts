@@ -42,6 +42,8 @@ import { SupabaseSyncRepository } from "./supabase-cadastro-repository.ts";
 import { runBatidaSync } from "./batida-sync.ts";
 import { SupabaseBatidaRepository } from "./supabase-batida-repository.ts";
 import { getSql } from "./postgres-client.ts";
+import { runFotoSync } from "./foto-sync.ts";
+import { SupabaseFotoRepository } from "./supabase-foto-repository.ts";
 import { claimSyncRun, closeSyncRun } from "./sync-run.ts";
 
 const TEM_BANCO = Boolean(Deno.env.get("DATABASE_URL"));
@@ -424,5 +426,81 @@ Deno.test({
       recordsSkipped: 0,
       error: null,
     });
+  },
+});
+
+/**
+ * O ciclo de fotos contra o espelho real.
+ *
+ * As seis colunas de foto entraram em produção em 02/09/2026, pela outra
+ * equipe, e este repositório passou a ter o job. O ensaio existe pelo mesmo
+ * motivo dos outros dois: `column does not exist` é erro de parse, então um
+ * ciclo que atravessa prova que as escritas são dizíveis contra o schema de
+ * produção — e foi uma coluna a mais (`Estrutura.departamento_id`) que bloqueou
+ * a troca do runner em 31/08.
+ *
+ * Depende do ciclo de cadastro: quem cria o funcionário é ele.
+ */
+Deno.test({
+  name: "um ciclo de fotos atravessa as seis colunas novas do espelho",
+  ignore: !TEM_BANCO,
+  sanitizeResources: false,
+  sanitizeOps: false,
+  async fn() {
+    const sql = getSql();
+    const [funcionario] = await sql<{ id: string }[]>`
+      select id from secullum."Funcionario" where "FuncionarioId" = ${900_000 + SEQ}
+    `;
+    assert(funcionario, "o funcionário do ciclo de cadastro não está no espelho");
+
+    // A fila é `where "PossuiFoto"`; o cadastro não marca esse campo.
+    await sql`update secullum."Funcionario" set "PossuiFoto" = true where id = ${funcionario.id}`;
+
+    const repo = new SupabaseFotoRepository();
+    const silencioso = { info() {}, warn() {} };
+    // 1x1 JPEG: bytes de verdade, sem ser imagem de ninguém.
+    const jpeg = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+    const dataUri = `data:image/jpeg;base64,${btoa(String.fromCharCode(...jpeg))}`;
+
+    const resumo = await semDivergencia(() =>
+      runFotoSync({ get: <T>() => Promise.resolve(dataUri as T) }, repo, silencioso, 50)
+    );
+
+    assert(resumo.queued > 0, "a fila veio vazia — o índice de fila não achou ninguém");
+    assertEquals(resumo.failed, 0, "o ciclo de fotos falhou contra o espelho");
+
+    // Lê de volta o que ficou. ⛔ `"Foto"` nunca sai daqui como conteúdo: só o
+    // tamanho, que é o que prova que o bytea aceitou a escrita.
+    const [linha] = await sql<
+      {
+        bytes_gravados: number | null;
+        foto_bytes: number | null;
+        foto_mime: string | null;
+        foto_hash: string | null;
+        tem_sincronizada: boolean;
+        tem_tentativa: boolean;
+      }[]
+    >`
+      select length("Foto")                        as bytes_gravados,
+             foto_bytes,
+             foto_mime,
+             foto_hash,
+             foto_sincronizada_em is not null      as tem_sincronizada,
+             foto_tentativa_em    is not null      as tem_tentativa
+        from secullum."Funcionario" where id = ${funcionario.id}
+    `;
+    assertEquals(linha.bytes_gravados, jpeg.length, 'o binário não chegou em "Foto"');
+    assertEquals(linha.foto_bytes, jpeg.length, "foto_bytes não bate com o tamanho decodificado");
+    assertEquals(linha.foto_mime, "image/jpeg");
+    assertEquals(linha.foto_hash?.length, 64, "foto_hash não é um sha256 em hex");
+    assert(linha.tem_sincronizada, "sucesso não carimbou foto_sincronizada_em");
+    assert(linha.tem_tentativa, "sucesso não carimbou foto_tentativa_em");
+
+    // Segunda passada: o hash bate, então o binário não é reescrito.
+    const repeticao = await semDivergencia(() =>
+      runFotoSync({ get: <T>() => Promise.resolve(dataUri as T) }, repo, silencioso, 50)
+    );
+    assertEquals(repeticao.stored, 0, "reescreveu binário que não mudou");
+    assert(repeticao.unchanged > 0, "não reconheceu a foto idêntica pelo hash");
   },
 });

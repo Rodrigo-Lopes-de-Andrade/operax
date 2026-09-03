@@ -2976,7 +2976,7 @@ public.fn_data_freshness(p_stale_after_minutes integer DEFAULT NULL::integer)
   returns TABLE(tenant_id uuid, entity text, last_sync_at timestamp with time zone, age_minutes integer, is_stale boolean)
 ```
 
-Idade do dado por entidade sincronizada, e o deadman da ingestão. Sem argumento, o limiar é 1,5x a cadência da entidade — 25 min para Batida (cadência 15), 45 para as demais (cadência 30) — de modo que uma execução perdida não alarma e duas seguidas alarmam. Com argumento, ele vale para todas. Ver docs/DECISAO-CADENCIA-SYNC.md.
+Idade do dado por entidade sincronizada, e o deadman da ingestão. Sem argumento, o limiar é 1,5x a cadência da entidade — 25 min para Batida (cadência 15), 2160 para Foto (cadência diária) e 45 para as demais (cadência 30) — de modo que uma execução perdida não alarma e duas seguidas alarmam. Com argumento, ele vale para todas. Ver docs/DECISAO-CADENCIA-SYNC.md.
 
 
 ### `fn_detection_health`

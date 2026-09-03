@@ -51,9 +51,10 @@
 -- só vive no backend FastAPI.
 --
 -- O QUE MUDA, JOB A JOB
---   jobid 3  sync-cadastro-cron    */30  -> POST .../sync-cadastro
---   jobid 4  sync-batidas-cron     */15  -> POST .../sync-batidas   (incremental)
---   novo     sync-batidas-backfill 7 4 * -> POST .../sync-batidas {"scope":"backfill"}
+--   jobid 3  sync-cadastro-cron    */30   -> POST .../sync-cadastro
+--   jobid 4  sync-batidas-cron     */15   -> POST .../sync-batidas   (incremental)
+--   jobid 5  sync-fotos-cron       17 3 * -> POST .../sync-fotos
+--   novo     sync-batidas-backfill  7 4 * -> POST .../sync-batidas {"scope":"backfill"}
 --
 -- O backfill é o que devolve o contrato da SPEC-TECNICA — correção na origem até
 -- D-7 vira revogação do indício. Com o runner da Vercel ele não existia: toda
@@ -104,16 +105,16 @@ begin
   -- combinação possível: dois jobs trocados, um terceiro ainda na Vercel, e o
   -- script saindo não-zero. Aqui a mesma condição reprova antes de escrever.
   --
-  -- ⛔ Medido em 02/09/2026: existe `sync-fotos-cron` (jobid 5, `17 3 * * *`),
-  -- criado pela outra equipe no mesmo dia, chamando `/api/sync-fotos` na
-  -- Vercel. Não há equivalente neste repositório, então enquanto ele existir a
-  -- troca de runner não é completa — e tirar `app`/`secullum` dos exposed
-  -- schemas volta a derrubar a sincronização, como em 27/08.
+  -- ⛔ Foi assim que o `sync-fotos-cron` apareceu (jobid 5, `17 3 * * *`, criado
+  -- pela outra equipe em 02/09/2026). Ele deixou de ser estranho no mesmo dia:
+  -- a função `sync-fotos` passou a existir neste repositório e este arquivo o
+  -- reescreve junto dos outros dois. A condição fica, porque o próximo job que
+  -- aparecer sem aviso é o que ela existe para pegar.
   ---------------------------------------------------------------------------
   select array_agg(jobname order by jobid) into v_estranhos
     from cron.job
    where command ilike '%vercel_jobs_base_url%'
-     and jobname not in ('sync-cadastro-cron', 'sync-batidas-cron');
+     and jobname not in ('sync-cadastro-cron', 'sync-batidas-cron', 'sync-fotos-cron');
 
   if v_estranhos is not null then
     raise exception
@@ -160,6 +161,9 @@ begin
   if not exists (select 1 from cron.job where jobname = 'sync-batidas-cron') then
     raise exception 'job sync-batidas-cron não existe — este arquivo reescreve, não cria';
   end if;
+  if not exists (select 1 from cron.job where jobname = 'sync-fotos-cron') then
+    raise exception 'job sync-fotos-cron não existe — este arquivo reescreve, não cria';
+  end if;
 
   perform cron.alter_job(
     job_id  => (select jobid from cron.job where jobname = 'sync-cadastro-cron'),
@@ -205,6 +209,31 @@ begin
     $cmd$
   );
 
+  -- Fotos: cadência diária, herdada de quem criou o job. O minuto 17 fica fora
+  -- da grade de 15 pelo mesmo motivo do backfill — sem colidir com o
+  -- incremental, e mantendo a heurística de contar a cadência do diário.
+  perform cron.alter_job(
+    job_id  => (select jobid from cron.job where jobname = 'sync-fotos-cron'),
+    schedule => '17 3 * * *',
+    command => $cmd$
+    select net.http_post(
+        url := (select decrypted_secret from vault.decrypted_secrets
+                 where name = 'edge_functions_base_url') || '/sync-fotos',
+        body := '{}'::jsonb,
+        headers := jsonb_build_object(
+            'Content-Type', 'application/json',
+            'Authorization', 'Bearer ' || (
+                select decrypted_secret from vault.decrypted_secrets
+                 where name = 'edge_functions_token'),
+            'x-sync-secret', (
+                select decrypted_secret from vault.decrypted_secrets
+                 where name = 'sync_shared_secret')
+        ),
+        timeout_milliseconds := 590000
+    );
+    $cmd$
+  );
+
   ---------------------------------------------------------------------------
   -- 3. O backfill. `cron.schedule` com nome já é upsert por nome, então
   --    reaplicar não duplica.
@@ -231,7 +260,7 @@ begin
     $cmd$
   );
 
-  raise notice 'runner trocado: 2 jobs reescritos e o backfill agendado';
+  raise notice 'runner trocado: 3 jobs reescritos e o backfill agendado';
 end $$;
 
 -- ----------------------------------------------------------------------------
@@ -253,18 +282,18 @@ begin
       '% job(s) ainda chamam o vercel_jobs_base_url — a troca NÃO valeu', v_vercel;
   end if;
 
-  if v_supa <> 3 then
+  if v_supa <> 4 then
     raise exception
-      'esperava 3 jobs apontando para as Edge Functions, encontrei % — conferir cron.job antes de religar', v_supa;
+      'esperava 4 jobs apontando para as Edge Functions, encontrei % — conferir cron.job antes de religar', v_supa;
   end if;
 
   -- Sem o header, o job toma 401 a cada ciclo e a sincronização fica parada
   -- respondendo — exatamente a classe de falha que este arquivo existe para não
   -- deixar acontecer às 2h da manhã.
-  if v_fechados <> 3 then
+  if v_fechados <> 4 then
     raise exception
-      'esperava 3 jobs enviando x-sync-secret, encontrei % — os outros tomariam 401', v_fechados;
+      'esperava 4 jobs enviando x-sync-secret, encontrei % — os outros tomariam 401', v_fechados;
   end if;
 
-  raise notice 'OK: nenhum job chama a Vercel, os 3 apontam para as Edge Functions e enviam o segredo';
+  raise notice 'OK: nenhum job chama a Vercel, os 4 apontam para as Edge Functions e enviam o segredo';
 end $$;

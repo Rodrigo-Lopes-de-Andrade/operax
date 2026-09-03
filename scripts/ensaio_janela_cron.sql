@@ -55,7 +55,11 @@ insert into cron.job (jobid, jobname, schedule, command) values
  (3, 'sync-cadastro-cron', '*/30 * * * *',
   'select net.http_get(url := (select decrypted_secret from vault.decrypted_secrets where name = ''vercel_jobs_base_url'') || ''/api/sync-cadastro'');'),
  (4, 'sync-batidas-cron', '*/15 * * * *',
-  'select net.http_get(url := (select decrypted_secret from vault.decrypted_secrets where name = ''vercel_jobs_base_url'') || ''/api/sync-batidas'');');
+  'select net.http_get(url := (select decrypted_secret from vault.decrypted_secrets where name = ''vercel_jobs_base_url'') || ''/api/sync-batidas'');'),
+ -- Criado pela outra equipe em 02/09/2026, e reescrito por este arquivo desde
+ -- que a função `sync-fotos` passou a existir aqui.
+ (5, 'sync-fotos-cron', '17 3 * * *',
+  'select net.http_get(url := (select decrypted_secret from vault.decrypted_secrets where name = ''vercel_jobs_base_url'') || ''/api/sync-fotos'');');
 
 create function cron.alter_job(job_id bigint, schedule text default null,
                                command text default null) returns void as $f$
@@ -115,13 +119,13 @@ do $$
 declare v int;
 begin
   select count(*) into v from cron.job;
-  if v <> 3 then raise exception 'esperava 3 jobs, encontrei %', v; end if;
+  if v <> 4 then raise exception 'esperava 4 jobs, encontrei %', v; end if;
 
   select count(*) into v from cron.job where command ilike '%vercel%';
   if v <> 0 then raise exception '% job(s) ainda citam a Vercel', v; end if;
 
   select count(*) into v from cron.job where command ilike '%edge_functions_base_url%';
-  if v <> 3 then raise exception 'esperava 3 jobs no Supabase, encontrei %', v; end if;
+  if v <> 4 then raise exception 'esperava 4 jobs no Supabase, encontrei %', v; end if;
 
   select count(*) into v from cron.job where command ilike '%backfill%';
   if v <> 1 then raise exception 'esperava exatamente 1 job de backfill, encontrei %', v; end if;
@@ -129,8 +133,9 @@ begin
   -- Os jobids têm de sobreviver: `cron.alter_job` preserva, um
   -- unschedule/schedule não preservaria, e o diário do runbook cita "jobs 3 e 4".
   if not exists (select 1 from cron.job where jobid = 3 and jobname = 'sync-cadastro-cron')
-  or not exists (select 1 from cron.job where jobid = 4 and jobname = 'sync-batidas-cron') then
-    raise exception 'os jobids 3 e 4 não sobreviveram à reescrita';
+  or not exists (select 1 from cron.job where jobid = 4 and jobname = 'sync-batidas-cron')
+  or not exists (select 1 from cron.job where jobid = 5 and jobname = 'sync-fotos-cron') then
+    raise exception 'os jobids 3, 4 e 5 não sobreviveram à reescrita';
   end if;
 
   if exists (select 1 from cron.job
@@ -138,7 +143,7 @@ begin
     raise exception 'o job incremental está pedindo backfill';
   end if;
 
-  raise notice 'OK: 3 jobs, nenhum na Vercel, jobids preservados, 1 backfill';
+  raise notice 'OK: 4 jobs, nenhum na Vercel, jobids preservados, 1 backfill';
 end $$;
 
 \echo '--- 4. com um job ainda na Vercel, a guarda final deve reprovar'
@@ -156,7 +161,7 @@ begin
   -- Mesmas duas condições da guarda de `janela_cron_runner.sql`. Se ela mudar e
   -- esta cópia não, o ensaio segue verde — por isso a guarda de lá é a que vale,
   -- e esta existe só para provar que aquelas condições mordem.
-  if v_vercel = 0 and v_supa = 3 then
+  if v_vercel = 0 and v_supa = 4 then
     raise exception 'a guarda final NÃO pegaria um job deixado na Vercel';
   end if;
   raise notice 'OK: a guarda final pega (% na Vercel, % no Supabase)', v_vercel, v_supa;
@@ -165,12 +170,13 @@ rollback to savepoint guarda;
 
 \echo '--- 5. com um job estranho na Vercel, a PRÉ-CONDIÇÃO deve reprovar'
 savepoint estranho;
--- Inserido direto, com o jobid que produção lhe deu (5), em vez de pelo
+-- Um job que este arquivo NÃO reescreve — o `sync-fotos-cron` deixou de ser
+-- exemplo disso quando ganhou função aqui. Inserido direto, em vez de pelo
 -- `cron.schedule` simulado: a sequence do stub não acompanha os jobids
 -- explícitos do baseline e colidiria em 3.
 insert into cron.job (jobid, jobname, schedule, command) values
- (5, 'sync-fotos-cron', '17 3 * * *',
-  'select net.http_get(url := (select decrypted_secret from vault.decrypted_secrets where name = ''vercel_jobs_base_url'') || ''/api/sync-fotos'');');
+ (9, 'sync-desconhecido-cron', '23 5 * * *',
+  'select net.http_get(url := (select decrypted_secret from vault.decrypted_secrets where name = ''vercel_jobs_base_url'') || ''/api/sync-desconhecido'');');
 
 do $$
 declare v_estranhos text[];
@@ -186,7 +192,7 @@ begin
   select array_agg(jobname order by jobid) into v_estranhos
     from cron.job
    where command ilike '%vercel_jobs_base_url%'
-     and jobname not in ('sync-cadastro-cron', 'sync-batidas-cron');
+     and jobname not in ('sync-cadastro-cron', 'sync-batidas-cron', 'sync-fotos-cron');
 
   if v_estranhos is null then
     raise exception 'a pré-condição NÃO veria um job estranho deixado na Vercel';

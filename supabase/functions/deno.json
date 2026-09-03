@@ -1,14 +1,16 @@
 {
   "tasks": {
     "test": "deno test --allow-net --allow-env _shared",
-    "check": "deno check _shared/*.ts sync-cadastro/index.ts sync-batidas/index.ts secullum-test-auth/index.ts",
+    "check": "deno check _shared/*.ts sync-cadastro/index.ts sync-batidas/index.ts sync-fotos/index.ts secullum-test-auth/index.ts",
     "lint": "deno lint .",
     "fmt": "deno fmt .",
     "//check": "Cobre tudo desde 01/09/2026. Antes não cobria nada que dependesse de cadastro-sync.ts, porque `secullum-cadastro-types.ts` não existia — o módulo foi reconstruído. Depois sobravam 12 erros do helper `sql(rows, ...columns)` do driver `postgres`: as listas de coluna eram `string[]` e o helper quer `(keyof T)[]` (resolvido com `as const`), e `buildFuncionarioRow` declarava retorno `Record<string, unknown>`, que apagava a forma da linha (resolvido deixando o TypeScript inferir)."
   },
   "lint": {
     "rules": {
-      "tags": ["recommended"]
+      "tags": [
+        "recommended"
+      ]
     }
   },
   "fmt": {
