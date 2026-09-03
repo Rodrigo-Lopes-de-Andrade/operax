@@ -2329,6 +2329,12 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 | `PermiteInclusaoPontoManual` | boolean | sim |  |  |  |
 | `PermiteInclusaoDispositivosAutorizados` | boolean | sim |  |  |  |
 | `DesabilitarAssinaturaEletronica` | boolean | sim |  |  | ✅ Nome confirmado. ⏳ [VALIDAR — Postman] tipo assumido boolean, como os demais Bloquear*/Permite*/Desabilitar* deste bloco. |
+| `Foto` | bytea | sim |  |  | Campo literal do Secullum (imagem do funcionário), vinda do 6º endpoint (GET Funcionarios/fotos?funcionarioId=<Id>), NÃO de /Funcionarios. Guarda os BYTES JÁ DECODIFICADOS (o prefixo "data:<mime>;base64," da data URI NÃO é armazenado aqui — ver foto_mime). NULL = não temos (nunca buscada OU funcionário sem foto). 🔴 A coluna mais restrita do schema: nunca em view exposta ao painel, nunca em log, nunca em relatório (ADR-018 §6.3). ⛔ NUNCA escrita pelo upsert de sync-cadastro — só pelo UPDATE direcionado do job sync-fotos. |
+| `foto_sincronizada_em` | timestamp with time zone | sim |  |  | NOSSA. Timestamp da última sincronização BEM-SUCEDIDA do job sync-fotos — inclui o sucesso "não tem foto" (ausência confirmada pelo Secullum). Distinta de foto_tentativa_em: uma tentativa que deu ERRO atualiza só foto_tentativa_em, nunca esta coluna (ADR-018 §5.3 — erro nunca apaga/mascara dado real). |
+| `foto_tentativa_em` | timestamp with time zone | sim |  |  | NOSSA. Timestamp da última TENTATIVA do job sync-fotos, com ou sem sucesso. 🔴 É esta coluna (não foto_sincronizada_em) que ordena a fila (funcionario_foto_fila_idx, ORDER BY ... NULLS FIRST) — sem ela, um funcionário cuja busca falha sempre travaria a cabeça da fila para sempre (ADR-018 §4.1). |
+| `foto_hash` | text | sim |  |  | NOSSA. sha256 em hex dos BYTES DECODIFICADOS de "Foto" (nunca da string base64/data URI original — duas fotos idênticas com prefixos textualmente diferentes têm o mesmo hash). Permite pular o UPDATE do binário quando nada mudou e é a única forma de dizer "a foto mudou" em log sem citar conteúdo. |
+| `foto_bytes` | integer | sim |  |  | NOSSA. Tamanho em bytes da imagem DECODIFICADA. Observabilidade/dimensionamento, sem depender de octet_length("Foto") (que exigiria ler o binário). |
+| `foto_mime` | text | sim |  |  | NOSSA. image/jpeg, image/png, ou NULL quando não determinável. Fonte primária: o prefixo da data URI do 6º endpoint (confirmado por payload real, 2026-08-31); o *magic number* dos bytes é usado só como CONFERÊNCIA (diverge => vence o conteúdo real, com aviso agregado foto_mime_divergente). ⛔ Sem CHECK e sem lista fechada — mesma disciplina dos demais enums/mime deste schema. ⛔ Nunca inferir por nome de arquivo, nunca assumir JPEG por padrão. |
 | `tenant_id` | uuid | não | `'<tenant fastpark>'::uuid` | `app.tenant` |  |
 
 **Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
@@ -2341,6 +2347,7 @@ Espelho literal do Secullum. Não exposto ao PostgREST. PII completa. Só `servi
 - `"Funcionario_horario_id_fkidx"` — `secullum."Funcionario" USING btree (horario_id)`
 - `funcionario_afastado_hoje_idx` — `secullum."Funcionario" USING btree (afastado_hoje) WHERE (afastado_hoje = true)`
 - `funcionario_cidade_id_idx` — `secullum."Funcionario" USING btree (cidade_id)`
+- `funcionario_foto_fila_idx` — `secullum."Funcionario" USING btree (foto_tentativa_em NULLS FIRST) WHERE "PossuiFoto"`
 - `funcionario_funcao_id_idx` — `secullum."Funcionario" USING btree (funcao_id)`
 - `funcionario_tenant_idx` — `secullum."Funcionario" USING btree (tenant_id)`
 - `UNIQUE funcionario_funcionarioid_key` — `secullum."Funcionario" USING btree ("FuncionarioId")`
