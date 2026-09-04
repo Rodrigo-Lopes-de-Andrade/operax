@@ -1,3 +1,7 @@
+<!-- verificar-docs: inexistentes-de-proposito public.rls_auto_enable app.job_execucao -->
+<!-- Os dois existem SÓ em produção e são desenho da outra equipe: nenhuma migration
+     daqui os cria, então o banco de ensaio não os tem. Citá-los é o objetivo do §3d. -->
+
 # OperaX — plano de reconciliação do projeto na nuvem
 
 <!-- verificar-docs: inexistentes-de-proposito public.fn_kpi_periodo app.job_execucao app.sync_execucao secullum.departamento_gestor secullum.estrutura_evento_titular -->
