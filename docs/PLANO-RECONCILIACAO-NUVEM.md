@@ -719,11 +719,48 @@ reprova enquanto ninguém regenerou.
 evidência de que a captura e produção **concordam agora** — inclusive quando
 concordam porque a captura foi reescrita depois da mudança.
 
-**Conserto, e é troca de mecanismo, não de texto:** a captura do catálogo de
-produção passa a ser **datada e commitada**, e a verificação compara **captura
-contra captura**. Deriva deixa de ser um teste que passa e vira **diff no git,
-com data e autor** — que é o artefato que responde "quando mudou e quem mudou",
-que nenhum teste verde responde.
+✅ **Consertado em 04/09/2026 — `scripts/capturar_producao.py`.** A captura do
+catálogo de produção passou a ser **datada e commitada** em
+`supabase/capturas/<ref>/`, e a verificação compara **captura contra captura**.
+Deriva deixou de ser um teste que passa e virou **diff no git, com data e autor**
+— o artefato que responde "quando mudou e quem mudou", que nenhum teste verde
+responde.
+
+    python3 scripts/capturar_producao.py <ref> --rotulo <por-que>
+    python3 scripts/capturar_producao.py <ref> --rotulo <por-que> --gate
+
+O `--gate` sai com código 1 quando há deriva, para cercar um `db push`.
+
+⛔ **E há um uso que não é rotina: cercar o push das onze.** Há sete event
+triggers em `ddl_command_end`, e o **primeiro na ordem alfabética é da outra
+equipe** (`ensure_rls` → `public.rls_auto_enable`). Com ator não lido disparando
+durante o push, o estado anterior é a **única** forma de atribuir o que aparecer
+depois: sem ele não se separa o que a migration fez do que o gatilho deles fez.
+Depois do push, o "antes" só existe por reconstrução — que é exatamente o que não
+vale quando há terceiro no meio.
+
+**A ordem, e ela é o gate:** capturar → `db push` → capturar de novo → diffar.
+Tudo que aparecer no segundo diff e não estiver nas onze é obra de terceiro,
+**com data**.
+
+📌 **Primeira captura: `2026-09-04T1355-antes-das-onze.sql`** — 76 tabelas, 1.050
+colunas, 74 policies, 29 funções, ledger em 48. É a linha de base contra a qual o
+"depois" será lido.
+
+### O gatilho deles foi lido antes do push — e é inerte para as onze
+
+`public.rls_auto_enable` executa **uma** coisa:
+`alter table ... enable row level security`. **Não cria policy** — a parada
+obrigatória nº 1 deste projeto não é disparada por ele. E o corpo exige
+`cmd.schema_name IN ('public')`: as ~10 tabelas das onze nascem em `app` e caem
+no `ELSE`, que só escreve uma linha de log. O `EXCEPTION WHEN OTHERS THEN RAISE
+LOG` também impede que ele aborte um push.
+
+⚠️ **O que fica dito, mesmo inerte:** ele liga RLS **sem `FORCE`**, enquanto as
+nossas migrations usam FORCE nas 50. Se um dia a lista `('public')` mudar, ele
+passa a produzir proteção mais fraca que a nossa em tabela nossa — RLS sem policy
+é *deny-all*, que ao menos falha fechado. O dia em que essa lista mudar é evento
+a escalar, pela regra de propriedade abaixo.
 
 ### Propriedade: três coisas são DELAS, e não viram pendência nossa
 

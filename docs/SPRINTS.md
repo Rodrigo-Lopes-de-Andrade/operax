@@ -797,12 +797,23 @@ coluna; não existe "fonte errada" a escolher.
 
 ⏱️ A ~40/dia a fila fecha antes de a tela existir, então isso não sequencia nada.
 
-### ⚠️ Achado colateral: biometria de gente desligada
+### 🔴 Achado a escalar: RETENÇÃO de dado biométrico de ex-colaborador
 
 `PossuiFoto` é **153 entre os 176** do espelho, mas só **76** entre os 80 ativos.
-O job da outra equipe busca **77 rostos de ex-funcionários**, diariamente, para
-fichas que ninguém abre. É questão de minimização de dado, não de performance, e
-é decisão do dono — fica registrado, não consertado.
+O job da outra equipe busca e **retém 77 rostos de ex-colaboradores**,
+atualizando-os diariamente, para fichas que ninguém abre.
+
+⛔ **Isto não é minimização de dado nem performance do job.** É **retenção de
+dado biométrico de ex-colaborador** — assunto de **LGPD e do cliente**, não de
+engenharia. Rosto é dado pessoal sensível, e manter o de quem já saiu, com
+atualização diária, precisa de base legal e de prazo. Nenhum dos dois está
+escrito em lugar nenhum que este repositório alcance.
+
+📌 **E serve de alavanca na conversa da porta estreita.** Em vez de *"mudem o
+`Accept-Profile` por nossa causa"*, a conversa vira: *"encontramos isto no job de
+vocês, e a porta suportada já está pronta"*. Deixa de ser pedido e vira
+contribuição — e a outra equipe fica com um motivo **próprio** para mexer, que é
+o que faz mudança de terceiro acontecer.
 
 ---
 
