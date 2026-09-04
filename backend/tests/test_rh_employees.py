@@ -52,6 +52,9 @@ def pessoa_detalhe(**overrides: Any) -> dict[str, Any]:
     } | overrides
 
 
+JPEG_DE_MENTIRA = b"\xff\xd8\xff-bytes-de-mentira"
+
+
 class FakeCursor:
     """Cursor de mentira endereçado por trecho de statement.
 
@@ -129,7 +132,7 @@ class FakeDB:
             if "as content" in sql:
                 return [
                     {
-                        "content": b"\xff\xd8\xff-bytes-de-mentira",
+                        "content": JPEG_DE_MENTIRA,
                         "mime": "image/jpeg",
                         "synced_at": datetime(2026, 9, 2, 20, 31),
                     }
@@ -656,5 +659,12 @@ def test_nenhuma_resposta_json_carrega_bytes_de_foto(client: TestClient, issue_t
     for caminho in ("/rh/employees", f"/rh/employees/{ANA}"):
         bruto = client.get(caminho, headers=auth(issue_token)).text
         assert "data:image" not in bruto
-        assert "\\u00ff\\u00d8" not in bruto  # JPEG escapado em JSON
         assert "/9j/" not in bruto  # JPEG em base64
+        # ⚠️ A asserção anterior procurava `\\u00ff\\u00d8` e era INALCANÇÁVEL:
+        # o FastAPI serializa com `ensure_ascii=False`, então o escape nunca
+        # aparece no corpo. Uma linha verde que não vigiava nada — trocada pelas
+        # duas formas que de fato escapavam da varredura, e que são exatamente o
+        # que alguém escreve depois de bater no `PydanticSerializationError` de
+        # `bytes` cru e querer "fazer serializar".
+        assert JPEG_DE_MENTIRA.decode("latin-1") not in bruto
+        assert JPEG_DE_MENTIRA.hex() not in bruto

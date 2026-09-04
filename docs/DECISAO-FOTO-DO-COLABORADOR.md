@@ -118,9 +118,21 @@ permite.** Essa informação é dele, e é mais valiosa que a tela.
 - **Nunca em exportação, log, relatório, WhatsApp ou painel de TV.**
 - **Sem URL pública.** Nada de link assinado de longa duração, bucket público ou
   URL que sobreviva à sessão.
-- **Acesso registrado.** Abrir a ficha já é evento auditável; a foto anda com ela
-  em `app.audit_log`. **Não se registra byte — registra-se quem abriu a ficha de
-  quem.**
+- **Acesso registrado.** 🔴 **CORREÇÃO de 04/09/2026 — esta cláusula era FALSA
+  quando escrita, e o gate de superfície a derrubou.** O texto dizia "abrir a
+  ficha já é evento auditável; a foto anda com ela em `app.audit_log`". **Não
+  anda, e a ficha também não.** Medido: nenhum call site de `audit()` em
+  `operax/rh/` é de leitura — os seis são `insert` ou `update`. **Nenhuma leitura
+  é auditada neste produto hoje**, nem a ficha, nem a foto.
+
+  A intenção continua válida: *não se registra byte, registra-se quem abriu a
+  ficha de quem*. Mas ela é **trabalho a fazer**, não proteção existente — e
+  descrever como existente uma mitigação que não está lá é pior que não tê-la,
+  porque alguém decide o risco contando com ela.
+
+  ⛔ **Auditar leitura é decisão em aberto**, e não é pequena: muda o volume de
+  `app.audit_log` (toda abertura de ficha vira linha) e é escrita numa tabela de
+  auditoria. Fica nomeada aqui em vez de silenciada.
 
 ## 6. Fonte da foto — RESOLVIDO por medição (04/09/2026)
 

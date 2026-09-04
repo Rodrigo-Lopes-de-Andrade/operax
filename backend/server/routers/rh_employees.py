@@ -172,6 +172,10 @@ def _row(linha: dict[str, Any]) -> HrEmployeeRow:
     )
 
 
+#: O que a origem entrega. Fora disto, o mime da coluna não é obedecido.
+_MIMES_ACEITOS = frozenset({"image/jpeg", "image/png"})
+
+
 @router.get(
     "/employees/{employee_id}/foto",
     response_class=Response,
@@ -210,7 +214,12 @@ async def obter_foto(employee_id: UUID, tenant: CurrentTenant) -> Response:
 
     return Response(
         content=imagem.content,
-        media_type=imagem.mime,
+        # ⛔ Allowlist, e não o valor da coluna. `foto_mime` é escrita FORA DE
+        # BANDA pelo `sync-fotos` da Vercel, não tem `CHECK` e não tem lista
+        # fechada — e com `Content-Disposition: inline` um mime inesperado faria
+        # o navegador renderizar o conteúdo na origem da API. As duas formas são
+        # as que a origem entrega (medido em 04/09/2026); o resto vira `jpeg`.
+        media_type=imagem.mime if imagem.mime in _MIMES_ACEITOS else "image/jpeg",
         headers={
             # Nada de cache compartilhado: a foto é de uma pessoa e a resposta é
             # de uma sessão. `no-store` também mantém a imagem fora do disco do
