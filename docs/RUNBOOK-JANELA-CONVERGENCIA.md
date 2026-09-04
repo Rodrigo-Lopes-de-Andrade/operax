@@ -1159,6 +1159,58 @@ nklobmlxyidqxarzisph`, 1.305 linhas de DDL idênticas. É a conferência que o
 
 ---
 
+## 3d. Cutover do painel para produção — e o rollback, escrito ANTES
+
+Executado em **04/09/2026**. Esta seção foi escrita **antes** da troca, de
+propósito: rollback descoberto durante incidente é rollback que não existe.
+
+### Estado de partida, medido
+
+| | Apontava para | Vira |
+|---|---|---|
+| Vercel `NEXT_PUBLIC_SUPABASE_URL` | **staging** (`wbzaqjlfpqteesehapnn`) | produção |
+| Vercel `NEXT_PUBLIC_SUPABASE_ANON_KEY` | publishable de staging | publishable de produção |
+| Vercel `NEXT_PUBLIC_API_URL` | Railway (inalterado) | — |
+| Vercel *production branch* | **`main`** | `feature/s5-gestao-de-ponto` |
+| Railway `SUPABASE_*` / `DATABASE_URL` | staging | produção |
+
+⛔ **A branch não é detalhe.** `main` está **65 commits atrás** e o Railway já
+serve de `feature/s5-gestao-de-ponto`. Trocar só as variáveis e redeployar
+publicaria frontend velho contra backend novo. Escolhida a opção reversível —
+mudar a *production branch* da Vercel — em vez de merge para `main`, que é
+decisão de release e pede PR com review.
+
+### ⚠️ `NEXT_PUBLIC_*` é inlinada no BUILD
+
+Mudar a variável **não afeta o deployment que está no ar**. Só vale no próximo
+build. É isso que torna o rollback limpo — e é isso que faz "troquei e não mudou
+nada" ser o sintoma esperado, não um defeito.
+
+### Rollback
+
+**Vercel — dois caminhos, o primeiro é o de incidente:**
+
+1. **Instant Rollback** para o deployment anterior, no painel do projeto. Ele
+   carrega os valores antigos **compilados dentro**, então volta ao estado
+   anterior sem depender de variável nenhuma. É o caminho de madrugada.
+2. Reverter as variáveis (`vercel env rm` + `add`, ou o painel), devolver a
+   *production branch* para `main`, e redeployar. Mais lento e com mais passos.
+
+**Railway:** reverter as variáveis pelo painel ou pelo MCP — a mudança de
+variável já dispara redeploy. Alternativa: redeploy da versão anterior.
+
+⚠️ **A ordem do rollback é a inversa da ordem da troca:** Vercel primeiro
+(devolve o painel a um estado coerente), Railway depois. Deixar o painel
+apontando para produção com o backend em staging é o pior dos dois mundos: login
+funciona, agregado funciona, e todo dado individual toma 401.
+
+📌 **O que NÃO volta sozinho:** o schema e o dado de domínio que o motor gravou
+em produção (176 colaboradores, 6.395 jornadas, 820 indícios de sombra). Isso é
+outro rollback, descrito no passo 7 — e `app.revoke_deviation()` por evento, pela
+regra 6.
+
+---
+
 ## 4. Critério de saída
 
 - [ ] `net._http_response` com `status_code = 200` nos ciclos após religar —
