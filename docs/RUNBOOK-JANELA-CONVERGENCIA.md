@@ -457,6 +457,32 @@ intervalo é a janela real.
    pela primeira vez — as outras três são redeploy de algo já provado contra
    produção.
 
+   ✅ **A `sync-fotos` foi publicada em produção em 04/09/2026 — v1, ACTIVE,
+   `verify_jwt=true`, igual às outras três.** A migration 35 entrou logo antes,
+   na ordem certa: ledger 47 → **48**, e `fn_data_freshness` passou a carregar o
+   limiar de 36 h para `Foto`.
+
+   ⛔ **E o primeiro `functions deploy` FALHOU — guarde isto, porque dentro da
+   janela custaria caro.** Sem `--import-map`, o CLI sobe `index.ts` e os
+   arquivos de `_shared`, mas **não sobe o `deno.json`** — que é onde mora o
+   mapa `"postgres": "npm:postgres@3"`. O bundle roda no servidor, não resolve o
+   especificador e devolve **400**:
+
+       Failed to bundle the function (reason: Relative import path "postgres"
+       not prefixed with / or ./ or ../
+         at .../_shared/postgres-client.ts:18:22)
+
+   O comando que funciona, e o único que deve ser usado para qualquer das quatro:
+
+       supabase functions deploy <nome> --project-ref <ref> \
+         --import-map supabase/functions/deno.json
+
+   ⚠️ **Por que isso não apareceu em 02/09:** naquele deploy o Docker estava de
+   pé e o bundle foi local, onde o Deno acha o `deno.json` pelo sistema de
+   arquivos. Sem Docker o CLI cai no bundler da API, que só enxerga o que foi
+   enviado. A janela é de madrugada e ninguém garante o Docker ligado — então o
+   flag não é otimização, é o caminho previsível.
+
    ⚠️ **A `sync-fotos` é a menos provada das quatro, e o motivo é nomeável:**
    ninguém mediu em que chave a data URI vem da origem. O parser aceita string
    solta, data URI com ou sem mime, base64 puro, e varre valores string dentro de
