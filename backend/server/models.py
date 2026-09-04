@@ -773,6 +773,13 @@ class HrAgreement(BaseModel):
     pending_installments: int = 0
 
 
+class HrPhotoSuperseded(BaseModel):
+    """A foto enviada que a origem substituiu. Metadado, nunca bytes."""
+
+    uploaded_at: datetime
+    uploaded_by_name: str | None = None
+
+
 class HrPhoto(BaseModel):
     """Se há foto, e de quando ela é. Sem bytes, por desenho.
 
@@ -786,7 +793,19 @@ class HrPhoto(BaseModel):
     """
 
     state: Literal["ausente", "pendente", "disponivel"]
+    #: De onde vem o rosto exibido. A ORIGEM VENCE (§4-ter): o espelho é o
+    #: registro de identidade, e a enviada é tapa-buraco de uma lacuna dele.
+    origin: Literal["secullum", "manual"] | None = None
     synced_at: datetime | None = None
+    uploaded_at: datetime | None = None
+    uploaded_by_name: str | None = None
+    #: A foto enviada que a origem substituiu — **nunca apagada**. É o que faz a
+    #: ficha dizer "substituiu a foto enviada em DD/MM por [autor]", porque troca
+    #: silenciosa do rosto que o DP escolheu é o erro que a revisão apontou.
+    superseded: HrPhotoSuperseded | None = None
+    #: A tela só oferece envio onde a origem declara não ter, para que as duas
+    #: fontes não se sobreponham por construção.
+    can_upload: bool = False
 
 
 class HrEmployeeDetail(BaseModel):

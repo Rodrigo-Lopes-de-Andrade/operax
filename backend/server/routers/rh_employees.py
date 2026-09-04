@@ -23,7 +23,7 @@ from datetime import date
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Query, Response, status
+from fastapi import APIRouter, File, HTTPException, Query, Response, UploadFile, status
 
 from operax.core.tenant import TenantContext
 from operax.rh import employees as repo
@@ -52,6 +52,7 @@ from server.models import (
     HrLeave,
     HrMovement,
     HrPhoto,
+    HrPhotoSuperseded,
     HrPii,
     HrSyncField,
     NewCompensation,
@@ -172,6 +173,79 @@ def _row(linha: dict[str, Any]) -> HrEmployeeRow:
     )
 
 
+def _photo_payload(info: foto_repo.PhotoInfo | None) -> HrPhoto | None:
+    """Metadado da foto para o JSON. ⛔ Nunca bytes — só estado e datas."""
+    if info is None:
+        return None
+    return HrPhoto(
+        state=info.state.value,
+        origin=info.origin.value if info.origin else None,
+        synced_at=info.synced_at,
+        uploaded_at=info.uploaded_at,
+        uploaded_by_name=info.uploaded_by_name,
+        superseded=(
+            HrPhotoSuperseded(
+                uploaded_at=info.superseded.uploaded_at,
+                uploaded_by_name=info.superseded.uploaded_by_name,
+            )
+            if info.superseded
+            else None
+        ),
+        can_upload=info.can_upload,
+    )
+
+
+@router.post("/employees/{employee_id}/foto")
+async def enviar_foto(
+    employee_id: UUID,
+    tenant: CurrentTenant,
+    arquivo: Annotated[UploadFile, File(alias="file")],
+) -> HrPhoto:
+    """O DP envia a foto de quem a origem declara não ter — §4-ter da decisão.
+
+    ⚠️ **Isto CRIA dado biométrico**, e não espelha o que a origem já tinha. É
+    postura de LGPD diferente da exibição, e o risco está aceito por escrito na
+    §4-bis, com dono e data. Ver `docs/DECISAO-FOTO-DO-COLABORADOR.md`.
+
+    ⛔ **Só onde `"PossuiFoto" = false`.** Recusar aqui é o que faz as duas fontes
+    não se sobreporem por construção — sem isso, precedência deixaria de ser
+    regra de exibição e viraria disputa de escrita.
+
+    O mime sai do *magic number*, nunca do `Content-Type` que o cliente manda:
+    aceitar a palavra de quem envia sobre o que os bytes são é confiar na
+    extensão do arquivo.
+    """
+    permissoes = await check_permissions(tenant)
+    if not permissoes.pii:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seu papel não alcança o domínio de dados pessoais.",
+        )
+    if not permissoes.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seu papel não altera cadastro de colaborador.",
+        )
+
+    conteudo = await arquivo.read()
+    try:
+        info = await foto_repo.upload_photo(
+            tenant, employee_id, conteudo, uploaded_by=tenant.user_id
+        )
+    except foto_repo.UploadRecusadoError as recusa:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(recusa)
+        ) from recusa
+
+    if info is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Colaborador não encontrado."
+        )
+    payload = _photo_payload(info)
+    assert payload is not None
+    return payload
+
+
 #: O que a origem entrega. Fora disto, o mime da coluna não é obedecido.
 _MIMES_ACEITOS = frozenset({"image/jpeg", "image/png"})
 
@@ -259,7 +333,7 @@ async def obter_colaborador(employee_id: UUID, tenant: CurrentTenant) -> HrEmplo
     # alcança o domínio recebe `null` e a aba não existe no DOM. Só o METADADO
     # viaja aqui — a imagem sai pela rota binária abaixo.
     info = await foto_repo.photo_info(tenant, employee_id) if permissoes.pii else None
-    foto = HrPhoto(state=info.state.value, synced_at=info.synced_at) if info else None
+    foto = _photo_payload(info)
 
     return HrEmployeeDetail(
         employee=HrIdentity(**pessoa),

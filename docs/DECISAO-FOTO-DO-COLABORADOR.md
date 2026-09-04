@@ -222,7 +222,20 @@ Duas consequências de tela, que não são detalhe:
 | Rota binária | `GET /rh/employees/{id}/foto` |
 | Metadado na ficha | `HrPhoto` em `backend/server/models.py` |
 | Componente | `frontend/src/components/rh/employee-photo.tsx` |
-| Testes | 7 em `backend/tests/test_rh_employees.py` |
+| Testes | 17 em `backend/tests/test_rh_employees.py` |
+| **Imputação (04/09, tarde)** | |
+| Tabela | migration `36_employee_photo` — `bytea`, sem grant para `authenticated`, sem `delete` |
+| Upload | `POST /rh/employees/{id}/foto` — exige `pii` **e** admin |
+| Precedência | origem vence; enviada é fallback; substituição carimbada e **visível** |
+| Tela | botão só onde `can_upload`, e a linha "substituiu a foto enviada em…" |
+
+📌 **O mime sai do *magic number*, nunca do `Content-Type`.** Aceitar a palavra de
+quem envia sobre o que os bytes são é confiar na extensão do arquivo — e o teste
+prova com um `.jpg` que é PHP.
+
+⛔ **A recusa em `PossuiFoto = true` (inclusive `pendente`) é o que faz as duas
+fontes não se sobreporem por construção.** Sem ela, precedência deixaria de ser
+regra de exibição e viraria disputa de escrita.
 
 📌 **Por que a leitura tem dois passos.** `authenticated` **não tem `usage` em
 `secullum`**, então a leitura não cabe inteira sob `user_scope`. A saída não foi

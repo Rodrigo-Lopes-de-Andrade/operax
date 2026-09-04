@@ -111,6 +111,8 @@ class FakeDB:
         self.existe = existe
         #: 'ausente' | 'pendente' | 'disponivel' — os três estados do §6 da decisão.
         self.foto = foto
+        #: A linha de `app.employee_photo`, quando alguém enviou.
+        self.foto_manual: dict[str, Any] | None = None
         self.statements: list[tuple[str, dict[str, Any]]] = []
         self.audit: list[dict[str, Any]] = []
         self.pessoa = pessoa_detalhe()
@@ -124,6 +126,9 @@ class FakeDB:
             # A RLS é quem decide: pessoa fora de alcance devolve vazio, e a rota
             # transforma em 404 sem revelar que ela existe noutra unidade.
             return [{"secullum_employee_id": 4242}] if self.existe else []
+        if "from app.employee_photo" in sql:
+            # A foto enviada. `None` = ninguém enviou nada para esta pessoa.
+            return [self.foto_manual] if self.foto_manual else []
         if 'from secullum."Funcionario"' in sql:
             if self.foto == "ausente":
                 return [{"possui": False, "synced_at": None, "bytes": None}]
@@ -623,20 +628,25 @@ def test_a_resposta_da_foto_nao_entra_em_cache_compartilhado(client: TestClient,
 def test_a_ficha_distingue_sem_foto_de_sem_foto_ainda(client: TestClient, issue_token, db):
     """Três estados, não dois: vazio sem explicação parece defeito (§6)."""
     db(foto="ausente")
-    assert client.get(f"/rh/employees/{ANA}", headers=auth(issue_token)).json()["photo"] == {
-        "state": "ausente",
-        "synced_at": None,
-    }
+    ausente = client.get(f"/rh/employees/{ANA}", headers=auth(issue_token)).json()["photo"]
+    assert ausente["state"] == "ausente"
+    assert ausente["origin"] is None
+    # Só aqui a tela oferece envio: a origem declarou não ter, então as duas
+    # fontes não podem se sobrepor (§4-ter).
+    assert ausente["can_upload"] is True
 
     db(foto="pendente")
-    assert client.get(f"/rh/employees/{ANA}", headers=auth(issue_token)).json()["photo"] == {
-        "state": "pendente",
-        "synced_at": None,
-    }
+    pendente = client.get(f"/rh/employees/{ANA}", headers=auth(issue_token)).json()["photo"]
+    assert pendente["state"] == "pendente"
+    # ⛔ PENDENTE não aceita envio: a origem vai preencher sozinha, e aceitar aqui
+    # criaria a sobreposição que a precedência existe para não ter de arbitrar.
+    assert pendente["can_upload"] is False
 
     db(foto="disponivel")
     disponivel = client.get(f"/rh/employees/{ANA}", headers=auth(issue_token)).json()["photo"]
     assert disponivel["state"] == "disponivel"
+    assert disponivel["origin"] == "secullum"
+    assert disponivel["can_upload"] is False
     # A idade do rosto é dado de tela: sem a data, não há como saber que o rosto
     # é de dois anos atrás — que numa ficha de identificação é pior que nenhum.
     assert disponivel["synced_at"] is not None
@@ -668,3 +678,112 @@ def test_nenhuma_resposta_json_carrega_bytes_de_foto(client: TestClient, issue_t
         # `bytes` cru e querer "fazer serializar".
         assert JPEG_DE_MENTIRA.decode("latin-1") not in bruto
         assert JPEG_DE_MENTIRA.hex() not in bruto
+
+
+# ---------------------------------------------------------------------------
+# Imputação da foto — §4-ter. Cria dado biométrico; cada teste guarda uma trava.
+# ---------------------------------------------------------------------------
+PNG_DE_MENTIRA = b"\x89PNG\r\n\x1a\n-bytes-de-mentira"
+
+
+def _enviar(client: TestClient, issue_token, conteudo: bytes, nome="foto.jpg"):
+    return client.post(
+        f"/rh/employees/{ANA}/foto",
+        headers=auth(issue_token),
+        files={"file": (nome, conteudo, "image/jpeg")},
+    )
+
+
+def test_o_dp_envia_foto_de_quem_a_origem_diz_nao_ter(client: TestClient, issue_token, db):
+    """O positivo: `PossuiFoto = false` é exatamente onde a imputação existe."""
+    db(foto="ausente")
+    r = _enviar(client, issue_token, JPEG_DE_MENTIRA)
+
+    assert r.status_code == 200, r.text
+    assert r.json()["state"] in {"ausente", "disponivel"}
+
+
+def test_nao_se_envia_foto_para_quem_a_origem_ja_tem(client: TestClient, issue_token, db):
+    """A trava que faz as duas fontes não se sobreporem por construção."""
+    db(foto="disponivel")
+    r = _enviar(client, issue_token, JPEG_DE_MENTIRA)
+
+    assert r.status_code == 422
+    assert "sistema de ponto" in r.json()["detail"]
+
+
+def test_nem_para_quem_esta_na_fila(client: TestClient, issue_token, db):
+    """PENDENTE também recusa: a origem vai preencher sozinha."""
+    db(foto="pendente")
+    assert _enviar(client, issue_token, JPEG_DE_MENTIRA).status_code == 422
+
+
+def test_o_mime_sai_dos_bytes_e_nao_do_que_o_cliente_declara(client: TestClient, issue_token, db):
+    """Um `.jpg` que não é JPEG é recusado — magic number, não extensão."""
+    db(foto="ausente")
+    r = _enviar(client, issue_token, b"<?php system($_GET[0]); ?>", nome="foto.jpg")
+
+    assert r.status_code == 422
+    assert "JPEG ou PNG" in r.json()["detail"]
+
+
+def test_png_tambem_entra(client: TestClient, issue_token, db):
+    """O positivo do formato: a allowlist tem dois, não um."""
+    db(foto="ausente")
+    assert _enviar(client, issue_token, PNG_DE_MENTIRA).status_code == 200
+
+
+def test_arquivo_grande_demais_e_recusado_com_mensagem(client: TestClient, issue_token, db):
+    """Recusar antes do banco é a diferença entre uma mensagem e um 500."""
+    db(foto="ausente")
+    gigante = JPEG_DE_MENTIRA + b"\x00" * (5 * 1024 * 1024)
+    r = _enviar(client, issue_token, gigante)
+
+    assert r.status_code == 422
+    assert "limite" in r.json()["detail"]
+
+
+def test_sem_o_dominio_pii_nao_se_envia_foto(client: TestClient, issue_token, db):
+    """Escrever biometria exige o mesmo domínio que lê — e mais: ser admin."""
+    db(pii=False, foto="ausente")
+    assert _enviar(client, issue_token, JPEG_DE_MENTIRA).status_code == 403
+
+
+def test_quem_nao_escreve_cadastro_nao_envia_foto(client: TestClient, issue_token, db):
+    db(admin=False, foto="ausente")
+    assert _enviar(client, issue_token, JPEG_DE_MENTIRA).status_code == 403
+
+
+def test_a_substituicao_pela_origem_aparece_na_ficha(client: TestClient, issue_token, db):
+    """⛔ Nunca silenciosa: a ficha diz que houve troca, e de quando (§4-ter)."""
+    estado = db(foto="disponivel")
+    estado.foto_manual = {
+        "uploaded_at": datetime(2026, 8, 20, 14, 0),
+        "uploaded_by_name": "dp@fastpark.com.br",
+        "bytes": 4096,
+        "superseded_at": None,
+    }
+    corpo = client.get(f"/rh/employees/{ANA}", headers=auth(issue_token)).json()["photo"]
+
+    # A origem venceu na exibição...
+    assert corpo["origin"] == "secullum"
+    # ...e a enviada NÃO sumiu: quem olha a ficha vê que houve substituição.
+    assert corpo["superseded"]["uploaded_by_name"] == "dp@fastpark.com.br"
+    assert corpo["superseded"]["uploaded_at"].startswith("2026-08-20")
+
+
+def test_sem_foto_na_origem_a_enviada_e_a_que_aparece(client: TestClient, issue_token, db):
+    """O outro lado da precedência: sem origem, a enviada é o rosto."""
+    estado = db(foto="ausente")
+    estado.foto_manual = {
+        "uploaded_at": datetime(2026, 8, 20, 14, 0),
+        "uploaded_by_name": "dp@fastpark.com.br",
+        "bytes": 4096,
+        "superseded_at": None,
+    }
+    corpo = client.get(f"/rh/employees/{ANA}", headers=auth(issue_token)).json()["photo"]
+
+    assert corpo["origin"] == "manual"
+    assert corpo["state"] == "disponivel"
+    # Já há uma enviada ativa: a tela não oferece enviar outra por cima.
+    assert corpo["can_upload"] is False

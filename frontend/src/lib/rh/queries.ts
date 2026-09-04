@@ -133,8 +133,16 @@ export type HrAgreement = {
 /** Três estados, não dois: vazio sem explicação parece defeito (§6 da decisão). */
 export type HrPhoto = {
   state: "ausente" | "pendente" | "disponivel";
+  /** A ORIGEM VENCE na exibição — o espelho é o registro de identidade (§4-ter). */
+  origin: "secullum" | "manual" | null;
   /** Idade do rosto é dado de tela, como a idade do dado no resto do produto. */
   synced_at: string | null;
+  uploaded_at: string | null;
+  uploaded_by_name: string | null;
+  /** A enviada que a origem substituiu — nunca apagada, e a ficha mostra. */
+  superseded: { uploaded_at: string; uploaded_by_name: string | null } | null;
+  /** Só onde a origem declara não ter: as fontes não se sobrepõem por construção. */
+  can_upload: boolean;
 };
 
 export type HrEmployeeDetail = {
