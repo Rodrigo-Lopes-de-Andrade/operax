@@ -674,6 +674,74 @@ sincronização e religá-la com os nomes novos.
 
 ---
 
+## 3d. Inventário de deriva — o que produção tem e o repositório não (04/09/2026)
+
+Levantado antes do `db push` das onze migrations da etapa DP, para saber **contra
+o que se aplica**. Catálogo de produção (1.164 objetos) comparado objeto a objeto
+com o banco de ensaio construído do zero — `scripts/_baseline.sql` mais as 37
+migrations (1.154 objetos). Só catálogo: nenhuma linha de dado foi lida.
+
+### O resultado
+
+**Em produção e não no repositório — dois objetos, ambos já conhecidos:**
+
+| Objeto | Onde já estava registrado |
+|---|---|
+| `app.job_execucao` (+ 8 colunas) | o diário do runner da Vercel; ver §0 e §4b |
+| `public.rls_auto_enable` + event trigger `ensure_rls` | migration `11b`, linha 31: *"existe na nuvem e em nenhuma migration daqui"* |
+
+**No repositório e não em produção: nada.**
+
+### ⛔ O que "nada faltando" significa, e o que NÃO significa
+
+✅ **Significa:** os pré-requisitos das onze migrations do DP estão em produção.
+Elas dependem das 37 já aplicadas, e não há objeto ausente contra o qual elas
+falhariam. Para essa pergunta — e só para ela — produção é superconjunto.
+
+⛔ **NÃO significa que está tudo mapeado.** Não é afirmação sobre o espelho, pelo
+motivo do bloco seguinte. Quem citar "produção é superconjunto estrito" como
+prova de cobertura do espelho estará usando a frase fora do escopo em que ela foi
+medida.
+
+### ⛔ A verificação atual é estruturalmente incapaz de detectar deriva
+
+As seis colunas de foto que a outra equipe criou em produção em 02/09 **não
+aparecem** nesta diferença. Não é falha de execução: é o método.
+
+`scripts/_baseline.sql` e `supabase/fixtures/espelho_secullum.sql` são
+**expectativa que se atualiza para acompanhar produção**. Quando a origem muda,
+alguém regenera a captura, e a comparação volta a passar. Um teste cuja
+expectativa persegue a realidade não pode reprovar por divergência — ele só
+reprova enquanto ninguém regenerou.
+
+⚠️ **Enquanto o conserto abaixo não existir, isto vale como aviso de leitura:**
+`scripts/verificar_espelho.py` **não é evidência de que nada mudou.** Ele é
+evidência de que a captura e produção **concordam agora** — inclusive quando
+concordam porque a captura foi reescrita depois da mudança.
+
+**Conserto, e é troca de mecanismo, não de texto:** a captura do catálogo de
+produção passa a ser **datada e commitada**, e a verificação compara **captura
+contra captura**. Deriva deixa de ser um teste que passa e vira **diff no git,
+com data e autor** — que é o artefato que responde "quando mudou e quem mudou",
+que nenhum teste verde responde.
+
+### Propriedade: três coisas são DELAS, e não viram pendência nossa
+
+`app.job_execucao`, `public.rls_auto_enable` e **o espelho inteiro** (as 22
+tabelas, incluindo as seis colunas de foto) são desenho da outra equipe,
+rastreados aqui por captura.
+
+📌 **Isto está escrito como propriedade, não como backlog.** Não vamos adotá-las,
+vamos **observá-las**. Não há migration a escrever, não há merge a fazer, não há
+dívida a quitar.
+
+⛔ **E a consequência operacional:** mudança não anunciada em qualquer das três é
+**evento a escalar**, não trabalho a absorver. Absorver em silêncio foi o que
+fez a coluna `"Estrutura".departamento_id` derrubar a troca do runner, e o que
+fez o `sync-fotos-cron` reabrir o bloqueio dos exposed schemas.
+
+---
+
 ## 4. Os dois projetos, e o papel de cada um
 
 Decidido em 22/08/2026: **coexistem**.

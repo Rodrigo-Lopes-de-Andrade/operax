@@ -750,6 +750,62 @@ medição mostrar 6 `no_punches` em 7 dias. Ela não é exceção; é populaçã
 
 ---
 
+## Foto na ficha do colaborador — ⛔ NÃO CONSTRUIR ainda (04/09/2026)
+
+O cliente pede a foto na ficha. O sistema legado que ele usa hoje já a exibe, com
+botão de alterar — **não é exposição nova para o DP dele**, é a que já existe.
+
+⛔ **Bloqueado por autorização, não por técnica.** O `DICIONARIO-DE-DADOS.md` diz
+que `secullum."Funcionario"."Foto"` é *"a coluna mais restrita do schema: nunca em
+view exposta ao painel, nunca em log, nunca em relatório (ADR-018 §6.3)"*. O
+**ADR-018 não existe neste repositório** — é da outra equipe. O dono foi perguntar
+se §6.3 é sobre **superfície** ou sobre **visibilidade**, e se a origem é LGPD,
+contrato ou decisão de produto deles. **Até voltar, não se constrói.**
+
+📌 A leitura do dono, que é a pergunta feita a eles: Caminho 2 com revalidação de
+papel e domínio **não é view exposta** — é o oposto disso.
+
+### O que a medição de 04/09 já resolveu
+
+✅ **Fonte: não há duas.** Varrido o schema por `bytea` e por nome de imagem:
+`secullum."Funcionario"` é o único lugar, e não há bucket de Storage. São **dois
+escritores na mesma coluna** — o job da Vercel (40/dia, 120 gravadas) e a Edge
+Function daqui (1, do teste com `{"limit": 1}`). Qualquer endpoint lê a mesma
+coluna; não existe "fonte errada" a escolher.
+
+### Forma, quando for autorizado
+
+- **Quem vê:** domínio `pii` — `owner`, `personnel`, `hr`, pela matriz já semeada.
+  `regional_manager`, `unit_supervisor`, `executive` e `accounting` **não**.
+  Ampliar depois é decisão nova.
+- **Requisição individual na ficha aberta.** Nunca em lista — 176 rostos numa
+  listagem é exportação de biometria com outro nome. Nunca em exportação, log,
+  relatório, WhatsApp ou painel de TV. Nenhuma URL pública nem link assinado que
+  sobreviva à sessão.
+- **Três estados, não dois** — vazio sem explicação numa tela de identificação
+  parece defeito:
+
+  | Condição | Tela | Quantos hoje (dos 80 ativos) |
+  |---|---|---|
+  | `PossuiFoto = false` | "sem foto" — definitivo | 4 |
+  | `PossuiFoto` e `foto_sincronizada_em is null` | "sem foto ainda" — na fila | 21 |
+  | `foto_sincronizada_em` preenchido | mostra, **com a idade** | 55 |
+
+- **A idade do rosto é dado de tela**, pela mesma disciplina de idade do dado do
+  resto do produto. Rosto de dois anos numa ficha de identificação é pior que
+  rosto nenhum, e só a data revela.
+
+⏱️ A ~40/dia a fila fecha antes de a tela existir, então isso não sequencia nada.
+
+### ⚠️ Achado colateral: biometria de gente desligada
+
+`PossuiFoto` é **153 entre os 176** do espelho, mas só **76** entre os 80 ativos.
+O job da outra equipe busca **77 rostos de ex-funcionários**, diariamente, para
+fichas que ninguém abre. É questão de minimização de dado, não de performance, e
+é decisão do dono — fica registrado, não consertado.
+
+---
+
 ## S5 — Dashboard · 7–10 dias ✅
 
 **Objetivo:** a tela. Pode começar em paralelo ao S4 usando dados de sombra.
