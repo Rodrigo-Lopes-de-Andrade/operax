@@ -730,8 +730,23 @@ que enterrariam a medição. O teto real é 25 dias.
 a taxa de falso positivo **ainda não foi apurada** — contar eventos não é medir
 acerto.
 
-⚠️ **`0% com unidade`:** os 31 departamentos não têm mapeamento para `app.unit`.
-Não afeta o G4, mas o dashboard por unidade nasce vazio.
+~~⚠️ **`0% com unidade`**~~ ✅ **Curado no mesmo dia.** Eram **27** departamentos,
+não 31. Decisão do dono: **1 unidade por departamento**. O código saiu do próprio
+nome (`U-XXX - Nome`), que já o carregava, e a ponte `app.unit_secullum_map`
+guarda em `notes` que a curadoria foi instrução explícita — não palpite do motor,
+que é o que o docstring do `cadastro.py` proíbe. Resultado: **100% com unidade,
+nenhuma pendência**, que é o critério de aceite do S1.
+
+⚠️ **Os 818 eventos já gravados não ganharam unidade sozinhos.** O `on conflict`
+de `regras.py` preserva `unit_id`/`company_id` de propósito, para que
+reorganização posterior não reescreva histórico. Aqui não houve reorganização: a
+unidade não existia na hora da escrita. Preenchidos **apenas os nulos**, no
+escopo estreito `mode='shadow' and report_cycle_id is null` — a cláusula que o
+próprio motor usa para não tocar no que já saiu para um gestor. Depois: 820
+eventos, 820 com unidade, **26 unidades distintas**.
+
+📌 **A 999 fica no fluxo padrão** — decisão do dono em 04/09, mantida depois de a
+medição mostrar 6 `no_punches` em 7 dias. Ela não é exceção; é população medida.
 
 ---
 

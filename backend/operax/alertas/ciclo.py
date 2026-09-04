@@ -31,11 +31,11 @@ one place.
 from __future__ import annotations
 
 import argparse
-import asyncio
 from dataclasses import dataclass
 from datetime import date
 from uuid import UUID
 
+from operax.core.db import run_cli
 from operax.core.tenant import SystemContext, active_tenants, tenant_scope
 
 TASK = "alertas.ciclo"
@@ -202,7 +202,7 @@ def relatorio(saida: list[tuple[SystemContext, list[Cycle]]]) -> str:
 
 def main(argv: list[str] | None = None) -> int:
     argparse.ArgumentParser(description="Monta o ciclo de relatório por unidade.").parse_args(argv)
-    print(relatorio(asyncio.run(run())))
+    print(relatorio(run_cli(run())))
     return 0
 
 

@@ -27,12 +27,12 @@ delivery log does not need somebody's phone number to be useful.
 from __future__ import annotations
 
 import argparse
-import asyncio
 import hashlib
 from dataclasses import dataclass
 from uuid import UUID
 
 from operax.alertas.provedores.base import Delivery, Message, NullProvider, Provider
+from operax.core.db import run_cli
 from operax.core.tenant import SystemContext, active_tenants, tenant_scope
 
 TASK = "alertas.sender"
@@ -245,7 +245,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Consome app.alert_queue.")
     parser.add_argument("--lote", type=int, default=BATCH, help=f"tamanho do lote (padrão {BATCH})")
     args = parser.parse_args(argv)
-    print(relatorio(asyncio.run(run(batch=args.lote))))
+    print(relatorio(run_cli(run(batch=args.lote))))
     return 0
 
 

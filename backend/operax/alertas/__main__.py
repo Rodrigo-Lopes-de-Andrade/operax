@@ -9,10 +9,10 @@ o gate G4 na frente.
 from __future__ import annotations
 
 import argparse
-import asyncio
 
 from operax.alertas import ciclo, outbox
 from operax.core.config import get_settings
+from operax.core.db import run_cli
 
 
 async def _montar_e_enfileirar(base_url: str) -> str:
@@ -35,7 +35,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
     base_url = args.url or get_settings().dashboard_url
-    print(asyncio.run(_montar_e_enfileirar(base_url)))
+    print(run_cli(_montar_e_enfileirar(base_url)))
     return 0
 
 
