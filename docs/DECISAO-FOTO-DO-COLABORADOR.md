@@ -128,6 +128,26 @@ a espelhar o que a origem já tinha. Isso é **posição contratual entre EURECA
 cliente**, assunto separado das regras da outra equipe. **Precisa de resposta
 antes do primeiro byte gravado.**
 
+### Status desta pergunta em 04/09/2026 — e a distinção importa
+
+**A resposta dada foi "atender o cliente".** Ela está registrada como risco
+aceito por escrito, com **dono (Rodrigo)** e **data (04/09/2026)**, que é o
+mecanismo que esta página define. O que nunca valia era o silêncio.
+
+⚠️ **Mas "atender o cliente" é prioridade, não base legal.** Decide que vamos
+fazer; não estabelece que há fundamento para a EURECA guardar biometria inserida
+pelo cliente.
+
+🔴 **Então: segue em aberto DE FATO, ainda que decidido DE DIREITO.** O caminho de
+gravação existe desde a migration 36, e a pergunta jurídica continua sem resposta
+jurídica. Registrar não é responder — e esta seção existe para que a diferença
+não se perca quando alguém ler o histórico e vir só a decisão.
+
+📌 **O que fecharia de fato:** um parecer, uma cláusula contratual, ou a base
+legal nomeada (consentimento, execução de contrato, obrigação legal). Enquanto
+nenhum dos três existir, o dado está sendo guardado sob decisão de negócio, e
+quem assumir esta pendência depois precisa saber disso.
+
 📌 **A ordem de grandeza torna a separação barata:** dos **80 ativos, 76 já têm
 foto na origem**. A exibição atende **95% do requisito imediatamente**; a
 imputação existe para **4 pessoas**. Separar não adia o que o cliente pediu —
