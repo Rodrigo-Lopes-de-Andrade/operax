@@ -86,6 +86,9 @@
   --brand: #ff8c00; /* fill only — never text, never under white text */
   --brand-strong: #a85f00; /* links, orange text, pressed state */
   --brand-soft: #fff1de; /* tints and chips */
+  /* Laranja de texto da tela de entrada. No claro é o mesmo do produto;
+     o bloco escuro do fim do arquivo o troca pelo 151 C puro. */
+  --entry-accent-text: var(--brand-strong);
   /* Direction of the deviation. Red stays reserved for failure. */
   --accent-surplus: var(--categorical-5); /* excedente — teal */
   --accent-shortfall: var(--categorical-3); /* faltante — laranja queimado */
@@ -291,5 +294,76 @@
       animation-iteration-count: 1 !important;
       transition-duration: 0.01ms !important;
     }
+  }
+}
+
+/* ---------------------------------------------------------------------------
+   Tema FastPark — os quatro Pantones do manual, e SÓ eles.
+
+   Regra de white-label do CLAUDE.md: marca é configuração do tenant, nunca
+   constante do componente. Estes valores vivem aqui sob `[data-brand="fastpark"]`
+   e o componente de login lê apenas os aliases semânticos abaixo — se o segundo
+   tenant quebrar a tela, o tema foi para o lugar errado, e é esse o teste.
+
+   Os quatro: 151 C (#FF8C00) · 2975 C (#98D2DB) · 425 C (#5A5A5A) · 427 C (#DCDCDC)
+
+   ⛔ CONTRASTE, que é medida e não preferência:
+   · #FF8C00 sobre branco dá 2,33 — REPROVA como texto. Ele é preenchimento.
+   · Laranja de texto no claro é `--brand-strong` (#A85F00), que o CLAUDE.md fixa.
+     ⚠️ O protótipo propunha #8F5100; não entrou. Os dois passam, mas ter DOIS
+     laranjas de texto no produto é a dívida que a regra escrita existe para
+     evitar — e a regra escrita ganha de um protótipo.
+   · No escuro o 151 C pode ser texto: 7,03 sobre o ground escuro.
+   · O botão é preenchimento laranja com texto ESCURO (7,00). Nunca branco.
+   · 425 C não é cor de texto: é superfície.
+   --------------------------------------------------------------------------- */
+[data-brand="fastpark"] {
+  --fp-151: #ff8c00;
+  --fp-2975: #98d2db;
+  --fp-425: #5a5a5a;
+  --fp-427: #dcdcdc;
+
+  /* Superfícies da tela de entrada — o pátio visto de cima. */
+  --entry-ground: #f2f0ee;
+  --entry-canvas-1: #e6e2de;
+  --entry-canvas-2: #f2f0ee;
+  --entry-shape: rgba(90, 90, 90, 0.09);
+  --entry-shape-lit: rgba(255, 140, 0, 0.13);
+  --entry-ink: #3d3936;
+  --entry-ink-muted: #6e6863;
+  --entry-rule: rgba(61, 57, 54, 0.13);
+  --entry-field: #ffffff;
+  --entry-field-line: rgba(61, 57, 54, 0.22);
+}
+
+/* ---------------------------------------------------------------------------
+   ⚠️ EXCEÇÃO DECLARADA — `prefers-color-scheme` só na tela de entrada.
+
+   O bloco do topo deste arquivo recusa media query para o tema escuro, e o
+   motivo continua valendo: o escuro existe para o painel de parede, e repintar o
+   dashboard do gestor por causa de uma preferência de SO é efeito colateral.
+
+   O login é a única exceção, e ela é nomeada em vez de esquecida: ele não é
+   ferramenta de trabalho, ninguém o pendura num corredor, e é a única tela que
+   alguém abre às cinco da manhã. Decisão do dono em 04/09/2026.
+
+   ⛔ O escopo é `[data-entry]`, e isso é a trava: o seletor não alcança o
+   dashboard nem o painel de TV. Se um dia esta regra vazar para fora do login,
+   ela deixa de ser exceção e vira o que o arquivo recusa.
+   --------------------------------------------------------------------------- */
+@media (prefers-color-scheme: dark) {
+  [data-brand="fastpark"][data-entry] {
+    --entry-ground: #221f1c;
+    --entry-canvas-1: #1b1917;
+    --entry-canvas-2: #262320;
+    --entry-shape: rgba(220, 220, 220, 0.055);
+    --entry-shape-lit: rgba(255, 140, 0, 0.16);
+    --entry-ink: var(--fp-427);
+    --entry-ink-muted: #9a938c;
+    --entry-rule: rgba(220, 220, 220, 0.13);
+    --entry-field: #221f1c;
+    --entry-field-line: rgba(220, 220, 220, 0.2);
+    /* No escuro o 151 C finalmente alcança texto — 7,03 sobre este ground. */
+    --entry-accent-text: var(--fp-151);
   }
 }

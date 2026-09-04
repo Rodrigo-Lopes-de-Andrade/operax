@@ -1,10 +1,10 @@
 import type { Metadata } from "next";
+import { headers } from "next/headers";
 
-import { pageTitle } from "@/lib/brand";
-
-import { Brand } from "@/components/brand";
+import { brandForHost, pageTitle } from "@/lib/brand";
 import { DEFAULT_AUTHENTICATED_PATH, safeNextPath } from "@/lib/navigation";
 
+import { EntryCanvas } from "./entry-canvas";
 import { SignInForm } from "./sign-in-form";
 
 export const metadata: Metadata = {
@@ -19,45 +19,152 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
   const next = safeNextPath((await searchParams).next);
   const cameFromLink = next !== DEFAULT_AUTHENTICATED_PATH;
 
+  /**
+   * A marca vem do HOST, e é a única resolução possível aqui: o login é a tela
+   * sem sessão, então não há `tenant_id` de onde tirá-la. O host já é por
+   * cliente — `app.fastparks.com.br` é o endereço da FastPark e de mais ninguém.
+   */
+  const brand = brandForHost((await headers()).get("host"));
+
   return (
-    <main className="bg-chrome flex min-h-dvh flex-col items-center justify-center gap-8 px-6 py-10">
-      <Brand />
+    <main
+      data-brand={brand.slug}
+      data-entry=""
+      className="grid min-h-dvh lg:grid-cols-[1.05fr_1fr]"
+      style={{ background: "var(--entry-ground)" }}
+    >
+      {/* ── Painel da marca ─────────────────────────────────────────────────
+          Some abaixo de `lg`: no telefone a tela é o formulário, e um painel
+          decorativo empurrando o campo de e-mail para fora da dobra é o oposto
+          de carregar a marca. */}
+      <section className="relative hidden overflow-hidden lg:flex lg:flex-col lg:justify-between lg:p-12">
+        <EntryCanvas />
 
-      <div className="bg-card w-full max-w-sm rounded-[24px] p-6 shadow-[var(--shadow-lg)]">
-        {/* Pre-session surface: no employee data before authentication — no
-            name, unit, time, occurrence type or count. The notice below speaks
-            about the link, never about who or what is on the other side.
+        <FastParkMark />
 
-            Both branches carry the <h1>: every alert link lands on the one
-            below, and a screen without a heading breaks heading navigation on
-            the busiest surface of the product. */}
-        <div
-          className={
-            cameFromLink ? "border-line-subtle mb-5 border-b pb-5" : "mb-5"
-          }
-        >
+        <div className="relative">
+          <p
+            className="text-[clamp(2rem,1.3rem+2.6vw,3.25rem)] leading-[1.05] font-light"
+            style={{ color: "var(--entry-ink)" }}
+          >
+            Nosso cuidado,
+            <br />
+            <em className="font-semibold not-italic">no seu ritmo.</em>
+          </p>
+
+          {/* ⛔ Os números do protótipo ("24 unidades · 1.180 vagas") NÃO estão
+              aqui, e a decisão é de 04/09/2026. Dois motivos, e o segundo é o
+              que decide: (1) é dado operacional do cliente numa página sem
+              autenticação; (2) o número já nascia ERRADO — produção tem 27
+              unidades, não 24 — e texto fixo sobre coisa que muda mente na
+              primeira tela que qualquer pessoa vê. A localização fica: é marca,
+              e não envelhece. */}
+          <p
+            className="mt-6 text-sm tracking-wide"
+            style={{ color: "var(--entry-ink-muted)" }}
+          >
+            São&nbsp;Paulo&nbsp;·&nbsp;SP
+          </p>
+        </div>
+      </section>
+
+      {/* ── Acesso ──────────────────────────────────────────────────────── */}
+      <section className="flex items-center justify-center px-6 py-12">
+        <div className="w-full max-w-sm">
+          <div className="lg:hidden">
+            <FastParkMark compact />
+          </div>
+
+          {/* Superfície pré-sessão: nenhum dado de colaborador antes da
+              autenticação — nem nome, unidade, hora, tipo de ocorrência ou
+              contagem. O aviso fala do LINK, nunca de quem está do outro lado.
+
+              Os dois ramos carregam o <h1>: todo link de alerta cai aqui, e uma
+              tela sem cabeçalho quebra a navegação por títulos na superfície
+              mais movimentada do produto. */}
+          <p
+            className="mt-8 text-xs font-semibold tracking-[0.14em] uppercase lg:mt-0"
+            style={{ color: "var(--entry-accent-text)" }}
+          >
+            Painel operacional
+          </p>
+
           <h1
             className={
               cameFromLink
-                ? "text-ink text-base font-bold"
-                : "text-ink text-xl font-extrabold"
+                ? "mt-2 text-xl font-bold"
+                : "mt-2 text-[1.75rem] leading-tight font-bold"
             }
+            style={{ color: "var(--entry-ink)" }}
           >
-            {cameFromLink ? "Você abriu um link de ocorrência." : "Entrar"}
+            {cameFromLink
+              ? "Você abriu um link de ocorrência."
+              : "Entrar na sua conta"}
           </h1>
-          <p className="text-ink-muted mt-1 text-sm">
+
+          <p
+            className="mt-2 text-sm"
+            style={{ color: "var(--entry-ink-muted)" }}
+          >
             {cameFromLink
               ? "Entre para vê-la. Você volta direto para esta ocorrência, não para a página inicial."
-              : "Use o e-mail cadastrado pela sua empresa."}
+              : "Use o e-mail corporativo cadastrado pelo RH."}
+          </p>
+
+          <div className="mt-7">
+            <SignInForm next={next} />
+          </div>
+
+          <p
+            className="mt-8 border-t pt-5 text-xs"
+            style={{
+              borderColor: "var(--entry-rule)",
+              color: "var(--entry-ink-muted)",
+            }}
+          >
+            Supervisor de unidade enxerga apenas a própria unidade.
           </p>
         </div>
-
-        <SignInForm next={next} />
-      </div>
-
-      <p className="text-center text-xs text-white/80">
-        Supervisor de unidade enxerga apenas a própria unidade.
-      </p>
+      </section>
     </main>
+  );
+}
+
+/**
+ * O logotipo: moldura 151 C e sorriso 425 C, com a área de proteção do manual.
+ *
+ * ⚠️ As cores saem dos tokens do tenant (`--fp-151`, `--fp-425`), nunca de
+ * literais aqui — é a regra de white-label, e é o que faz um segundo tenant ser
+ * uma entrada nova em `brand.ts` e nada mais.
+ */
+function FastParkMark({ compact = false }: { compact?: boolean }) {
+  return (
+    <svg
+      viewBox="0 0 268 62"
+      role="img"
+      aria-label="FastPark"
+      className={compact ? "relative h-8" : "relative h-10"}
+    >
+      <g fill="none" strokeLinecap="round" strokeWidth="7.5">
+        <path
+          stroke="var(--fp-151)"
+          d="M13.5 47.5 V19 A11 11 0 0 1 24.5 8 H49.5 A11 11 0 0 1 60.5 19 V47.5"
+        />
+        <path stroke="var(--fp-425)" d="M13.5 42 C21 55.5 53 55.5 60.5 42" />
+      </g>
+      <g
+        fontFamily="var(--font-hanken), Verdana, sans-serif"
+        fontSize="44"
+        fontWeight="600"
+        letterSpacing="-1.2"
+      >
+        <text x="86" y="46" fill="var(--entry-ink)">
+          Fast
+        </text>
+        <text x="169" y="46" fill="var(--fp-151)">
+          Park
+        </text>
+      </g>
+    </svg>
   );
 }
