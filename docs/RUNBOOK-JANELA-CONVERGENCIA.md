@@ -483,7 +483,36 @@ intervalo é a janela real.
    enviado. A janela é de madrugada e ninguém garante o Docker ligado — então o
    flag não é otimização, é o caminho previsível.
 
-   ⚠️ **A `sync-fotos` é a menos provada das quatro, e o motivo é nomeável:**
+   ✅ **E ela rodou contra produção em 04/09/2026, com `{"limit": 1}`.**
+   `HTTP 200`, `{queued: 1, stored: 1, unchanged: 0, absent: 0, failed: 0}` e
+   — o que importa — **`warnings: []`**. O parser achou a data URI na origem
+   real. A linha entrou em `app.sync_run` como `entity = 'Foto'`, `completed`,
+   escopo `incremental`.
+
+   O estado do espelho depois, lido só por metadado (nunca conteúdo):
+
+   | | |
+   |---|---|
+   | `"Foto"` gravada | **121** de 153 marcados `PossuiFoto` |
+   | `foto_mime` distintos | `image/jpeg`, `image/png` |
+   | `foto_bytes` | 2.278 a 331.905 |
+   | `foto_hash` com 64 chars | **121/121** |
+   | linhas com `length("Foto") <> foto_bytes` | **0** |
+
+   As três metades do contrato batem: o hash é sha256 dos BYTES, o mime sai da
+   data URI (os dois formatos aparecem) e `foto_bytes` é o comprimento real do
+   `bytea`, sem uma única divergência em 121 linhas.
+
+   ⚠️ **O risco fechou por comportamento, não por nomeação.** A chave em que a
+   data URI vem continua sem nome: a função só reporta as chaves quando **falha**,
+   e ela não falhou. Descobrir o nome exigiria logar o payload, que é justamente
+   o que o desenho proíbe — o payload é a imagem. Fica assim: provado que
+   funciona contra a origem de produção, sem nunca ter olhado o conteúdo.
+
+   📌 Os 32 restantes (153 marcados menos 121 gravados) são fila, não erro:
+   `foto_tentativa_em` está nulo neles, e é ela que ordena a fila.
+
+   ⚠️ **O que segue valendo da nota original:**
    ninguém mediu em que chave a data URI vem da origem. O parser aceita string
    solta, data URI com ou sem mime, base64 puro, e varre valores string dentro de
    objeto — e quando não acha, o aviso nomeia as **chaves**, nunca os valores,
