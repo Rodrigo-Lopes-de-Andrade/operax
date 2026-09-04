@@ -104,6 +104,63 @@ A pergunta à outra equipe, em duas linhas:
 precisa saber que a ferramenta que ele usa hoje faz algo que o contrato dele não
 permite.** Essa informação é dele, e é mais valiosa que a tela.
 
+## 4-bis. São DUAS decisões, e este documento tratava como uma
+
+Registrado em **04/09/2026**, a partir de achado da sessão de engenharia.
+
+**Exibir** a foto que já está no espelho e **imputar** uma foto nova são decisões
+com posturas de LGPD diferentes. Os argumentos de risco da §4 foram escritos para
+a primeira:
+
+| Argumento da §4 | Vale para exibir | Vale para imputar |
+|---|---|---|
+| o sistema do cliente já faz isso | ✅ | ⚠️ **enfraquece** — eles exibem e alteram, mas quem guarda é o Secullum, não um terceiro |
+| exposição marginal pequena (papéis `pii` já veem CPF, RG, endereço) | ✅ | ✅ |
+| reversível, não cria dado | ✅ | ❌ **cai inteiro** — upload cria dado biométrico novo no nosso sistema |
+
+**Consequência:** a decisão de **exibir** segue como está — risco carregado,
+prazo de 7 dias para o ADR-018. A decisão de **imputar** é nova, e a pergunta do
+ADR-018 fica **mais urgente para ela, não menos**.
+
+⛔ **E uma pergunta que o ADR-018 não responde, porque é de outro eixo:** com
+upload, a **EURECA passa a guardar dado biométrico que o cliente inseriu** — não
+a espelhar o que a origem já tinha. Isso é **posição contratual entre EURECA e
+cliente**, assunto separado das regras da outra equipe. **Precisa de resposta
+antes do primeiro byte gravado.**
+
+📌 **A ordem de grandeza torna a separação barata:** dos **80 ativos, 76 já têm
+foto na origem**. A exibição atende **95% do requisito imediatamente**; a
+imputação existe para **4 pessoas**. Separar não adia o que o cliente pediu —
+entrega quase tudo agora e põe atrás da resposta a parte que carrega peso
+jurídico diferente.
+
+⚠️ **Antes de qualquer das duas: o cliente precisa VER ou precisa INSERIR?** Se
+for só ver, esta seção e a §4-ter deixam de existir.
+
+## 4-ter. Se a imputação for confirmada — a forma
+
+⛔ **PARADA OBRIGATÓRIA: tabela nova em `app` com policy de RLS. Escrito aqui não
+é autorizado aqui.**
+
+- **Tabela nossa: `app.employee_photo`**, com `tenant_id`, RLS e domínio `pii`.
+  **Nunca escrever em `secullum`** — o espelho é cópia literal da origem, e
+  escrita de terceiro nele é a mesma classe de erro que a outra equipe comete
+  conosco.
+- **`bytea`, não bucket.** Bucket é mais uma superfície com política própria para
+  acertar, e este produto já tem superfícies demais. **Sem grant para
+  `authenticated`**: leitura e escrita só pelo Caminho 2, como a conta bancária.
+- **Imputação só onde a origem declara não ter** (`"PossuiFoto" = false`). Assim
+  as duas fontes **não se sobrepõem por construção**, e precedência deixa de ser
+  questão no caso normal.
+- **Precedência quando as duas existirem:** a **origem vence na exibição**, e a
+  manual **nunca é apagada**. O espelho é o registro de identidade; a foto
+  enviada é tapa-buraco de uma lacuna da origem, e quando a origem preenche, ela
+  é mais provavelmente a atual. O inverso — rosto desatualizado sobrevivendo a
+  uma origem corrigida — é o pior dos dois erros.
+- **A substituição é visível, nunca silenciosa.** A ficha diz *"origem: Secullum ·
+  substituiu a foto enviada em DD/MM por [autor]"*. Trocar em silêncio o rosto
+  que o DP escolheu é o erro que a sessão apontou.
+
 ## 5. A forma da decisão
 
 - **Domínio `pii`.** Quem tem `pii` vê: `owner`, `personnel`, `hr` — a matriz já
