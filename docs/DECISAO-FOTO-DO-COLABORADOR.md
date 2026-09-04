@@ -1,4 +1,8 @@
-<!-- verificar-docs: inexistentes-de-proposito app.job_execucao -->
+<!-- verificar-docs: inexistentes-de-proposito app.job_execucao app.employee_photo -->
+<!-- `app.employee_photo` é PROPOSTA na §4-ter e deliberadamente NÃO existe: criá-la
+     é parada obrigatória (tabela nova em `app` com policy de RLS), e a imputação
+     ainda depende da resposta contratual EURECA↔cliente. O dia em que ela existir,
+     esta linha sai. -->
 
 # Decisão — foto do colaborador no painel
 
