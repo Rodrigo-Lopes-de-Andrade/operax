@@ -300,6 +300,11 @@ async def obter_foto(employee_id: UUID, tenant: CurrentTenant) -> Response:
             # navegador depois que a aba fecha.
             "Cache-Control": "private, no-store",
             "Content-Disposition": "inline",
+            # ⛔ Desde que existe imputação, os bytes servidos aqui podem vir de
+            # QUEM ENVIA — e não só do espelho. O `inline` na origem da API com
+            # sniffing ligado deixaria o navegador decidir o tipo por conta; o
+            # magic number cobre os 3 primeiros bytes, não um polyglot.
+            "X-Content-Type-Options": "nosniff",
         },
     )
 

@@ -82,6 +82,16 @@ insert into app.employee_pii (employee_id, tenant_id, cpf, rg) values
   ('a0000000-0000-0000-0000-0000000000c1', 'aaaaaaaa-0000-0000-0000-000000000001', '00000000191', 'MG-1'),
   ('b0000000-0000-0000-0000-0000000000c1', 'bbbbbbbb-0000-0000-0000-000000000002', '00000000272', 'SP-2');
 
+-- Foto imputada (migration 36). ⛔ Tabela SEM grant para `authenticated`: o
+-- desenho é só Caminho 2. As asserções abaixo provam os dois lados — que nenhum
+-- papel a alcança pelo PostgREST, e que a fronteira não é vácuo.
+insert into app.employee_photo
+       (tenant_id, employee_id, content, mime, bytes, sha256)
+select tenant_id, employee_id, '\xffd8ff00'::bytea, 'image/jpeg', 4,
+       repeat('a', 64)
+  from app.employee_pii limit 1;
+
+
 -- Domínio disciplinar (migration 32) e domínio de saúde, uma linha cada — e no
 -- colaborador que o supervisor **enxerga**, de propósito. Sem linha, "não lê"
 -- conta zero numa tabela vazia e a asserção passa sem provar nada: foi o que a
@@ -122,6 +132,16 @@ end $$;
 -- ---------------------------------------------------------------------------
 \echo '--- Owner do tenant A'
 -- ---------------------------------------------------------------------------
+-- ⚠️ O anti-vácuo roda AQUI, como dono, e não no bloco do DP: lá o papel é
+--    `authenticated`, que por desenho não alcança a tabela — a asserção falharia
+--    por `permission denied`, que é o resultado que ela existe para confirmar
+--    noutro lugar. Sem esta linha, "authenticated não alcança" ficaria verde numa
+--    tabela vazia.
+do $$ begin
+  perform pg_temp.assert_eq('a foto imputada foi semeada (o negativo não é vácuo)',
+    (select count(*) from app.employee_photo), 1);
+end $$;
+
 set local role authenticated;
 set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
 
@@ -205,6 +225,14 @@ set local request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
 do $$ begin
   perform pg_temp.assert_eq('DP lê PII',
     (select count(*) from app.employee_pii), 1);
+  -- ⛔ O par da foto imputada, e ele é DIFERENTE dos outros domínios: aqui nem
+  --    quem TEM `pii` alcança, porque a barreira é o GRANT e não a policy. O
+  --    positivo correspondente é o backend (`service_role`), afirmado no bloco
+  --    de prova da migration 36 — aqui prova-se que a porta do navegador está
+  --    fechada mesmo para o papel mais habilitado.
+  perform pg_temp.assert_eq('DP tem pii e AINDA ASSIM não alcança a foto imputada',
+    (select count(*) from pg_catalog.has_table_privilege(
+       'authenticated', 'app.employee_photo', 'SELECT') as t(p) where p), 0);
   perform pg_temp.assert_eq('DP LÊ ocorrência disciplinar',
     (select count(*) from app.disciplinary_event), 1);
   perform pg_temp.assert_eq('DP NÃO lê exame ocupacional (domínio saúde)',

@@ -1,8 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.job_execucao app.employee_photo -->
-<!-- `app.employee_photo` é PROPOSTA na §4-ter e deliberadamente NÃO existe: criá-la
-     é parada obrigatória (tabela nova em `app` com policy de RLS), e a imputação
-     ainda depende da resposta contratual EURECA↔cliente. O dia em que ela existir,
-     esta linha sai. -->
+<!-- verificar-docs: inexistentes-de-proposito app.job_execucao -->
 
 # Decisão — foto do colaborador no painel
 
@@ -143,8 +139,18 @@ for só ver, esta seção e a §4-ter deixam de existir.
 
 ## 4-ter. Se a imputação for confirmada — a forma
 
-⛔ **PARADA OBRIGATÓRIA: tabela nova em `app` com policy de RLS. Escrito aqui não
-é autorizado aqui.**
+✅ **AUTORIZADO E CONSTRUÍDO em 04/09/2026.** A parada obrigatória que esta seção
+carregava — *"tabela nova em `app` com policy de RLS; escrito aqui não é
+autorizado aqui"* — foi levantada pelo dono no mesmo dia, com a resposta "o
+cliente precisa VER e INSERIR". `app.employee_photo` existe desde a migration 36,
+com três policies.
+
+🔴 **E a resposta contratual que a §4-bis exigia "antes do primeiro byte gravado"
+foi: "atender o cliente".** Isso é **prioridade, não base legal** — decide que
+vamos fazer, não que há fundamento. Fica aqui como **risco aceito por escrito,
+com dono (Rodrigo) e data (04/09/2026)**, que é o mecanismo que esta página
+define. O que não valia era o silêncio; o registro não transforma a prioridade em
+parecer.
 
 - **Tabela nossa: `app.employee_photo`**, com `tenant_id`, RLS e domínio `pii`.
   **Nunca escrever em `secullum`** — o espelho é cópia literal da origem, e

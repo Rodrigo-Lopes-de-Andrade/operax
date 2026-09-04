@@ -89,7 +89,12 @@ create index if not exists employee_photo_employee_idx
 alter table app.employee_photo enable row level security;
 
 revoke all on table app.employee_photo from anon, authenticated;
-grant all on table app.employee_photo to service_role;
+-- ⛔ `select, insert, update` — e NÃO `grant all`, que é a convenção das outras
+--    12 migrations. A exceção é deliberada: `all` inclui `delete` e `truncate`, e
+--    a §4-ter diz que a foto enviada NUNCA é apagada. Conceder e depois afirmar
+--    que ninguém apaga seria a promessa sem a trava. O `update` basta para o
+--    carimbo de substituição.
+grant select, insert, update on table app.employee_photo to service_role;
 
 drop policy if exists employee_photo_read on app.employee_photo;
 create policy employee_photo_read on app.employee_photo
@@ -156,22 +161,40 @@ begin
     raise exception 'RLS não está ligada em app.employee_photo';
   end if;
 
-  -- 4. Ninguém pode apagar — nem o backend.
+  -- 4. Ninguém apaga — e a pergunta é feita ao papel que TERIA como apagar.
+  --    Perguntar só a `authenticated`, que acabou de levar `revoke all`, é o
+  --    conjunto só-negativo em forma pura: passa porque nada foi concedido, e o
+  --    único que de fato apagaria não é interrogado.
+  if has_table_privilege('service_role', 'app.employee_photo', 'DELETE') then
+    raise exception 'service_role apaga foto; a §4-ter diz que ela nunca é apagada';
+  end if;
   if has_table_privilege('authenticated', 'app.employee_photo', 'DELETE') then
-    raise exception 'authenticated apaga foto; a §4-ter diz que ela nunca é apagada';
+    raise exception 'authenticated apaga foto';
   end if;
 
-  -- 5. O check de comprimento pega a divergência que ele existe para pegar.
-  begin
-    insert into app.employee_photo (tenant_id, employee_id, content, mime, bytes, sha256)
-    select t.id, e.id, '\\x00'::bytea, 'image/jpeg', 999,
-           repeat('a', 64)
-      from app.tenant t, app.employee e limit 1;
-    raise exception 'o check de bytes aceitou comprimento divergente';
-  exception
-    when check_violation then null;
-    when others then null;  -- sem tenant/employee no banco de ensaio, tudo bem
-  end;
+  -- 5. O check de comprimento existe e diz o que deve dizer.
+  --    ⚠️ Afirmado pelo CATÁLOGO, e não tentando violá-lo: o `insert ... select`
+  --    que a primeira versão usava dependia de `app.tenant` e `app.employee`
+  --    terem linha. Num banco sem semente ele grava ZERO linhas, nenhum check é
+  --    violado, e a asserção acusava a constraint de ter falhado quando o que
+  --    faltava era dado. Foi o `when others then null` que escondeu isso — e o
+  --    gate de superfície mostrou que aquele handler tornava tudo aqui inerte.
+  if not exists (
+    select 1 from pg_constraint
+     where conrelid = 'app.employee_photo'::regclass
+       and conname  = 'employee_photo_bytes_check'
+       and pg_get_constraintdef(oid) ilike '%length(content)%'
+  ) then
+    raise exception 'o check de bytes não confere o comprimento real do conteúdo';
+  end if;
+
+  if not exists (
+    select 1 from pg_constraint
+     where conrelid = 'app.employee_photo'::regclass
+       and conname  = 'employee_photo_mime_check'
+  ) then
+    raise exception 'o check de mime não existe — a allowlist do banco sumiu';
+  end if;
 
   raise notice 'OK: app.employee_photo fora do PostgREST, 3 policies, sem delete.';
 end $$;

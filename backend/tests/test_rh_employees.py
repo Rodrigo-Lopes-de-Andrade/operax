@@ -15,6 +15,7 @@ etapa deixou de valer sem ninguém notar.
 
 from __future__ import annotations
 
+import hashlib
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
@@ -126,6 +127,28 @@ class FakeDB:
             # A RLS é quem decide: pessoa fora de alcance devolve vazio, e a rota
             # transforma em 404 sem revelar que ela existe noutra unidade.
             return [{"secullum_employee_id": 4242}] if self.existe else []
+        if "insert into app.employee_photo" in sql:
+            # O fake MODELA a gravação: sem isto a leitura seguinte não muda, e
+            # um teste que só confere o 200 não distingue "gravou" de "respondeu".
+            self.foto_manual = {
+                "uploaded_at": datetime(2026, 9, 4, 12, 0),
+                "uploaded_by_name": None,
+                "bytes": len(params.get("content") or b""),
+                "superseded_at": None,
+            }
+            return [
+                {
+                    "id": "00000000-0000-4000-8000-0000000000fe",
+                    "uploaded_at": self.foto_manual["uploaded_at"],
+                }
+            ]
+        if "update app.employee_photo" in sql:
+            # O carimbo de substituição. Devolve a linha para o chamador saber
+            # que carimbou, e marca no estado para o teste poder afirmar.
+            if self.foto_manual and self.foto_manual["superseded_at"] is None:
+                self.foto_manual["superseded_at"] = datetime(2026, 9, 4, 12, 0)
+                return [{"id": "00000000-0000-4000-8000-0000000000ff"}]
+            return []
         if "from app.employee_photo" in sql:
             # A foto enviada. `None` = ninguém enviou nada para esta pessoa.
             return [self.foto_manual] if self.foto_manual else []
@@ -647,6 +670,20 @@ def test_a_ficha_distingue_sem_foto_de_sem_foto_ainda(client: TestClient, issue_
     assert disponivel["state"] == "disponivel"
     assert disponivel["origin"] == "secullum"
     assert disponivel["can_upload"] is False
+    # ⛔ O conjunto EXATO de chaves. A comparação de dicionário inteiro que este
+    # teste tinha antes falhava no instante em que um campo novo aparecia — que é
+    # como um `content` ou `photo_b64` acrescentado a `HrPhoto` num PR futuro
+    # seria pego. Afirmar campo a campo vigia os campos conhecidos e é cego para
+    # o campo novo, que é justamente o pecado deste produto.
+    assert set(disponivel) == {
+        "state",
+        "origin",
+        "synced_at",
+        "uploaded_at",
+        "uploaded_by_name",
+        "superseded",
+        "can_upload",
+    }
     # A idade do rosto é dado de tela: sem a data, não há como saber que o rosto
     # é de dois anos atrás — que numa ficha de identificação é pior que nenhum.
     assert disponivel["synced_at"] is not None
@@ -666,8 +703,17 @@ def test_nenhuma_resposta_json_carrega_bytes_de_foto(client: TestClient, issue_t
     biometria com outro nome (§5).
     """
     db(pii=True)
-    for caminho in ("/rh/employees", f"/rh/employees/{ANA}"):
-        bruto = client.get(caminho, headers=auth(issue_token)).text
+    corpos = [
+        client.get(caminho, headers=auth(issue_token)).text
+        for caminho in ("/rh/employees", f"/rh/employees/{ANA}")
+    ]
+    # ⛔ A rota de UPLOAD também devolve JSON, e ficou fora desta varredura até o
+    # gate de superfície apontar. Ela é a que mais importa: é a única que já teve
+    # os bytes na mão.
+    db(foto="ausente")
+    corpos.append(_enviar(client, issue_token, JPEG_DE_MENTIRA).text)
+
+    for bruto in corpos:
         assert "data:image" not in bruto
         assert "/9j/" not in bruto  # JPEG em base64
         # ⚠️ A asserção anterior procurava `\\u00ff\\u00d8` e era INALCANÇÁVEL:
@@ -695,12 +741,35 @@ def _enviar(client: TestClient, issue_token, conteudo: bytes, nome="foto.jpg"):
 
 
 def test_o_dp_envia_foto_de_quem_a_origem_diz_nao_ter(client: TestClient, issue_token, db):
-    """O positivo: `PossuiFoto = false` é exatamente onde a imputação existe."""
-    db(foto="ausente")
+    """O positivo: `PossuiFoto = false` é exatamente onde a imputação existe.
+
+    ⛔ **Afirma a ESCRITA, não só o 200.** A versão anterior deste teste aceitava
+    `state in {"ausente", "disponivel"}` — larga o bastante para caber na resposta
+    de um upload que não gravou nada. O gate de superfície provou por mutação: um
+    `insert ... where false` mantinha a suíte inteira verde. Um positivo que passa
+    quando nada acontece é o defeito que este projeto nomeia.
+    """
+    estado = db(foto="ausente")
     r = _enviar(client, issue_token, JPEG_DE_MENTIRA)
 
     assert r.status_code == 200, r.text
-    assert r.json()["state"] in {"ausente", "disponivel"}
+    gravacoes = [
+        (sql, params)
+        for sql, params in estado.statements
+        if "insert into app.employee_photo" in sql
+    ]
+    assert len(gravacoes) == 1, "o upload respondeu 200 sem gravar a foto"
+    _, params = gravacoes[0]
+    assert params["content"] == JPEG_DE_MENTIRA
+    assert params["mime"] == "image/jpeg"
+    # sha256 dos BYTES, nunca do base64 — o contrato que o espelho também segue.
+    assert params["sha256"] == hashlib.sha256(JPEG_DE_MENTIRA).hexdigest()
+
+    # E a resposta reflete a gravação: o estado virou `disponivel` pela fonte
+    # `manual`, que é o que só acontece se a linha existir na leitura seguinte.
+    assert r.json()["state"] == "disponivel"
+    assert r.json()["origin"] == "manual"
+    assert r.json()["can_upload"] is False
 
 
 def test_nao_se_envia_foto_para_quem_a_origem_ja_tem(client: TestClient, issue_token, db):

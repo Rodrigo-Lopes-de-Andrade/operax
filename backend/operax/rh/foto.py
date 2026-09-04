@@ -225,9 +225,21 @@ async def photo_info(tenant: TenantContext, employee_id: UUID) -> PhotoInfo | No
     manual_ativa = bool(manual and manual["superseded_at"] is None)
 
     if tem_origem:
-        # A origem venceu. Se havia uma enviada e ela ainda não foi carimbada,
-        # quem carimba é o `upload`/`supersede` — aqui só se REPORTA, para que a
-        # leitura não escreva.
+        # ⚠️ A origem venceu, e é AQUI que a enviada é carimbada.
+        #
+        # Uma leitura que escreve é surpreendente, e a escolha é deliberada: este
+        # é o único ponto do produto que sabe que a transição aconteceu. O
+        # `sync-fotos` é Deno e não conhece `app.employee_photo`; não há job que
+        # reconcilie. Sem este carimbo, `superseded_at` fica NULL para sempre e a
+        # linha enviada permanece ATIVA ao lado da foto da origem — exatamente a
+        # sobreposição que a §4-ter diz não existir por construção.
+        #
+        # A escrita é idempotente (`where superseded_at is null`) e não muda o
+        # que se exibe: a origem já venceria de qualquer jeito. Ela só faz a
+        # coluna dizer a verdade que a tela já conta.
+        if manual_ativa:
+            await supersede_manual(tenant, employee_id)
+
         substituida = (
             Superseded(
                 uploaded_at=manual["uploaded_at"],
