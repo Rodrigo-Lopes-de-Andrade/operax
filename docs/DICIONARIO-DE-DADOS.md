@@ -895,6 +895,48 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.employee_photo`
+
+> Foto imputada pelo DP para quem a origem declara não ter (`"PossuiFoto" = false`). NÃO é espelho: dado nosso, criado aqui. Domínio sensível `pii`, sem grant para `authenticated` — só Caminho 2. Ver docs/DECISAO-FOTO-DO-COLABORADOR.md §4-ter.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `employee_id` | uuid | não |  | `app.employee` |  |
+| `content` | bytea | não |  |  |  |
+| `mime` | text | não |  |  |  |
+| `bytes` | integer | não |  |  |  |
+| `sha256` | text | não |  |  |  |
+| `uploaded_by` | uuid | sim |  | `auth.users` |  |
+| `uploaded_at` | timestamp with time zone | não | `now()` |  |  |
+| `superseded_at` | timestamp with time zone | sim |  |  | Quando a origem passou a ter foto. A origem vence na exibição a partir daqui, e esta linha NUNCA é apagada: a ficha mostra que houve substituição, e de quando. |
+| `superseded_reason` | text | sim |  |  |  |
+
+**Restrições**
+
+- `CHECK (((bytes = length(content)) AND (bytes > 0) AND (bytes <= ((5 * 1024) * 1024))))`
+- `CHECK ((mime = ANY (ARRAY['image/jpeg'::text, 'image/png'::text])))`
+- `CHECK ((sha256 ~ '^[0-9a-f]{64}$'::text))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `employee_photo_read` | SELECT | `(util.can_see_domain(tenant_id, 'pii'::app.sensitive_domain) AND util.can_see_employee(employee_id))` | `-` |
+| `employee_photo_supersede` | UPDATE | `(util.can_see_domain(tenant_id, 'pii'::app.sensitive_domain) AND util.is_admin(tenant_id) AND util.can_see_emp` | `-` |
+| `employee_photo_write` | INSERT | `-` | `(util.can_see_domain(tenant_id, 'pii'::app.sensitive_domain) AND util.` |
+
+<details><summary>Índices</summary>
+
+- `employee_photo_employee_idx` — `app.employee_photo USING btree (employee_id)`
+- `UNIQUE employee_photo_ativa_key` — `app.employee_photo USING btree (tenant_id, employee_id) WHERE (superseded_at IS NULL)`
+
+</details>
+
+
 ## `app.employee_pii`
 
 > Dado pessoal direto. Acesso exige util.can_see_domain(tenant, 'pii'). Nunca entra em view de dashboard.
