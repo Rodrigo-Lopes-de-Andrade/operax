@@ -89,11 +89,11 @@ even on a weekday the schedule fills in.
 from __future__ import annotations
 
 import argparse
-import asyncio
 from dataclasses import dataclass
 from datetime import date, timedelta
 from uuid import UUID
 
+from operax.core.db import run_cli
 from operax.core.tenant import Bound, active_tenants, tenant_scope
 
 TASK = "motor.jornada"
@@ -431,7 +431,7 @@ def main() -> None:
         "--dias", type=int, default=DEFAULT_WINDOW_DAYS, help="tamanho da janela (padrão 90)"
     )
     args = parser.parse_args()
-    print(relatorio(asyncio.run(run(days=args.dias))))
+    print(relatorio(run_cli(run(days=args.dias))))
 
 
 if __name__ == "__main__":

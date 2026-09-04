@@ -9,9 +9,9 @@ vazia não dá zero desvio, dá zero informação — então o entrypoint faz os
 from __future__ import annotations
 
 import argparse
-import asyncio
 import sys
 
+from operax.core.db import run_cli
 from operax.motor import cadastro, deteccao, jornada, revogacao
 
 
@@ -47,18 +47,18 @@ def main(argv: list[str] | None = None) -> int:
         # Passo zero: sem quadro no domínio, a jornada materializa zero linha e a
         # detecção acha zero desvio — que não é "está tudo certo", é "não há o
         # que comparar". Foi o estado de produção até 24/08/2026.
-        print(cadastro.relatorio(asyncio.run(cadastro.run())))
+        print(cadastro.relatorio(run_cli(cadastro.run())))
         print()
-        print(jornada.relatorio(asyncio.run(jornada.run(days=args.dias_jornada))))
+        print(jornada.relatorio(run_cli(jornada.run(days=args.dias_jornada))))
         print()
-    print(deteccao.relatorio(asyncio.run(deteccao.run(days=args.dias, mode=mode))))
+    print(deteccao.relatorio(run_cli(deteccao.run(days=args.dias, mode=mode))))
 
     # A reconciliação vem depois e na mesma passada porque é a mesma janela: o
     # detector já reescreveu o que ninguém viu, e o que sobra é o que ele não tem
     # como fazer — apagar não existe, então some quem deixou de ser detectado.
     if not args.sem_revogacao:
         print()
-        print(revogacao.relatorio(asyncio.run(revogacao.run(days=args.dias, mode=mode))))
+        print(revogacao.relatorio(run_cli(revogacao.run(days=args.dias, mode=mode))))
     return 0
 
 

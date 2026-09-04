@@ -54,10 +54,10 @@ mean two different things depending on who read it.
 from __future__ import annotations
 
 import argparse
-import asyncio
 from dataclasses import dataclass
 from uuid import UUID
 
+from operax.core.db import run_cli
 from operax.core.tenant import SystemContext, active_tenants, tenant_scope
 
 TASK = "motor.cadastro"
@@ -274,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
     argparse.ArgumentParser(
         description="Promove empresa, departamento e colaborador do espelho para o domínio."
     ).parse_args(argv)
-    print(relatorio(asyncio.run(run())))
+    print(relatorio(run_cli(run())))
     return 0
 
 

@@ -679,11 +679,59 @@ batidas (a coluna sem hora não é batida), então a regra de paridade da SPEC �
 não o pega — quem pega é `break_no_return`; e uma batida `desconsiderada` que
 contasse transformaria um dia correto em jornada excedida e par ímpar de uma vez.
 
-**O que falta para o G4 fechar:** dados reais. O gate é "falso positivo ≤5% em
-duas execuções seguidas" contra a apuração do próprio Secullum, e isso depende de
-`app.employee` estar populado em produção — que é a pendência do S3 e o assunto
-de `docs/PLANO-RECONCILIACAO-NUVEM.md`. O motor está pronto para rodar em sombra
-no dia em que houver contra o que comparar.
+~~**O que falta para o G4 fechar:** dados reais.~~ ✅ **A primeira execução de
+sombra contra PRODUÇÃO aconteceu em 04/09/2026.** `app.employee` deixou de estar
+vazio: 176 promovidos, 80 ativos. Execução `265cdef5`, janela 29/08 a 04/09.
+
+### Linha de base da sombra — 04/09/2026, produção
+
+**819 indícios em 67 colaboradores**, 80.545 min (428 excedente / 199 faltante):
+
+| Tipo | Eventos | Pessoas |
+|---|---|---|
+| `workday_exceeded` | 157 | 53 |
+| `late_exit` | 143 | 46 |
+| `break_no_return` | 115 | 63 |
+| `early_entry` | 85 | 32 |
+| `incomplete_punches` | 76 | 48 |
+| `late_entry` | 76 | 39 |
+| `no_punches` | **61** | **30** |
+| `break_too_short` | 41 | 23 |
+| `break_exceeded` | 36 | 23 |
+| `early_exit` | 26 | 14 |
+| `punch_on_day_off` | 3 | 3 |
+
+**Seis colaboradores entraram com exceção ANTES da passada**, por decisão do dono
+e **por pessoa**, com motivo em `app.audit_log` — cinco em escala
+"U-000 … (Supervisão)" e um em "Ponto por exceção". Eles produziram **zero**
+eventos, que é a prova de que `app.employee.exception_tracking` (migration 26)
+faz o que promete: sem `expected_workday`, `no_punches` não dispara.
+
+⛔ **Não se mirou por escala, e o motivo está medido:** a escala
+"U-000 … (Supervisão)" tem **7** ativos e **um deles bate ponto normalmente**.
+Mirar por escala teria excetuado quem está sendo medido de verdade — exatamente
+o que o docstring do `jornada.py` avisa sobre regex em nome de horário.
+
+⚠️ **O contaminante previsto era real e ficou contido; o volume de fundo é outro
+fenômeno.** Sobram **30 pessoas** com `no_punches` e **26 delas têm 1 ou 2
+eventos** — cara de falta comum, não de isenção de jornada. Duas destoam e são
+quase diárias: matrícula **999** (6 em 7 dias, chefia em escala comum, mantida no
+fluxo padrão até confirmação formal) e **10** (5 em 7 dias, operador de
+estacionamento — investigação de RH aberta, deliberadamente **não** excetuada).
+
+⚠️ **A janela de medição tem teto, e não é escolha de parâmetro:**
+`app.batida_marcacao` começa em **11/08/2026**, quando produção passou a receber
+o Secullum. Ampliar a detecção para 90 dias para ganhar amostra bate nos ~46 dias
+úteis anteriores, em que **ninguém** tem marcação — ~3.700 `no_punches` fantasma
+que enterrariam a medição. O teto real é 25 dias.
+
+**O que ainda falta:** o gate pede **duas** execuções seguidas com falso positivo
+≤5%, e a comparação é contra a apuração do próprio Secullum. Esta é a primeira, e
+a taxa de falso positivo **ainda não foi apurada** — contar eventos não é medir
+acerto.
+
+⚠️ **`0% com unidade`:** os 31 departamentos não têm mapeamento para `app.unit`.
+Não afeta o G4, mas o dashboard por unidade nasce vazio.
 
 ---
 

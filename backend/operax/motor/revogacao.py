@@ -31,11 +31,11 @@ SPEC §3.5b: the incremental pass looks at today; this one looks at the last wee
 from __future__ import annotations
 
 import argparse
-import asyncio
 from dataclasses import dataclass
 from datetime import date, timedelta
 from uuid import UUID
 
+from operax.core.db import run_cli
 from operax.core.tenant import SystemContext, active_tenants, tenant_scope
 from operax.motor.deteccao import BACKFILL_DAYS, ENGINE_VERSION, MODES
 from operax.motor.regras import SUPERSEDED_SQL, VANISHED_SQL
@@ -228,7 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"erro: modo {args.modo!r} — use sombra ou producao")
         return 2
 
-    print(relatorio(asyncio.run(run(days=args.dias, mode=mode))))
+    print(relatorio(run_cli(run(days=args.dias, mode=mode))))
     return 0
 
 
