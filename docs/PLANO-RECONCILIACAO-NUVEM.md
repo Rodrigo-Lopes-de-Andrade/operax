@@ -756,11 +756,33 @@ obrigatória nº 1 deste projeto não é disparada por ele. E o corpo exige
 no `ELSE`, que só escreve uma linha de log. O `EXCEPTION WHEN OTHERS THEN RAISE
 LOG` também impede que ele aborte um push.
 
-⚠️ **O que fica dito, mesmo inerte:** ele liga RLS **sem `FORCE`**, enquanto as
-nossas migrations usam FORCE nas 50. Se um dia a lista `('public')` mudar, ele
-passa a produzir proteção mais fraca que a nossa em tabela nossa — RLS sem policy
-é *deny-all*, que ao menos falha fechado. O dia em que essa lista mudar é evento
-a escalar, pela regra de propriedade abaixo.
+⛔ **CORREÇÃO de 04/09/2026 — a frase anterior aqui estava errada.** Ela dizia
+que ele liga RLS "sem FORCE, enquanto as nossas migrations usam FORCE nas 50".
+**Não usam.** Medido nos dois lados, no mesmo dia:
+
+| Schema | Tabelas | Com RLS | **Com FORCE** |
+|---|---|---|---|
+| `app` (produção) | 54 | 54 | **0** |
+| `app` (repo, baseline + 37 migrations) | 53 | 53 | **0** |
+| `secullum` (produção) | 22 | 22 | 20 |
+
+**FORCE existe só no espelho.** Em `app` não há uma tabela sequer com ele — nem
+em produção, nem no que as migrations constroem. A afirmação "50 de 50 com FORCE"
+do `RUNBOOK-JANELA-CONVERGENCIA.md` §1 não se sustenta para `app` e precisa ser
+reconferida no que ela mediu.
+
+⚠️ **O que isso significa na prática, e não é pequeno:** sem FORCE, o **dono da
+tabela não é filtrado pela RLS**. O backend conecta como `postgres`, que é o dono
+das tabelas de `app` — então **toda consulta direta por psycopg atravessa a RLS**.
+Não é regressão: é o desenho que o `CLAUDE.md` já descreve, em que o isolamento
+do Caminho 2 mora em `operax/core/tenant.py` e não no banco. Mas quem lesse "as
+migrations usam FORCE" concluiria que há uma segunda camada onde não há.
+
+📌 **Consequência para a etapa DP:** as ~10 tabelas novas em `app` nascerão sob a
+mesma condição, e duas delas são de domínio sensível. Se FORCE deve passar a
+valer para as tabelas novas — ou para `app` inteiro — é **decisão de policy de
+RLS**, que é parada obrigatória por este projeto. Não se resolve dentro de uma
+sprint.
 
 ### Propriedade: três coisas são DELAS, e não viram pendência nossa
 
