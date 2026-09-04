@@ -15,7 +15,7 @@ etapa deixou de valer sem ninguém notar.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 from uuid import UUID, uuid4
@@ -25,6 +25,7 @@ from fastapi.testclient import TestClient
 
 from operax.core.tenant import bind_tenant
 from operax.rh import employees as repo
+from operax.rh import foto as foto_mod
 from operax.rh import repository
 
 ANA = UUID("aaaa0000-0000-4000-8000-000000000001")
@@ -98,12 +99,15 @@ class FakeDB:
         compensation: bool = True,
         health: bool = True,
         existe: bool = True,
+        foto: str = "disponivel",
     ) -> None:
         self.admin = admin
         self.pii = pii
         self.compensation = compensation
         self.health = health
         self.existe = existe
+        #: 'ausente' | 'pendente' | 'disponivel' — os três estados do §6 da decisão.
+        self.foto = foto
         self.statements: list[tuple[str, dict[str, Any]]] = []
         self.audit: list[dict[str, Any]] = []
         self.pessoa = pessoa_detalhe()
@@ -112,6 +116,25 @@ class FakeDB:
         self.open_position: date | None = date(2024, 3, 1)
 
     def responder(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        # --- foto do colaborador (operax/rh/foto.py) -------------------------
+        if "e.secullum_employee_id" in sql and "from app.employee e" in sql:
+            # A RLS é quem decide: pessoa fora de alcance devolve vazio, e a rota
+            # transforma em 404 sem revelar que ela existe noutra unidade.
+            return [{"secullum_employee_id": 4242}] if self.existe else []
+        if 'from secullum."Funcionario"' in sql:
+            if self.foto == "ausente":
+                return [{"possui": False, "synced_at": None, "bytes": None}]
+            if self.foto == "pendente":
+                return [{"possui": True, "synced_at": None, "bytes": None}]
+            if "as content" in sql:
+                return [
+                    {
+                        "content": b"\xff\xd8\xff-bytes-de-mentira",
+                        "mime": "image/jpeg",
+                        "synced_at": datetime(2026, 9, 2, 20, 31),
+                    }
+                ]
+            return [{"possui": True, "synced_at": datetime(2026, 9, 2, 20, 31), "bytes": 6902}]
         if "util.is_admin" in sql:
             return [
                 {
@@ -269,7 +292,7 @@ class FakeDB:
 def db(monkeypatch: pytest.MonkeyPatch):
     def instalar(**kwargs: Any) -> FakeDB:
         estado = FakeDB(**kwargs)
-        for modulo in (repo, repository):
+        for modulo in (repo, repository, foto_mod):
             monkeypatch.setattr(
                 modulo,
                 "tenant_scope",
@@ -555,3 +578,83 @@ def test_vigencia_de_cargo_no_futuro_e_recusada(client: TestClient, issue_token,
 
     assert resposta.status_code == 422
     assert estado.escritas() == []
+
+
+# ---------------------------------------------------------------------------
+# Foto do colaborador — docs/DECISAO-FOTO-DO-COLABORADOR.md
+#
+# A forma da decisão é estreita, e cada teste abaixo guarda uma cláusula dela.
+# ---------------------------------------------------------------------------
+def test_a_foto_sai_como_imagem_e_nao_como_json(client: TestClient, issue_token, db):
+    """O positivo: quem tem `pii` recebe a imagem, com o mime da origem."""
+    db(pii=True)
+    r = client.get(f"/rh/employees/{ANA}/foto", headers=auth(issue_token))
+
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("image/")
+    assert r.content.startswith(b"\xff\xd8\xff")
+
+
+def test_sem_o_dominio_pii_a_foto_e_recusada(client: TestClient, issue_token, db):
+    """O negativo, que só vale ao lado do positivo acima."""
+    db(pii=False)
+    r = client.get(f"/rh/employees/{ANA}/foto", headers=auth(issue_token))
+    assert r.status_code == 403
+
+
+def test_pessoa_fora_de_alcance_recebe_404_e_nao_403(client: TestClient, issue_token, db):
+    """Um 403 aqui confirmaria que a pessoa existe noutra unidade."""
+    db(existe=False)
+    r = client.get(f"/rh/employees/{ANA}/foto", headers=auth(issue_token))
+    assert r.status_code == 404
+
+
+def test_a_resposta_da_foto_nao_entra_em_cache_compartilhado(client: TestClient, issue_token, db):
+    """Sem URL pública e sem link que sobreviva à sessão — §5 da decisão."""
+    db(pii=True)
+    r = client.get(f"/rh/employees/{ANA}/foto", headers=auth(issue_token))
+    assert "no-store" in r.headers["cache-control"]
+    assert "private" in r.headers["cache-control"]
+
+
+def test_a_ficha_distingue_sem_foto_de_sem_foto_ainda(client: TestClient, issue_token, db):
+    """Três estados, não dois: vazio sem explicação parece defeito (§6)."""
+    db(foto="ausente")
+    assert client.get(f"/rh/employees/{ANA}", headers=auth(issue_token)).json()["photo"] == {
+        "state": "ausente",
+        "synced_at": None,
+    }
+
+    db(foto="pendente")
+    assert client.get(f"/rh/employees/{ANA}", headers=auth(issue_token)).json()["photo"] == {
+        "state": "pendente",
+        "synced_at": None,
+    }
+
+    db(foto="disponivel")
+    disponivel = client.get(f"/rh/employees/{ANA}", headers=auth(issue_token)).json()["photo"]
+    assert disponivel["state"] == "disponivel"
+    # A idade do rosto é dado de tela: sem a data, não há como saber que o rosto
+    # é de dois anos atrás — que numa ficha de identificação é pior que nenhum.
+    assert disponivel["synced_at"] is not None
+
+
+def test_sem_o_dominio_pii_a_ficha_nao_anuncia_que_ha_foto(client: TestClient, issue_token, db):
+    """`null`, não `{"state": ...}`: a aba não existe no DOM."""
+    db(pii=False)
+    assert client.get(f"/rh/employees/{ANA}", headers=auth(issue_token)).json()["photo"] is None
+
+
+def test_nenhuma_resposta_json_carrega_bytes_de_foto(client: TestClient, issue_token, db):
+    """A varredura, não a leitura do serializer.
+
+    ⛔ Procura o conteúdo no corpo da LISTA e da FICHA — as duas superfícies em
+    que a foto nunca pode aparecer. 176 rostos numa listagem é exportação de
+    biometria com outro nome (§5).
+    """
+    db(pii=True)
+    for caminho in ("/rh/employees", f"/rh/employees/{ANA}"):
+        bruto = client.get(caminho, headers=auth(issue_token)).text
+        assert "data:image" not in bruto
+        assert "\\u00ff\\u00d8" not in bruto  # JPEG escapado em JSON
+        assert "/9j/" not in bruto  # JPEG em base64

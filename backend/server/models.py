@@ -773,6 +773,22 @@ class HrAgreement(BaseModel):
     pending_installments: int = 0
 
 
+class HrPhoto(BaseModel):
+    """Se há foto, e de quando ela é. Sem bytes, por desenho.
+
+    ⚠️ **Três estados, não dois** (§6 da decisão): um vazio sem explicação numa
+    tela de identificação parece defeito. `ausente` é a origem dizendo que não
+    há; `pendente` é a fila ainda não ter chegado nesta pessoa.
+
+    `synced_at` viaja porque **idade de rosto é dado de tela**, pela mesma
+    disciplina de idade do dado do resto do produto: rosto de dois anos numa
+    ficha de identificação é pior que rosto nenhum, e só a data revela.
+    """
+
+    state: Literal["ausente", "pendente", "disponivel"]
+    synced_at: datetime | None = None
+
+
 class HrEmployeeDetail(BaseModel):
     """Uma pessoa em abas por domínio.
 
@@ -794,6 +810,12 @@ class HrEmployeeDetail(BaseModel):
     leaves: list[HrLeave]
     movements: list[HrMovement]
     pii: HrPii | None = None
+    #: Metadado da foto — **nunca os bytes**. `null` quando o papel não alcança
+    #: `pii`, pela mesma regra dos outros blocos sensíveis: a aba não existe no
+    #: DOM em vez de aparecer vazia. A imagem sai por
+    #: `GET /rh/employees/{id}/foto`, resposta binária, nunca em JSON e nunca em
+    #: lista — ver docs/DECISAO-FOTO-DO-COLABORADOR.md §5.
+    photo: HrPhoto | None = None
     documents: list[EmployeeDocument] | None = None
     exams: list[OccupationalExamRow] | None = None
     compensation: list[CompensationBand] | None = None

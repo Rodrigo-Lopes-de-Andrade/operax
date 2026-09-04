@@ -130,6 +130,13 @@ export type HrAgreement = {
   pending_installments: number;
 };
 
+/** Três estados, não dois: vazio sem explicação parece defeito (§6 da decisão). */
+export type HrPhoto = {
+  state: "ausente" | "pendente" | "disponivel";
+  /** Idade do rosto é dado de tela, como a idade do dado no resto do produto. */
+  synced_at: string | null;
+};
+
 export type HrEmployeeDetail = {
   employee: HrIdentity;
   sync_fields: HrSyncField[];
@@ -141,6 +148,12 @@ export type HrEmployeeDetail = {
   leaves: HrLeave[];
   movements: HrMovement[];
   pii: HrPii | null;
+  /**
+   * Metadado da foto — nunca os bytes. `null` quando o papel não alcança `pii`.
+   * A imagem vem por `GET /rh/employees/{id}/foto`, uma pessoa por requisição.
+   * Ver docs/DECISAO-FOTO-DO-COLABORADOR.md §5.
+   */
+  photo: HrPhoto | null;
   documents: HrDocument[] | null;
   exams: HrExam[] | null;
   compensation: CompensationBand[] | null;

@@ -27,6 +27,7 @@ from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from operax.core.tenant import TenantContext
 from operax.rh import employees as repo
+from operax.rh import foto as foto_repo
 from operax.rh.importer import retroactive_limit
 from operax.rh.ownership import ENUMS, Domain, field
 from operax.rh.repository import check_permissions, last_closed_period_end
@@ -50,6 +51,7 @@ from server.models import (
     HrIdentity,
     HrLeave,
     HrMovement,
+    HrPhoto,
     HrPii,
     HrSyncField,
     NewCompensation,
@@ -170,6 +172,55 @@ def _row(linha: dict[str, Any]) -> HrEmployeeRow:
     )
 
 
+@router.get(
+    "/employees/{employee_id}/foto",
+    response_class=Response,
+    responses={200: {"content": {"image/jpeg": {}}, "description": "A imagem."}},
+)
+async def obter_foto(employee_id: UUID, tenant: CurrentTenant) -> Response:
+    """A foto de uma pessoa — Caminho 2, domínio `pii`, uma pessoa por vez.
+
+    Decidida em 04/09/2026 pelo dono, a pedido do cliente:
+    `docs/DECISAO-FOTO-DO-COLABORADOR.md`. O sistema que o cliente usa hoje já
+    exibe a foto na ficha para o mesmo DP — isto reproduz uma exposição que já
+    existe, não cria uma nova.
+
+    ⛔ **Uma pessoa por requisição, e nunca em lista.** Não existe rota que
+    devolva várias fotos, e o metadado da ficha não carrega bytes: 176 rostos
+    numa listagem é exportação de biometria com outro nome (§5 da decisão).
+
+    ⛔ **Sem URL pública, sem link assinado.** A resposta vive na sessão que a
+    pediu — `private, no-store` — e não há bucket, não há URL que sobreviva ao
+    logout.
+
+    404 cobre três casos de propósito: pessoa inexistente, pessoa fora do
+    alcance de quem pergunta, e pessoa sem foto. Distinguir os dois primeiros
+    confirmaria que alguém existe noutra unidade.
+    """
+    permissoes = await check_permissions(tenant)
+    if not permissoes.pii:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Seu papel não alcança o domínio de dados pessoais.",
+        )
+
+    imagem = await foto_repo.load_photo(tenant, employee_id)
+    if imagem is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Sem foto.")
+
+    return Response(
+        content=imagem.content,
+        media_type=imagem.mime,
+        headers={
+            # Nada de cache compartilhado: a foto é de uma pessoa e a resposta é
+            # de uma sessão. `no-store` também mantém a imagem fora do disco do
+            # navegador depois que a aba fecha.
+            "Cache-Control": "private, no-store",
+            "Content-Disposition": "inline",
+        },
+    )
+
+
 @router.get("/employees/{employee_id}")
 async def obter_colaborador(employee_id: UUID, tenant: CurrentTenant) -> HrEmployeeDetail:
     """Uma pessoa, com as abas que o domínio de quem pergunta alcança."""
@@ -195,6 +246,12 @@ async def obter_colaborador(employee_id: UUID, tenant: CurrentTenant) -> HrEmplo
         if permissoes.has_domain(campo.domain.value if campo.domain else None)
     ]
 
+    # A foto acompanha o domínio `pii`, como os demais blocos sensíveis: quem não
+    # alcança o domínio recebe `null` e a aba não existe no DOM. Só o METADADO
+    # viaja aqui — a imagem sai pela rota binária abaixo.
+    info = await foto_repo.photo_info(tenant, employee_id) if permissoes.pii else None
+    foto = HrPhoto(state=info.state.value, synced_at=info.synced_at) if info else None
+
     return HrEmployeeDetail(
         employee=HrIdentity(**pessoa),
         sync_fields=[_sync_field(pessoa, coluna, chave) for coluna, chave in _SYNC_BLOCK],
@@ -207,6 +264,7 @@ async def obter_colaborador(employee_id: UUID, tenant: CurrentTenant) -> HrEmplo
         leaves=[HrLeave(**linha) for linha in detalhe["leaves"]],
         movements=[HrMovement(**linha) for linha in detalhe["movements"]],
         pii=HrPii(**detalhe["pii"]) if detalhe["pii"] is not None else None,
+        photo=foto,
         documents=(
             [EmployeeDocument(**linha) for linha in detalhe["documents"]]
             if detalhe["documents"] is not None

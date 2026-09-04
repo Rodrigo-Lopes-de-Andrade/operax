@@ -43,6 +43,8 @@ function detalhe(overrides: Partial<HrEmployeeDetail> = {}): HrEmployeeDetail {
     leaves: [],
     movements: [],
     pii: null,
+    // A foto acompanha `pii`; a aba de identificação não depende dela.
+    photo: null,
     documents: null,
     exams: null,
     compensation: null,

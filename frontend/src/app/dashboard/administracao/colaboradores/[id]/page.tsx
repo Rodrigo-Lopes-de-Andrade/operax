@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { EmployeePhoto } from "@/components/rh/employee-photo";
 import { CadastroForm } from "@/components/rh/cadastro-form";
 import { ProvenanceBlock } from "@/components/rh/provenance";
 import { Timeline, type Band } from "@/components/rh/timeline";
@@ -116,6 +117,13 @@ export default async function ColaboradorRhPage({
       </Link>
 
       <Card className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
+        <div className="flex items-start gap-4">
+          <EmployeePhoto
+            employeeId={employee.employee_id}
+            name={employee.name}
+            photo={detail.photo}
+          />
+        </div>
         <div className="flex flex-col gap-1">
           <h1 className="text-ink text-xl font-extrabold">{employee.name}</h1>
           <p className="text-ink-muted text-sm">
