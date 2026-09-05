@@ -157,8 +157,8 @@ andaime que a orquestração exige e que o documento não tinha.
 
 | Sprint | Status | Slot(s) de migration | Revisores OK | Ciclos |
 |---|---|---|---|---|
-| S1 — Fundação | ⛔ **bloqueada** | `dp_work_post`, `dp_benefit_catalog` | — | 0 |
-| S2 — Domínio `banking` | ⛔ **bloqueada** | `dp_banking_domain`, `dp_banking_account` | — | 0 |
+| S1 — Fundação | **pendente** | `dp_work_post`, `dp_benefit_catalog` | — | 0 |
+| S2 — Domínio `banking` | **pendente** | `dp_banking_domain`, `dp_banking_account` | — | 0 |
 | S3 — Ciclo mensal | pendente | `dp_benefit_cycle` | — | 0 |
 | S4 — Painel e alertas | pendente | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | — | 0 |
 | S5 — Laudos e rubricas | pendente | `dp_unit_compliance`, `dp_payroll_code_map` | — | 0 |
@@ -244,10 +244,15 @@ papel sem BYPASSRLS. Aí ela deixa de ser opcional. Trocar o papel é trabalho d
 verdade — todo `tenant_scope` hoje atravessa por bypass, e passaria a depender de
 policies que assumem um JWT que ele não tem — e **não é escopo da etapa DP**.
 
-⛔ **Decisão do dono, e é uma só:** a etapa DP anda com o isolamento do Caminho 2
-declarado como sendo de código (`core/tenant.py` + revalidação de papel e domínio
-na rota), ou espera a troca do papel de conexão? A segunda é a fronteira certa e
-é um projeto próprio; a primeira é o que já vale para as 54 tabelas de hoje.
+✅ **Respondida pelo dono em 05/09/2026: a etapa anda**, com o isolamento do
+Caminho 2 **declarado** como sendo de código — `core/tenant.py` mais a
+revalidação de papel e domínio na rota. É a condição em que as 54 tabelas de hoje
+já vivem, e as ~10 novas não a pioram.
+
+📌 **A decisão está registrada em `DECISAO-FRONTEIRA-CAMINHO-2.md`**, com o que
+ela assume por escrito (§3), o item que fica no backlog (§4 — a troca do papel de
+conexão, com FORCE junto e só junto) e as três coisas que a reverteriam (§5). O
+primeiro dos três é o mais próximo: **um segundo tenant real em produção**.
 
 ### O §1d-bis não pôde ser medido por dado, e a decisão veio do dono
 
@@ -304,11 +309,14 @@ objeto que de fato existe desde a migration 05 e sustenta a mesma frase.
 | 2b | a captura enxerga flags de segurança | ✅ fechada |
 | **2a** | **FORCE em `app`** | ⚠️ **reenquadrada em 05/09 — ver §2a-bis.** Ligar FORCE é no-op medido; a pergunta real é o papel de conexão, e ela **não é escopo desta etapa** |
 
-⚠️ **S1 e S2 seguem marcadas `bloqueada` até o dono responder a §2a-bis** — mas o
-que as prende mudou de natureza. Não é mais "FORCE precisa ser ligada antes":
-medimos que ligá-la não muda nada. É a pergunta de fundo, que a §2a-bis formula:
-a etapa anda com o isolamento do Caminho 2 declarado como de código, ou espera a
-troca do papel de conexão, que é projeto próprio e fora desta etapa?
+✅ **Nenhuma condição de parada segue aberta.** A 2a foi a última, e a §2a-bis a
+fechou em 05/09 — medindo que o remédio que ela pedia era no-op, e levando a
+pergunta de fundo para `DECISAO-FRONTEIRA-CAMINHO-2.md`, onde o dono a respondeu.
+
+**S1 e S2 estão despacháveis**, em paralelo, por `/orquestrador-dp`. As paradas
+obrigatórias **dentro** das sprints continuam de pé e não foram afrouxadas por
+esta decisão: policy de RLS nova em S2, coluna nova em view pública em S4, e a
+semente de `app.benefit_type` em S1.
 
 📌 **O `orquestrador-dp` está no repositório desde 05/09**
 (`.claude/commands/orquestrador-dp.md`). A parada 1 dele — os quatro documentos —
