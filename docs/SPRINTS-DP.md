@@ -196,6 +196,59 @@ desta etapa nascem na mesma condição, e duas são de domínio sensível.
 ⛔ **Se FORCE deve passar a valer é decisão de policy de RLS — parada obrigatória
 deste projeto, e não se resolve dentro de uma sprint.**
 
+### 2a-bis — ligar FORCE seria um no-op, e isso foi medido em 05/09/2026
+
+⚠️ **A frase acima está certa e o remédio que ela sugere está errado.** É verdade
+que sem FORCE o dono não é filtrado. O que faltava medir é que **com** FORCE ele
+também não é — porque `postgres` não é só dono, é **`rolbypassrls = true`**, e
+BYPASSRLS vence FORCE.
+
+Medido no banco descartável do `db-test`, tabela em `app` com RLS ligada e policy
+`using (false)`, duas linhas gravadas:
+
+| # | Dono da tabela | FORCE | Linhas que o dono lê |
+|---|---|---|---|
+| A | `postgres` (BYPASSRLS) | off | **2** |
+| B | `postgres` (BYPASSRLS) | **ON** | **2** |
+| C | papel sem BYPASSRLS | **ON** | **0** |
+| D | papel sem BYPASSRLS | off | **2** |
+
+**C contra D prova que FORCE não está quebrada** — ela faz exatamente o que a
+documentação diz. **A contra B prova que ela não alcança este backend.** Em
+produção e no repositório, as 54 tabelas de `app` são de `postgres`, e o
+`DATABASE_URL` do backend é `postgresql://postgres@…`.
+
+**Três consequências, e a terceira é a que muda o plano.**
+
+1. **Ligar FORCE em `app` não fecharia exposição nenhuma.** Fecharia a auditoria
+   com um verde falso, que é pior que o vermelho honesto: a pergunta sairia da
+   lista sem ter sido respondida.
+2. **O Caminho 1 nunca dependeu disso.** `authenticated` e `anon` não têm
+   BYPASSRLS e não são donos — a RLS os filtra hoje, com ou sem FORCE, e é o que
+   os scripts `98` e `99` provam a cada `db-test`.
+3. ⛔ **Então a condição 2a, como escrita, NÃO bloqueia S1 e S2.** As ~10 tabelas
+   novas nasceriam na condição em que as 54 existentes já vivem — que é a
+   condição em que o produto já está no ar. Bloquear a etapa por ela seria exigir
+   das tabelas novas uma garantia que nenhuma tabela do produto tem, e que ligar
+   FORCE não daria.
+
+📌 **A pergunta real não é FORCE — é o papel de conexão**, e o próprio código já a
+tinha nomeado antes desta medição. O docstring de `backend/operax/core/tenant.py`
+diz, sobre o lint sintático de `bind_tenant`: *"leia como lint barato na saída,
+não como a fronteira de segurança. A fronteira é um papel não-superusuário com
+RLS ligada e o tenant setado por transação; isso é decisão de policy e grant,
+pendente fora deste módulo."*
+
+**FORCE só passa a significar alguma coisa depois** de o backend conectar como um
+papel sem BYPASSRLS. Aí ela deixa de ser opcional. Trocar o papel é trabalho de
+verdade — todo `tenant_scope` hoje atravessa por bypass, e passaria a depender de
+policies que assumem um JWT que ele não tem — e **não é escopo da etapa DP**.
+
+⛔ **Decisão do dono, e é uma só:** a etapa DP anda com o isolamento do Caminho 2
+declarado como sendo de código (`core/tenant.py` + revalidação de papel e domínio
+na rota), ou espera a troca do papel de conexão? A segunda é a fronteira certa e
+é um projeto próprio; a primeira é o que já vale para as 54 tabelas de hoje.
+
 ### O §1d-bis não pôde ser medido por dado, e a decisão veio do dono
 
 `app.payroll_entry`, `payroll_event_map` e `payroll_period` têm **0 linhas em
@@ -249,11 +302,13 @@ objeto que de fato existe desde a migration 05 e sustenta a mesma frase.
 |---|---|---|
 | 1 · 3 · 4 · 5 · 6 | documentos, §1d-bis, arquivos, decisão fechada, elenco | ✅ fechadas |
 | 2b | a captura enxerga flags de segurança | ✅ fechada |
-| **2a** | **FORCE em `app`** | ⛔ **aberta — é decisão de policy de RLS, parada obrigatória do projeto** |
+| **2a** | **FORCE em `app`** | ⚠️ **reenquadrada em 05/09 — ver §2a-bis.** Ligar FORCE é no-op medido; a pergunta real é o papel de conexão, e ela **não é escopo desta etapa** |
 
-⛔ **S1 e S2 seguem bloqueadas por 2a, e só por ela.** As duas criam tabela em
-`app`, e as de S2 são de domínio sensível. Enquanto o dono não decidir se FORCE
-passa a valer, elas nascem na condição que a §2a descreve.
+⚠️ **S1 e S2 seguem marcadas `bloqueada` até o dono responder a §2a-bis** — mas o
+que as prende mudou de natureza. Não é mais "FORCE precisa ser ligada antes":
+medimos que ligá-la não muda nada. É a pergunta de fundo, que a §2a-bis formula:
+a etapa anda com o isolamento do Caminho 2 declarado como de código, ou espera a
+troca do papel de conexão, que é projeto próprio e fora desta etapa?
 
 📌 **O `orquestrador-dp` está no repositório desde 05/09**
 (`.claude/commands/orquestrador-dp.md`). A parada 1 dele — os quatro documentos —
