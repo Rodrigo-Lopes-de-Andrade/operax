@@ -1,7 +1,9 @@
 <!-- verificar-docs: inexistentes-de-proposito app.benefit_type app.employee_bank_account app.work_post public.fn_dp_panel public.fn_dp_alerts app.work_schedule_day -->
-<!-- `app.work_schedule_day` entra aqui porque este documento REPORTA que ela não
-     existe. O SPEC-DP a cita como existente e por isso segue vermelho lá — o gate
-     está certo, e silenciá-lo no SPEC seria corrigir o teste em vez do desenho. -->
+<!-- `app.work_schedule_day` continua aqui porque o Quadro REPORTA que ela não
+     existe — e agora a SPEC diz o mesmo, então a contradição entre os dois
+     documentos acabou. `app.schedule_rotation_map` SAIU desta lista: ela existe
+     (migration 25), e declarar exceção para objeto existente é mentira que o
+     verificador não pega, porque ele só suprime e nunca reclama de sobra. -->
 
 # OperaX — sprints da etapa DP
 
@@ -22,6 +24,13 @@ incalculável, e é ela que o cliente usa para reconhecer o próprio custo. Sem
 `work_post` a rotina de VT não roda. Tudo depende daqui.
 
 - Migrations `dp_work_post`, `dp_benefit_catalog`.
+- ⚠️ **`dp_work_post` NÃO cria o elo com a escala.** A premissa de que a escala
+  por dia já estava modelada com esse nome era falsa (SPEC §0). O Quadro de
+  Postos entra sozinho — `unidade + código` — e o elo posto → escala vira
+  migration própria. **Isso não é escopo do S1 e não o bloqueia.**
+  ✅ O grão foi lido em 05/09 (SPEC §0-bis): o elo é um `secullum_schedule_id`,
+  no idioma de `app.unit_secullum_map` — a migration própria tem forma conhecida,
+  e continua fora de S1.
 - Semente de `app.benefit_type` com os **9 tipos** e o `composes_base` da tabela
   da SPEC §1d — é a definição do KPI, já revisada pelo owner em 04/09. Transcreva;
   não derive.
@@ -37,10 +46,18 @@ reajuste de tarifa cria vigência nova e **não** altera a anterior. Um aumento 
 salário **muda o valor do triênio** na mesma leitura (é taxa, não montante).
 `make db-test` verde.
 
-**Linha de reconciliação declarada:** como triênios não estão na fórmula do
-legado, `OperaX − legado = total de triênios`. Diferença igual a esse total é
-aprovação; qualquer outro valor reprova. Sem essa linha escrita, o gate reprova
-por desenho e alguém "conserta" o número certo.
+**Linha de reconciliação — condicional, e a condição já foi medida.** Ela só
+vale se `seniority_bonus` estiver na semente:
+
+- **Com** triênio na semente: `OperaX − legado = total de triênios`. Diferença
+  igual a esse total é aprovação.
+- **Sem** triênio na semente (**é o caso hoje** — a medição da §1d-bis mostrou
+  que não há rubrica separada): `OperaX − legado = 0`. Qualquer diferença
+  reprova.
+
+Manter a versão "com triênio" enquanto ele está fora reprovaria o número certo,
+que é exatamente o que esta linha existe para impedir. Ela muda junto com a
+semente, sempre — nunca uma sem a outra.
 
 ## S2 — Domínio `banking`
 
@@ -152,16 +169,18 @@ transação que o adiciona, e cada migration roda em uma (SPEC §1a).
 
 ## ⛔ Por que nada foi despachado
 
-Verificação de 04/09/2026, antes do primeiro despacho.
+Verificação de 04/09/2026, antes do primeiro despacho, **revista em
+05/09/2026** — a coluna Estado é de hoje; as seções abaixo dela são o
+registro de como cada uma fechou.
 
 | # | Condição | Estado |
 |---|---|---|
-| 1 | Os quatro documentos no repositório | ⛔ **faltam `PRD-DP.md` e `ANEXO-COBERTURA-LEGADO-FASTPARK.md`** |
+| 1 | Os quatro documentos no repositório | ✅ **resolvida em 05/09** — os dois entraram |
 | 2a | FORCE em `app` | ⛔ **zero** — ver abaixo |
 | 2b | A captura enxerga flags de segurança | ✅ sim: RLS, FORCE, policies, grants e revokes |
 | 3 | Medição do §1d-bis | ✅ resolvida: `seniority_bonus` **sai da semente por ora** |
 | 4 | Arquivos e critérios preenchidos | ✅ resolvido por este quadro |
-| 5 | Sprint pedindo decisão fechada | ⚠️ **não verificável** sem o `PRD-DP.md` |
+| 5 | Sprint pedindo decisão fechada | ✅ **verificada em 05/09** — nenhuma pede |
 | 6 | Elenco confere com `/agents` | ✅ resolvido: `guardiao-de-superficie` criado em 04/09 |
 
 ### 2a — não existe FORCE em `app`, e a documentação dizia que existia
@@ -189,20 +208,56 @@ triênio na semente, `OperaX − legado` deixa de ser "o total de triênios".
 **Reescrever essa linha é pré-requisito de despachar S1** — do contrário o gate
 reprova por desenho, que é o que ela existia para evitar.
 
-### 🔴 `app.work_schedule_day` não existe
+### ✅ `app.work_schedule_day` não existe — e a pergunta que isso abria foi lida
 
-A SPEC §0 (linha 26) cita `app.work_schedule_day` com as colunas
+A SPEC §0 citava `app.work_schedule_day` com as colunas
 `entry_1 · exit_1 · entry_2 · exit_2` como algo que **já existe**, afirmando que
 "falta o elo posto → escala, não a escala". Medido: a tabela **não existe em
-produção nem no repositório**, e nenhuma tabela do banco tem essas quatro
-colunas. O que existe é `app.schedule_rotation_map`.
+produção nem no repositório**.
 
-⚠️ O `CLAUDE.md` §Convenções repete o erro, dizendo que `work_schedule_day` "já
-existia antes deste modelo".
+**Duas coisas fecharam isso, em ordem.**
 
-⛔ **S1 depende dessa premissa** (`work_post` vincula posto a escala). Se a escala
-por dia não existe no domínio, o elo não tem ponta — e isso muda o escopo de S1,
-não o resolve dentro dele.
+**1. A SPEC parou de afirmar (04/09).** A revisão que entrou em 05/09 declara a
+procedência errada — as verificações rodaram contra um snapshot de 15 migrations,
+não contra as 37 — e rebaixa a linha a questão aberta. No mesmo movimento a
+`dp_work_post` **perde o `work_schedule_id`**: o Quadro de Postos entra sozinho
+(`unidade + código`) e o elo vira migration própria. **É o que destrava S1** — a
+sprint deixa de depender da premissa falsa em vez de esperar por ela.
+
+**2. O grão foi lido (05/09).** A SPEC §0-bis registra a medição. Resumo: o
+domínio **tem** escala por dia, em três camadas, e nenhuma se chama
+`work_schedule_day` — `secullum."HorarioDia"` é a escala por dia da origem
+(`Entrada1..5`/`Saida1..5` por `DiaSemana`), `app.schedule_rotation_map` é
+curadoria de ciclo para onde a origem cala (12x36), e `app.expected_workday` é a
+materialização por `(colaborador, data)` que o `jornada.py` escreve.
+
+⚠️ **O que sobra é forma, não existência.** A escala é propriedade do horário, e
+`Funcionario.horario_id` já atribui — então o elo é um `secullum_schedule_id` no
+`app.work_post`, no idioma de `app.unit_secullum_map`. **Isso não devolve o elo
+para S1:** a `dp_work_post` continua sem ele. Deixa de ser pergunta aberta e
+passa a ser trabalho de forma conhecida, numa sprint posterior.
+
+✅ O `CLAUDE.md` §Convenções repetia o erro ("`work_schedule_day`, que já existia
+antes deste modelo"). Corrigido em 05/09 para `app.expected_workday`, que é o
+objeto que de fato existe desde a migration 05 e sustenta a mesma frase.
+
+### O que ainda impede o despacho, depois de 05/09
+
+**Uma condição, e é a que não se resolve dentro de sprint.**
+
+| # | Condição | Estado |
+|---|---|---|
+| 1 · 3 · 4 · 5 · 6 | documentos, §1d-bis, arquivos, decisão fechada, elenco | ✅ fechadas |
+| 2b | a captura enxerga flags de segurança | ✅ fechada |
+| **2a** | **FORCE em `app`** | ⛔ **aberta — é decisão de policy de RLS, parada obrigatória do projeto** |
+
+⛔ **S1 e S2 seguem bloqueadas por 2a, e só por ela.** As duas criam tabela em
+`app`, e as de S2 são de domínio sensível. Enquanto o dono não decidir se FORCE
+passa a valer, elas nascem na condição que a §2a descreve.
+
+📌 **O `orquestrador-dp` está no repositório desde 05/09**
+(`.claude/commands/orquestrador-dp.md`). A parada 1 dele — os quatro documentos —
+deixou de disparar; a parada 2 (FORCE) dispara.
 
 ## Arquivos por sprint
 
@@ -246,6 +301,7 @@ de algo fora da sua lista **reporta em vez de editar**.
 | Frontend | `nextjs-developer` |
 | Revisor de código | `code-reviewer` |
 | **Guardião de superfície** | **`guardiao-de-superficie`** — criado em 04/09 |
+| **Orquestrador** | **`/orquestrador-dp`** — versionado em 05/09 |
 
 ## A pergunta do falso verde, aplicada aos gates existentes
 

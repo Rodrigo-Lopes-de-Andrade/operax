@@ -1,4 +1,7 @@
-<!-- verificar-docs: inexistentes-de-proposito app.employee_bank_account app.work_post app.benefit_type app.benefit_plan app.transport_fare app.employee_benefit app.benefit_cycle app.benefit_entitlement app.unit_compliance_report app.payroll_code_map app.employee.hr_code public.fn_dp_panel public.fn_dp_alerts public.vw_unit_compliance -->
+<!-- verificar-docs: inexistentes-de-proposito app.employee_bank_account app.work_post app.benefit_type app.benefit_plan app.transport_fare app.employee_benefit app.benefit_cycle app.benefit_entitlement app.unit_compliance_report app.payroll_code_map app.employee.hr_code public.fn_dp_panel public.fn_dp_alerts public.vw_unit_compliance app.work_schedule_day -->
+<!-- `app.work_schedule_day` entra na lista porque a §0 e a §0-bis a CITAM para
+     dizer que ela NÃO existe — foi o nome errado que esta SPEC afirmou como
+     existente até 05/09/2026. As demais são entidades que a etapa vai criar. -->
 
 # OperaX — SPEC técnica da etapa DP
 
@@ -6,8 +9,23 @@ O **como** desta etapa. O quê e o porquê estão em `PRD-DP.md`; o levantamento
 que a originou, em `ANEXO-COBERTURA-LEGADO-FASTPARK.md`. Complementa
 `SPEC-TECNICA.md` e `SPEC-RH.md`.
 
-Tudo aqui foi conferido contra o schema real (`operax_test`, migrations
-aplicadas) antes de ser escrito. Onde diz "já existe", existe.
+⚠️ **Procedência das afirmações desta SPEC — leia antes de confiar na §0.**
+
+As verificações que originaram este documento rodaram contra um snapshot de
+**15 migrations**, não contra o repositório em andamento (37) nem contra
+produção. As duas bases divergem: `app.work_schedule_day` existe no snapshot e
+**não** existe no repositório em andamento, onde há `schedule_rotation_map`.
+
+Consequência: **toda linha da §0 que diz "já existe" precisa ser reconferida
+contra o repositório em andamento antes de virar código.** Não é uma linha
+errada — é uma base de verificação errada, e o que ela produziu de certo foi por
+coincidência de nome, não por método.
+
+O que sobreviveu a essa reconferência fica marcado ✅ nesta seção; o que não foi
+reconferido fica ⏳. Nada ⏳ entra em migration.
+
+**Em 05/09/2026 o único ⏳ desta SPEC foi lido e virou ✅** — a §0-bis registra a
+medição. Nenhuma linha da §0 segue pendente de reconferência.
 
 **Referência de migration é por nome de arquivo, nunca por ordinal** (A11 da
 auditoria). Os nomes abaixo são sufixos para `supabase migration new`.
@@ -23,9 +41,37 @@ auditoria). Os nomes abaixo são sufixos para `supabase migration new`.
 | `app.payroll_entry` | `code · description · nature · reference · amount` — a rubrica do legado, coluna a coluna |
 | `app.document` | `replaces_id` — o padrão de renovação versionada que os laudos reusam |
 | `app.unit` (`address`) + `app.company` (`cnpj`) | o pedido de cesta agrupado por unidade |
-| `app.work_schedule_day` | `entry_1 · exit_1 · entry_2 · exit_2` por dia — falta o elo posto → escala, não a escala |
+| ✅ **escala por dia** (três camadas) | **Respondido por leitura em 05/09/2026 — ver nota abaixo da tabela.** O domínio **tem** escala por dia; ela só nunca se chamou `app.work_schedule_day` |
 | `app.document_type` | `requires_expiry · expiry_alert_days · domain` — a janela do alerta é configuração |
 | `app.file_import` | `layout_version · rows_ok · rows_error · report` — a esteira de import por tipo |
+
+### 0-bis. A escala por dia — o ⏳ desta seção, lido em 05/09/2026
+
+A linha original não inventou o conceito: **errou o nome e a camada.** O que
+existe são três objetos, e confundi-los é o que produziu a afirmação falsa.
+
+| Camada | Objeto | Grão | O que é |
+|---|---|---|---|
+| Origem | `secullum."HorarioDia"` | `(horario_id, "DiaSemana")`, `DiaSemana` 0–6 | **É a escala por dia**, com `Entrada1..5`/`Saida1..5` — a forma `entry_1 · exit_1 · entry_2 · exit_2` que a linha atribuía ao domínio. Registro oficial |
+| Curadoria | `app.schedule_rotation_map` | `(tenant_id, secullum_schedule_id)` | **NÃO é escala por dia.** É âncora + comprimento de ciclo, um par entrada/saída. Existe só para o **silêncio** da origem — 12x36 e afins, que não fecham em sete dias. Linha sem `validated_at` o motor não lê |
+| Domínio | `app.expected_workday` | `(employee_id, reference_date)` | A escala por dia **materializada por pessoa**, com `day_type`, `expected_entry`, `expected_exit`, `workload_minutes` e `confidence`. É o produto das duas de cima, escrito por `jornada.py` |
+
+**O que isso responde, e o que não responde.**
+
+✅ **Responde:** o produto tem escala por dia. Ela é lida da origem, corrigida
+pela curadoria onde a origem cala, e materializada por pessoa e por data.
+
+⚠️ **A consequência para o elo posto → escala é de forma, não de existência.** A
+escala é propriedade do **horário**, não da pessoa e não do posto — o comentário
+da migration 25 diz isso com todas as letras, e `Funcionario.horario_id` já faz a
+atribuição. Então o elo, quando existir, é um `secullum_schedule_id` no
+`app.work_post` — o mesmo idioma de `app.unit_secullum_map` e
+`app.schedule_rotation_map` —, **nunca** uma FK para tabela de escala por dia,
+que no domínio é derivada e não cadastro.
+
+⛔ **Isto NÃO devolve o elo para dentro de S1.** A `dp_work_post` continua sem
+ele, como a §1c decide. O que muda é que a migration própria do elo deixa de ser
+pergunta aberta e passa a ser trabalho de forma conhecida.
 
 ## 1. Banco
 
@@ -95,7 +141,6 @@ create table if not exists app.work_post (
   unit_id   uuid not null references app.unit(id),
   code      text not null,                    -- "7703" no legado
   name      text,
-  work_schedule_id uuid,                      -- elo com a escala já modelada
   active    boolean not null default true,
   created_at timestamptz not null default now(),
   unique (tenant_id, unit_id, code)
@@ -104,6 +149,17 @@ create table if not exists app.work_post (
 
 A tela de VT do legado declara a regra: *"a escala é obtida do Quadro de Postos
 (código do posto + unidade)"*. A unicidade acima é essa frase.
+
+**O elo com a escala saiu desta migration, de propósito.** A versão anterior
+tinha `work_schedule_id`, apoiada na premissa — falsa — de que a escala por dia
+já estava modelada. Sem saber o que `app.schedule_rotation_map` guarda, uma FK
+aqui seria chute travando S1 inteiro.
+
+`app.work_post` se sustenta sozinho: o Quadro de Postos é `unidade + código`, e
+a rotina de VT precisa dele para exibir o rótulo da escala. **O elo posto →
+escala vira migration própria**, numa sprint posterior, depois que alguém ler o
+grão de `schedule_rotation_map`. Desacoplar destrava S1 sem fingir que a
+pergunta foi respondida.
 
 `app.employee_position` ganha `work_post_id uuid references app.work_post(id)` e
 `level text` (o "Nível: OPERADOR" da ficha) — aditivo, anulável.

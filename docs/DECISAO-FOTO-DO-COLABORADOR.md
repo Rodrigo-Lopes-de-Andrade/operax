@@ -273,3 +273,21 @@ ela dizer sim é que os bytes saem por `tenant_scope`. Uma consulta única com
 **404 cobre três casos de propósito:** pessoa inexistente, pessoa fora de
 alcance, e pessoa sem foto. Distinguir os dois primeiros confirmaria que alguém
 existe noutra unidade.
+
+## 8. O que reverteria esta decisão
+
+⚠️ **Restaurado em 05/09/2026.** Esta cláusula existia na versão de 04/09 e se
+perdeu quando a §7 passou a relatar o que foi construído. Decisão sem condição de
+reversão escrita é decisão que ninguém sabe desfazer — e esta tem duas condições,
+não uma, porque a §4-bis separou exibir de imputar.
+
+**Exibir.** Resposta do ADR-018 dizendo que a restrição é de base legal ou
+contratual. Nesse caso a foto volta a não sair do espelho, e o cliente é
+informado de que a ferramenta antiga fazia algo que o contrato dele não permite —
+o que é, por si só, informação que ele precisa ter.
+
+**Imputar.** A pergunta da §4-bis — base legal para a EURECA **guardar**
+biometria inserida pelo cliente, em vez de espelhar a que a origem já tinha —
+segue aberta de fato. Um parecer negativo aqui derruba só o caminho de gravação
+(migration 36 e a rota de upload), e não a exibição: são 4 pessoas contra 76, e é
+essa proporção que torna a separação barata.
