@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.benefit_type app.employee_bank_account app.work_post public.fn_dp_panel public.fn_dp_alerts app.work_schedule_day -->
+<!-- verificar-docs: inexistentes-de-proposito app.benefit_type app.employee_bank_account app.work_post public.fn_dp_panel public.fn_dp_alerts app.work_schedule_day app.messaging_identity -->
 <!-- `app.work_schedule_day` continua aqui porque o Quadro REPORTA que ela não
      existe — e agora a SPEC diz o mesmo, então a contradição entre os dois
      documentos acabou. `app.schedule_rotation_map` SAIU desta lista: ela existe
@@ -105,6 +105,23 @@ mora o erro que tira dinheiro de alguém. Ciclo gerado recusa `update`.
 - `dp_panel_views`: `public.fn_dp_panel`, `public.fn_dp_alerts`.
 - Os dois templates de mensagem sob a regra 11 — `birthday_greeting` e
   `cnh_renewal_request` — com `util.validate_alert_template` cobrindo os dois.
+
+🔴 **S4 não tem para quem mandar esses dois templates, e isso não é escopo dele.**
+Registrado em 05/09/2026, vindo da etapa de canais, e **medido aqui antes de ser
+escrito**: `app.contact` tem `name · whatsapp · email · type` e
+**nenhum elo com `app.employee`** — `type` só aceita `person`, `whatsapp_group` e
+`email_list`, e `app.unit_responsible` liga contato a unidade, não a colaborador.
+
+Os dois templates são endereçados ao **colaborador** (aniversário dele, CNH
+dele). A etapa de canais resolve o destino de **Telegram** (`app.messaging_identity`,
+com titular `contact_id` XOR `employee_id`); a rota de **WhatsApp para
+colaborador continua sem modelo de destinatário**.
+
+⛔ **Isto precisa de decisão antes de S4 começar**, e as opções não são
+equivalentes: estender `app.contact` com elo opcional para colaborador, ou usar o
+`app.messaging_identity` da etapa de canais como modelo único de endereço. A
+segunda acopla S4 ao C3. Sem escolher, S4 entrega dois templates que não têm
+destinatário — e o sintoma é uma fila que nunca sai.
 
 ⛔ **Parada obrigatória antes de aplicar:** coluna nova em view pública.
 
