@@ -31,19 +31,26 @@ incalculável, e é ela que o cliente usa para reconhecer o próprio custo. Sem
   ✅ O grão foi lido em 05/09 (SPEC §0-bis): o elo é um `secullum_schedule_id`,
   no idioma de `app.unit_secullum_map` — a migration própria tem forma conhecida,
   e continua fora de S1.
-- Semente de `app.benefit_type` com os **9 tipos** e o `composes_base` da tabela
-  da SPEC §1d — é a definição do KPI, já revisada pelo owner em 04/09. Transcreva;
-  não derive.
-- ⛔ **Antes de semear:** a medição da SPEC §1d-bis (existe rubrica de triênio
-  separada do salário?). Se não existir, `seniority_bonus` sai da semente — o
-  triênio já está no salário e somá-lo conta duas vezes.
+- Semente de `app.benefit_type` com **8 tipos** e o `composes_base` da tabela da
+  SPEC §1d — é a definição do KPI. Transcreva; não derive.
+- ⛔ **São OITO, e o nono é nomeado:** `seniority_bonus` **não entra**. A medição
+  da §1d-bis não teve resposta empírica (`app.payroll_entry` com zero linhas), e o
+  owner decidiu em 04/09, reconfirmando em 05/09 no despacho: o triênio fica fora
+  até haver folha importada. Somá-lo enquanto talvez já esteja no salário conta
+  duas vezes e corrompe o KPI sem sintoma.
+- ⚠️ **As colunas do triênio ficam** — `benefit_type.calculation` e
+  `employee_benefit.rate`/`quantity`. Saiu o tipo da semente, não o mecanismo.
 - `app.employee_position` ganha `work_post_id` e `level`.
 - Backend: `/dp/postos` e `/dp/beneficios/catalogo` + reajuste por vigência.
 
-**Gate:** o teste da folha base passa — salário + ajuda + cargo de confiança +
-periculosidade + triênios entram, VR fica fora — sobre fixture sintética. Um
-reajuste de tarifa cria vigência nova e **não** altera a anterior. Um aumento de
-salário **muda o valor do triênio** na mesma leitura (é taxa, não montante).
+**Gate:** o teste da folha base passa — salário + ajuda de custo + cargo de
+confiança + periculosidade entram, VR fica fora — sobre fixture sintética. Um
+reajuste de tarifa cria vigência nova e **não** altera a anterior.
+
+⚠️ **O caso do triênio continua no gate, e vem da fixture, não da semente.** O
+teste cria um tipo `salary_rate` sintético e prova que um aumento de salário
+**muda o valor dele na mesma leitura** — é taxa, não montante. O mecanismo é
+testado sem que o tipo exista em produção, que é exatamente o desenho.
 `make db-test` verde.
 
 **Linha de reconciliação — condicional, e a condição já foi medida.** Ela só
@@ -157,8 +164,8 @@ andaime que a orquestração exige e que o documento não tinha.
 
 | Sprint | Status | Slot(s) de migration | Revisores OK | Ciclos |
 |---|---|---|---|---|
-| S1 — Fundação | **pendente** | `dp_work_post`, `dp_benefit_catalog` | — | 0 |
-| S2 — Domínio `banking` | **pendente** | `dp_banking_domain`, `dp_banking_account` | — | 0 |
+| S1 — Fundação | ⛔ **retida no ⛔ da semente** | `dp_work_post`, `dp_benefit_catalog` | — | 0 |
+| S2 — Domínio `banking` | 🚧 **em execução** (desde 05/09) | `dp_banking_domain`, `dp_banking_account` | — | 0 |
 | S3 — Ciclo mensal | pendente | `dp_benefit_cycle` | — | 0 |
 | S4 — Painel e alertas | pendente | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | — | 0 |
 | S5 — Laudos e rubricas | pendente | `dp_unit_compliance`, `dp_payroll_code_map` | — | 0 |
@@ -321,6 +328,56 @@ semente de `app.benefit_type` em S1.
 📌 **O `orquestrador-dp` está no repositório desde 05/09**
 (`.claude/commands/orquestrador-dp.md`). A parada 1 dele — os quatro documentos —
 deixou de disparar; a parada 2 (FORCE) dispara.
+
+## Despacho de 05/09/2026 — as cinco paradas, conferidas antes
+
+| # | Condição | Conferida como |
+|---|---|---|
+| 1 | os quatro documentos | ✅ os quatro estão versionados desde `bd85089` |
+| 2 · FORCE | ✅ fechada por medição e decisão — §2a-bis e `DECISAO-FRONTEIRA-CAMINHO-2.md` |
+| 2 · Captura | ✅ **conferida no código, não na tabela**: `capturar_producao.py` delega a `scripts/introspeccao_nuvem.py`, que captura `relrowsecurity`, `relforcerowsecurity`, `pg_policy`, ACLs de tabela, schema, função e `pg_default_acl`. Ela **não** é cega às flags de segurança |
+| 3 | §1d-bis | ✅ decidida pelo dono em 04/09 — e é ela que retém S1, ver abaixo |
+| 4 | arquivos e critérios | ✅ preenchidos |
+| 5 | decisão fechada | ✅ nenhuma sprint pede |
+| — | elenco contra `/agents` | ✅ `fastapi-developer`, `nextjs-developer`, `code-reviewer`, `guardiao-de-superficie` existem |
+
+**Despachada: S2**, para `fastapi-developer`. Slot `dp_banking_domain` +
+`dp_banking_account`, arquivos separados.
+
+**S1 não saiu na mesma leva, por dois motivos — e o segundo revoga a
+paralelismo do plano nesta máquina.**
+
+**1. O ⛔ da semente, resolvido.** A SPEC §1d listava **nove** tipos com
+`seniority_bonus` entre eles, contra a decisão do dono de 04/09 que o tira. A
+regra do despachante é explícita — *"transcreva; não derive; parecendo errada,
+pare e pergunte"* — então subiu. ✅ **Respondido em 05/09: são oito.** As colunas
+do triênio (`calculation`, `rate`, `quantity`) **ficam**; saiu o tipo da semente,
+não o mecanismo. SPEC §1d e o corpo de S1 corrigidos, e o gate agora exercita
+`salary_rate` por fixture sintética.
+
+**2. ⛔ A suíte de banco é recurso compartilhado e não reentrante.**
+`scripts/testar_migrations.sh` começa com
+`drop database if exists operax_test; create database operax_test`, contra o
+**mesmo** container local. Dois agentes rodando o portão ao mesmo tempo derrubam
+o banco um do outro no meio da corrida — e o sintoma é falha aleatória que parece
+defeito de código.
+
+O plano previu colisão de **slot de migration** e resolveu com um arquivo por
+slot. Não previu colisão de **fonte** (`routers/dp.py` e `models.py`, que S1 e S2
+criariam as duas) nem de **portão**. A de fonte se resolveria com worktree; a de
+portão não se resolve com worktree nenhum, porque o banco é um só.
+
+📌 **Consequência declarada: nesta máquina, S1 e S2 são sequenciais**, e o
+"paralelismo real" do despachante vale para agentes com banco próprio. S1 é
+despachada quando S2 reportar. Não é reordenação do plano — a ordem
+S1‖S2 → S3 → S4 continua de pé; o que mudou é que a onda 1 executa em série.
+
+⚠️ **Ajuste de `Arquivos` no despacho, declarado:** S2 recebeu também
+`backend/server/models.py`, `backend/server/routers/__init__.py` e
+`backend/server/main.py` — sem os três a rota nasce sem schema e sem registro. É
+seguro porque S1 não está correndo em paralelo; com as duas juntas,
+`routers/dp.py` e `models.py` seriam colisão de arquivo, não de slot de
+migration. **O plano não previa colisão de fonte, só de migration.**
 
 ## Arquivos por sprint
 

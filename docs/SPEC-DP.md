@@ -189,14 +189,28 @@ Semente que reproduz o legado, e que é a definição do KPI:
 | `cost_allowance` | **true** | "Ajuda de custo — compõe a folha base" |
 | `trust_position` | **true** | card "Cargo confiança + periculosidade — compõe" |
 | `hazard_pay` | **true** | mesmo card — **separado de propósito** (owner, 04/09) |
-| `seniority_bonus` | **true** | triênios — **decisão do owner (04/09); não está na fórmula do legado**, ver §1d-bis |
+| ~~`seniority_bonus`~~ | — | ⛔ **FORA DA SEMENTE** (owner, 04/09, reconfirmado em 05/09). Entraria como `true`; não entra porque a §1d-bis não pôde ser medida. Ver abaixo |
 | `meal_voucher` | **false** | "VR — fora da folha base de remuneração" |
 | `food_basket` | false | cesta |
 | `transport_voucher` | false | VT |
 | `health_plan` | false | plano de saúde |
 | `dental_plan` | false | plano odontológico |
 
-Nove tipos. `trust_position` e `hazard_pay` ficam **separados** por decisão do owner,
+**Oito tipos entram; o nono não.** ⛔ `seniority_bonus` fica **fora da semente**
+por decisão do owner (04/09/2026, reconfirmada em 05/09 no despacho de S1): a
+medição da §1d-bis não tem resposta empírica — `app.payroll_entry` tem zero
+linhas em produção — e semear um triênio que talvez já esteja embutido no salário
+**conta duas vezes** e corrompe o KPI sem sintoma. A linha da tabela acima fica
+registrada, riscada, para que o dia em que houver folha importada encontre a
+decisão e não a redescubra.
+
+⚠️ **As colunas do triênio PERMANECEM** — `benefit_type.calculation` e
+`employee_benefit.rate`/`quantity`. O que saiu foi o **tipo na semente**, não o
+mecanismo: o gate de S1 exercita `salary_rate` sobre fixture sintética, que cria
+o tipo dentro do teste. Tirar as colunas obrigaria migration nova quando o
+triênio voltar, e foi decisão explícita do owner mantê-las (05/09).
+
+`trust_position` e `hazard_pay` ficam **separados** por decisão do owner,
 embora o legado os mostre num card só: a soma é idêntica e a distinção se
 perde para sempre se nascer fundida. Consequência para o gate do S1: comparar
 `trust_position + hazard_pay` contra o card único deles — diferença ali é de
