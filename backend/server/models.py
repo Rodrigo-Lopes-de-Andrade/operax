@@ -876,6 +876,49 @@ class NewPosition(BaseModel):
     unit_id: UUID | None = None
 
 
+class BankAccountPatch(BaseModel):
+    """A conta bancária que o formulário grava — inteira, e nunca em pedaços.
+
+    Não há campo opcional aqui de propósito, apesar do verbo ser `PATCH`: meia
+    conta gravada é uma remessa que paga a pessoa errada. Ou o formulário manda a
+    conta que vale, ou não manda nada.
+
+    `account_type` repete a lista do `check` de `app.employee_bank_account`
+    porque um `Literal` não se lê de tabela — e é a única cópia: o banco continua
+    sendo quem recusa por último.
+    """
+
+    # `str_strip_whitespace` antes do `min_length`: sem ele um campo com um
+    # espaço passa na validação e vira um número de conta que é um espaço.
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    bank_code: str = Field(min_length=1, max_length=10)
+    branch: str = Field(min_length=1, max_length=20)
+    account: str = Field(min_length=1, max_length=30)
+    account_type: Literal["checking", "savings", "salary", "payment"] = "checking"
+    #: CPF/CNPJ do titular quando a conta não é do colaborador.
+    holder_document: str | None = Field(default=None, max_length=20)
+
+
+class BankAccountMasked(BaseModel):
+    """A conta como ela sai da API — e não existe forma de ela sair inteira.
+
+    Regra 10 do `PRD-DP.md`: o número completo nunca chega ao navegador, nem para
+    exibir. Não há campo `account` neste schema, e é isso que faz a regra valer
+    mesmo numa rota escrita por quem nunca leu o PRD. Quem monta a remessa lê o
+    número em `operax/dp/banking.py` e escreve em bytes.
+    """
+
+    employee_id: UUID
+    bank_code: str
+    branch: str
+    #: `•••• 8723`. A cauda basta para o DP conferir; o resto não é da tela.
+    account_masked: str
+    account_type: str
+    holder_document: str | None = None
+    updated_at: datetime
+
+
 class AssistantQuestion(BaseModel):
     """A pergunta que entra no assistente.
 

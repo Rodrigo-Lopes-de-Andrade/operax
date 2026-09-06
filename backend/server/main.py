@@ -20,6 +20,7 @@ from server.models import HealthResponse, Identity
 from server.routers import (
     assistente,
     curadoria,
+    dp,
     employees,
     folha,
     justificativas,
@@ -55,6 +56,7 @@ app.add_middleware(
 
 app.include_router(assistente.router)
 app.include_router(curadoria.router)
+app.include_router(dp.router)
 app.include_router(employees.router)
 app.include_router(folha.router)
 app.include_router(justificativas.router)

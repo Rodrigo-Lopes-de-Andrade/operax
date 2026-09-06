@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.benefit_type app.employee_bank_account app.work_post public.fn_dp_panel public.fn_dp_alerts app.work_schedule_day app.messaging_identity -->
+<!-- verificar-docs: inexistentes-de-proposito app.benefit_type app.work_post public.fn_dp_panel public.fn_dp_alerts app.work_schedule_day app.messaging_identity -->
 <!-- `app.work_schedule_day` continua aqui porque o Quadro REPORTA que ela não
      existe — e agora a SPEC diz o mesmo, então a contradição entre os dois
      documentos acabou. `app.schedule_rotation_map` SAIU desta lista: ela existe
@@ -182,7 +182,7 @@ andaime que a orquestração exige e que o documento não tinha.
 | Sprint | Status | Slot(s) de migration | Revisores OK | Ciclos |
 |---|---|---|---|---|
 | S1 — Fundação | ⛔ **retida no ⛔ da semente** | `dp_work_post`, `dp_benefit_catalog` | — | 0 |
-| S2 — Domínio `banking` | 🚧 **em execução** (desde 05/09) | `dp_banking_domain`, `dp_banking_account` | — | 0 |
+| S2 — Domínio `banking` | ✅ **aprovada** (05/09) | `dp_banking_domain`, `dp_banking_account` | guardião ✅ · revisor ✅ | 1 |
 | S3 — Ciclo mensal | pendente | `dp_benefit_cycle` | — | 0 |
 | S4 — Painel e alertas | pendente | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | — | 0 |
 | S5 — Laudos e rubricas | pendente | `dp_unit_compliance`, `dp_payroll_code_map` | — | 0 |
@@ -395,6 +395,153 @@ S1‖S2 → S3 → S4 continua de pé; o que mudou é que a onda 1 executa em s�
 seguro porque S1 não está correndo em paralelo; com as duas juntas,
 `routers/dp.py` e `models.py` seriam colisão de arquivo, não de slot de
 migration. **O plano não previa colisão de fonte, só de migration.**
+
+## 🔴 S2, ciclo 1 — a SPEC §1b afirma algo falso, e a Regra 0 se aplica
+
+O revisor reprovou, e o motivo não é a sprint: **é a SPEC.** A §1b manda exigir
+`can_see_domain` **e** `can_see_employee` — *"os dois eixos, como toda tabela
+sensível do projeto"*. A sprint transcreveu isso, declarou a assimetria que
+percebeu, e parou antes de aplicar. O processo funcionou.
+
+**A segunda metade da frase é falsa, e se falsifica lendo o repositório:**
+
+| Policy de escrita | Predicados |
+|---|---|
+| `pii_write` (04) | `can_see_domain('pii')` **+ `util.is_admin`** |
+| `remuneracao_write` (04) | `can_see_domain('compensation')` **+ `util.is_admin`** |
+| acordos (08) | `can_see_domain('compensation')` **+ `util.is_admin`** |
+| `employee_photo_write` (36) | `can_see_domain('pii')` **+ `util.is_admin`** + `can_see_employee` |
+| `employee_bank_account_write` (nova) | `can_see_domain('banking')` + `can_see_employee` — **sem `is_admin`** |
+
+**Não existe uma única policy de escrita de domínio sensível neste repositório
+sem `util.is_admin`.** Os dois eixos são o padrão de *leitura*; escrita sempre
+carrega o terceiro. E a `36_employee_photo` — que a própria migration nova cita
+como seu modelo — é justamente a que usa os três.
+
+### O efeito é concreto, e medido
+
+`util.is_admin` é `role in ('owner','hr','personnel')` — conferido no catálogo, não
+na documentação. A semente concede `banking` a `owner`, `personnel` e
+**`accounting`**. Então:
+
+⛔ **`accounting` grava conta bancária.** Em toda outra tabela sensível ele lê e
+não escreve.
+
+⛔ **E a matriz é editável por `UPDATE`**, sem deploy (02, *"changes by UPDATE, not
+migration"*). Conceder `banking` a `unit_supervisor` é uma linha de dado — e passa
+a dar a ele **escrita** de conta bancária dos colaboradores da unidade dele.
+Conceder `pii` ou `compensation` ao mesmo supervisor não dá escrita de nada.
+
+Conta bancária é o campo que **redireciona pagamento**. É a operação de fraude
+mais barata do produto, e ela ficou disponível para o papel que o resto do modelo
+mantém em leitura.
+
+📌 **Regra 0:** a premissa escrita na SPEC caiu ao ser conferida. Autorização
+revogada automaticamente — nada se aplica antes de o dono decidir entre acrescentar
+o terceiro eixo ou registrar por escrito que `accounting` escreve conta.
+
+## 🔴🔴 Escrita mais frouxa que leitura, em DUAS tabelas já aplicadas
+
+**Não é da etapa DP.** Achado de passagem pelo revisor na S2, e **conferido no
+catálogo por quem orquestra** antes de escalar — porque a primeira versão do
+achado estava errada e a segunda não.
+
+| Tabela | Policy de **leitura** | Policy de **escrita** |
+|---|---|---|
+| `app.disciplinary_event` (migration **32**, aplicada) | `can_see_domain('disciplinary')` **+ `can_see_employee`** | **só `can_see_domain`** |
+| `app.occupational_exam` (migration **08**, aplicada) | `can_see_domain('health')` **+ `can_see_employee`** | **só `can_see_domain`** |
+
+Nos dois casos o `using` e o `with check` são idênticos entre si — o defeito não é
+assimetria interna da policy, é a **escrita pedir menos que a leitura da própria
+tabela**.
+
+⛔ **Impacto:** quem tem o domínio pode **inserir** um registro contra qualquer
+colaborador do tenant, **inclusive gente que não pode nem ler** — e um `update`
+sem `where` alcança todas as linhas do tenant. É adulteração e fabricação dentro
+do tenant, não vazamento de leitura. Numa tabela cujo conteúdo é advertência com
+texto livre sobre uma pessoa, e noutra que guarda aptidão ocupacional.
+
+⚠️ **Dois agravantes:**
+
+1. **`app.disciplinary_event` tem `grant select, insert, update to authenticated`**
+   (32, linha 73) — ou seja, é alcançável pelo **Caminho 1**. O que separa o
+   navegador dela hoje é a configuração de *exposed schemas*, que é exatamente a
+   que já regrediu em produção em 27/08/2026.
+2. A **32 copiou o padrão da 08**, então são duas tabelas e não um deslize
+   isolado. Qualquer tabela sensível futura que copie qualquer uma das duas
+   herda o buraco.
+
+📌 **Correção exige migration nova** — as duas estão aplicadas, e migration
+aplicada não se edita. **Fora do escopo de S2 e de toda a etapa DP**; entra como
+item próprio, e é o de maior severidade aberto hoje.
+
+## 🔴 A guarda do `99` é nominal, e a asserção que a torna estrutural já tem forma
+
+Item próprio, **fora de S2**, medido duas vezes pelo guardião (05/09/2026).
+
+Concedendo `select` a `authenticated` numa tabela de `app`, o
+`scripts/99_verificacao_rls.sql` **sai com exit 0**. Quem pega são duas asserções
+**escritas à mão para aquela tabela** — uma no bloco `do $$` da migration e uma no
+`98`. Nenhuma das duas existe para a tabela que alguém criar amanhã.
+
+A causa é localizável: o **check 4** do `99` faz exatamente o laço certo — grant a
+`authenticated`, verbo a verbo — mas **só para `secullum`**. `app` não tem
+equivalente.
+
+📌 **A forma da correção, e o detalhe que decide se ela funciona:**
+
+> Um **inventário default-deny** de grants de `app` para `authenticated` no `99`:
+> o mesmo laço do check 4, trocando o schema, falhando em qualquer um dos quatro
+> verbos para toda tabela de `app` que não esteja numa allowlist.
+>
+> ⛔ **E a allowlist tem de ser DERIVADA, não escrita:** "a tabela é base de alguma
+> view de `public`", via `pg_depend`. É só isso que legitima o grant no Caminho 1.
+> Lista à mão volta a ser nominal, e o próximo `employee_bank_account` entra nela
+> por engano.
+
+Isso fecha o buraco para **toda tabela futura** em vez de para a tabela que alguém
+lembrou de nomear — e é a diferença entre a etapa DP criar dez tabelas protegidas
+e criar dez tabelas que dependem de dez pessoas terem lembrado.
+
+### ⚠️ E um buraco menor no mesmo gate
+
+`!!! ensaio dos ciclos de sincronização NÃO RODOU` — falta `ENSAIO_DATABASE_URL`,
+e **o script avisa e sai 0 assim mesmo**. Não toca `banking` e não bloqueou nada
+hoje, mas um passo que não roda e não reprova é um passo que ninguém vai notar
+faltando. Vale decidir se ele deve falhar alto ou sair do gate.
+
+## O falso verde deixou de ser hipótese em 05/09/2026
+
+O despachante manda perguntar, antes de aceitar critérios: *que implementação
+errada passa em todos estes?* Na S2 a pergunta foi **respondida por execução**, e
+o resultado justifica a regra melhor do que qualquer argumento.
+
+O guardião mutou a semente para dar o domínio `banking` ao `hr` — exatamente o
+erro que o gate existe para pegar. **A asserção literal do gate,
+*"`hr` recebe `permission denied`"*, continuou VERDE.** Quem pegou foram as
+asserções positivas.
+
+O motivo é estrutural e vale para toda tabela sensível deste produto: a tabela
+não concede nada a `authenticated`, então `select` é `permission denied` para
+**todo mundo** — inclusive para quem tem o domínio. O negativo mede a ausência de
+grant, não a policy. Sem o par positivo, o conjunto ficaria verde num banco onde
+ninguém lê nada, que é a definição do defeito.
+
+📌 **Consequência para as sprints seguintes:** todo gate desta etapa que disser
+"papel X é barrado" precisa do "e o papel Y passa" ao lado, e o positivo tem de
+ser avaliado **contra a policy real** (o `pg_temp.policy_says` do `98` lê a `qual`
+de `pg_policies` na sessão do usuário), nunca contra uma cópia da regra no teste.
+
+### 🔴 Uma guarda permanente tem buraco, e não é desta sprint
+
+Medido pelo guardião: com `grant select` para `authenticated` de pé numa tabela
+de `app`, **`scripts/99_verificacao_rls.sql` sai com exit 0**. Quem pegou foi o
+`98`, e pegou porque **nomeia esta tabela**.
+
+Ou seja: a proteção não é estrutural, é nominal. **A próxima tabela sensível de
+`app` não herda a guarda** — ela precisa que alguém lembre de escrever a
+asserção. Fora do escopo de S2; entra como item próprio, porque é o tipo de
+buraco que só aparece quando já vazou.
 
 ## Arquivos por sprint
 

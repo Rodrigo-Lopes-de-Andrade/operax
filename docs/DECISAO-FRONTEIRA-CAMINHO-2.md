@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.employee_bank_account -->
+<!-- verificar-docs: inexistentes-de-proposito -->
 <!-- `app.employee_bank_account` é entidade que a etapa DP vai criar (S2). -->
 
 # OperaX — decisão: a fronteira de isolamento do Caminho 2

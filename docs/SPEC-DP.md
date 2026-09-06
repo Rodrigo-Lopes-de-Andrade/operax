@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.employee_bank_account app.work_post app.benefit_type app.benefit_plan app.transport_fare app.employee_benefit app.benefit_cycle app.benefit_entitlement app.unit_compliance_report app.payroll_code_map app.employee.hr_code public.fn_dp_panel public.fn_dp_alerts public.vw_unit_compliance app.work_schedule_day -->
+<!-- verificar-docs: inexistentes-de-proposito app.work_post app.benefit_type app.benefit_plan app.transport_fare app.employee_benefit app.benefit_cycle app.benefit_entitlement app.unit_compliance_report app.payroll_code_map app.employee.hr_code public.fn_dp_panel public.fn_dp_alerts public.vw_unit_compliance app.work_schedule_day -->
 <!-- `app.work_schedule_day` entra na lista porque a §0 e a §0-bis a CITAM para
      dizer que ela NÃO existe — foi o nome errado que esta SPEC afirmou como
      existente até 05/09/2026. As demais são entidades que a etapa vai criar. -->
@@ -110,10 +110,45 @@ create table if not exists app.employee_bank_account (
 );
 ```
 
-RLS: leitura e escrita só com `util.can_see_domain(tenant_id, 'banking')` **e**
-`util.can_see_employee(employee_id)` — os dois eixos, como toda tabela sensível
-do projeto. Sem grant para `authenticated`: esta tabela nunca é lida pelo
-PostgREST, só pelo FastAPI (caminho 2).
+**Leitura: dois eixos.** `util.can_see_domain(tenant_id, 'banking')` **e**
+`util.can_see_employee(employee_id)`.
+
+⛔ **Escrita: TRÊS eixos** — os dois acima **mais `util.is_admin(tenant_id)`**, e a
+rota do Caminho 2 repete os três.
+
+⚠️ **Correção de 05/09/2026, e ela nasceu de uma afirmação falsa desta SPEC.** Este
+parágrafo dizia *"leitura e escrita só com os dois eixos, como toda tabela sensível
+do projeto"*. A segunda metade é falsa e se falsifica lendo o repositório:
+`pii_write`, `remuneracao_write`, as de acordos (08) e `employee_photo_write` (36 —
+a que este desenho cita como modelo) **todas** carregam `util.is_admin` na escrita.
+Os dois eixos são o padrão de **leitura**; escrita sempre teve o terceiro.
+
+O efeito da omissão foi medido, não suposto: `util.is_admin` é
+`role in ('owner','hr','personnel')` e a semente abaixo dá `banking` a
+`owner`, `personnel` e **`accounting`** — que então **gravaria** conta bancária,
+sendo o único papel do produto que escreve dado sensível sem ser admin. E como a
+matriz é editável por `UPDATE` sem deploy, conceder `banking` a um
+`unit_supervisor` passaria a dar a ele escrita de conta dos colaboradores da
+unidade dele. Conta bancária é o campo que redireciona pagamento.
+
+✅ **Decisão do dono, 05/09/2026: entra o terceiro eixo.** `accounting` mantém
+`banking` e continua **lendo** — que é o que a conciliação da remessa exige — e
+deixa de escrever.
+
+Sem grant para `authenticated`: esta tabela nunca é lida pelo PostgREST, só pelo
+FastAPI (caminho 2). ⛔ **E o grant de `service_role` é `select, insert, update`,
+nunca `grant all`** — `all` inclui `delete` e `truncate`, e esta etapa declarou
+delete físico fora de escopo. É o mesmo desvio deliberado que a `36_employee_photo`
+documenta.
+
+📌 **`holder_document` NÃO é mascarado** (decisão de 05/09). A regra 10 é sobre o
+número da conta. Este produto não ofusca valor em lugar nenhum — `cpf`, `rg`,
+`pis` saem inteiros para quem tem `pii` —, o modelo é portão de domínio; e o campo
+só existe quando a conta **não** é do colaborador, que é justamente o sinal que
+permite ao DP flagrar um redirecionamento antes de a remessa sair. Mascarar
+apagaria o sinal. ⚠️ Consequência aceita: `accounting` tem `banking` e não tem
+`pii`, então lê um valor com formato de CPF que qualquer outro caminho do produto
+exigiria `pii` para mostrar.
 
 Seed da matriz, na mesma migration:
 

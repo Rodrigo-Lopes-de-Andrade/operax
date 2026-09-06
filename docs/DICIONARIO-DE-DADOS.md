@@ -858,6 +858,41 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.employee_bank_account`
+
+> Conta bancária do colaborador — insumo do arquivo de remessa do vale transporte. Domínio sensível `banking`, sem grant para `authenticated`: só Caminho 2. O número completo nunca chega ao navegador (regra 10 do PRD-DP); a tela vê máscara.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `employee_id` 🔑 | uuid | não |  | `app.employee` |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `bank_code` | text | não |  |  |  |
+| `branch` | text | não |  |  |  |
+| `account` | text | não |  |  | Número completo. Só o montador da remessa o devolve, e em bytes — nunca em JSON. |
+| `account_type` | text | não | `'checking'::text` |  |  |
+| `holder_document` | text | sim |  |  | CPF/CNPJ do titular quando a conta não é do colaborador. Documento de terceiro. |
+| `updated_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Restrições**
+
+- `CHECK ((account_type = ANY (ARRAY['checking'::text, 'savings'::text, 'salary'::text, 'payment'::text])))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `employee_bank_account_read` | SELECT | `(util.can_see_domain(tenant_id, 'banking'::app.sensitive_domain) AND util.can_see_employee(employee_id))` | `-` |
+| `employee_bank_account_write` | ALL | `(util.can_see_domain(tenant_id, 'banking'::app.sensitive_domain) AND util.can_see_employee(employee_id) AND ut` | `(util.can_see_domain(tenant_id, 'banking'::app.sensitive_domain) AND u` |
+
+<details><summary>Índices</summary>
+
+- `employee_bank_account_tenant_idx` — `app.employee_bank_account USING btree (tenant_id)`
+
+</details>
+
+
 ## `app.employee_compensation`
 
 *tabela — RLS ligada*
