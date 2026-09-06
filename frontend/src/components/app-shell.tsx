@@ -11,6 +11,7 @@ import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
 import { MAPEAMENTO_PATH, ROTACOES_PATH } from "@/lib/curadoria/url";
+import { BENEFICIOS_PATH, CICLO_PATH, POSTOS_PATH } from "@/lib/dp/url";
 import { FOLHA_PATH } from "@/lib/folha/url";
 import { COLABORADORES_PATH, IMPORTACAO_PATH } from "@/lib/rh/url";
 import { TV_PATH } from "@/lib/tv/url";
@@ -76,9 +77,12 @@ export function AppShell({
             </p>
             <NavLink href={COLABORADORES_PATH} label="Colaboradores" />
             <NavLink href={IMPORTACAO_PATH} label="Importação" />
+            <NavLink href={POSTOS_PATH} label="Quadro de Postos" />
+            <NavLink href={BENEFICIOS_PATH} label="Benefícios" />
             {showAdminWrites ? (
               <>
                 <NavLink href={FOLHA_PATH} label="Folha" />
+                <NavLink href={CICLO_PATH} label="Ciclo mensal" />
                 <NavLink href={MAPEAMENTO_PATH} label="Mapeamento" />
                 <NavLink href={ROTACOES_PATH} label="Escalas" />
               </>
