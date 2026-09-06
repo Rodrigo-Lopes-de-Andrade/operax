@@ -355,9 +355,39 @@ mais barato que duas tabelas quase iguais.
   `total_amount = net_days × round_trip_amount`.
 - Cesta: perde o direito por **falta injustificada** ou **admissão depois do
   início do período**. O `reason` grava qual dos dois — a pessoa vai perguntar.
-- Os dois leem `app.leave_period` com `category` de falta injustificada. **Essa
-  leitura é financeira**: errar aqui tira dinheiro do colaborador. Merece o
-  teste mais explícito da etapa.
+  ✅ **A falta da cesta conta no MESMO mês civil anterior que o VT — confirmado
+  pelo dono em 06/09/2026.** Esta seção escrevia a janela só para o VT e o
+  `ANEXO` §4.2 diz "faltas injustificadas" sem nomear o período; a implementação
+  aplicou a frase do VT às duas rotinas e o revisor marcou isso como
+  **interpretação, não transcrição**, porque decide quem perde cesta. Fica sendo
+  uma regra só para as duas: a segunda cópia é a que diverge.
+- Os dois leem a **falta injustificada**, e **essa leitura é financeira**: errar
+  aqui tira dinheiro do colaborador. Merece o teste mais explícito da etapa.
+
+  ⛔ **Esta linha dizia "leem `app.leave_period` com `category` de falta
+  injustificada", e isso era falso — medido em 06/09/2026.** O check da coluna
+  aceita `('vacation','leave_period','leave_of_absence','suspension')` e **nenhum
+  deles é falta**; o comentário da tabela declara o porquê: *"rótulo neutro por
+  decisão de produto, motivo de leave_period é dado de saúde e não é capturado"*.
+  A coluna não pode expressar a categoria que esta seção exigia.
+
+  ✅ **Origem decidida pelo dono em 06/09: promover o espelho com curadoria.**
+  `secullum."FuncionarioAfastamento"` → `app.leave_period`, com mapa de
+  `JustificativaNome` → categoria e migration nova acrescentando a categoria de
+  falta ao check. ⚠️ **A distinção existe só como texto livre**: `AfastamentoId`
+  é identificador de registro (62 distintos em 62 linhas), não código de tipo, e
+  o `JustificativaNome` é digitado no Secullum do cliente e truncado em 7
+  caracteres — `Atested` e `ATEST M` são o mesmo conceito escrito de dois jeitos.
+  É o mesmo problema que `app.payroll_event_map` (migration 30) resolve por
+  curadoria, e a regra é a dela: **string não curada não entra em cálculo — falha
+  alto em vez de virar "sem falta"**.
+
+  ⚠️ **E o dado é rarefeito: UMA falta em 26 meses de história de produção**
+  (30–31/08/2025), contra 43 férias e 17 atestados. Consequência para o gate do
+  S3, decidida junto: a reconciliação linha a linha roda sobre o mês real
+  (janela, dias úteis, tarifa, total) e **a regra de falta é exercitada por
+  fixture sintética** — senão o gate compara zero contra zero e passa sem provar
+  a única regra que esta seção chama de mais perigosa.
 
 Ciclo `generated` ou `exported` é imutável (regra 9): correção é ciclo novo com
 `reason`, nunca `update`.

@@ -363,6 +363,161 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.benefit_cycle`
+
+> Competência de cesta ou de vale transporte. Um modelo, dois kind. Ciclo generated ou exported é imutável (regra 9 do PRD-DP): correção é ciclo novo com reason, nunca update.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `kind` | text | não |  |  |  |
+| `period_year` | smallint | não |  |  |  |
+| `period_month` | smallint | não |  |  |  |
+| `window_start` | date | não |  |  |  |
+| `window_end` | date | não |  |  |  |
+| `business_days` | smallint | sim |  |  | Dias com expediente na janela. Cabeçalho da tela; nunca entra em net_days nem em total_amount. |
+| `status` | text | não | `'draft'::text` |  |  |
+| `generated_at` | timestamp with time zone | sim |  |  |  |
+| `generated_by` | uuid | sim |  |  |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Restrições**
+
+- `CHECK (((period_month >= 1) AND (period_month <= 12)))`
+- `CHECK ((kind = ANY (ARRAY['food_basket'::text, 'transport_voucher'::text])))`
+- `CHECK ((status = ANY (ARRAY['draft'::text, 'generated'::text, 'exported'::text, 'cancelled'::text])))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `benefit_cycle_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+| `benefit_cycle_read` | SELECT | `util.can_see_domain(tenant_id, 'compensation'::app.sensitive_domain)` | `-` |
+
+<details><summary>Índices</summary>
+
+- `benefit_cycle_competencia_idx` — `app.benefit_cycle USING btree (tenant_id, kind, period_year DESC, period_month DESC)`
+- `UNIQUE benefit_cycle_period_key` — `app.benefit_cycle USING btree (tenant_id, kind, period_year, period_month, status)`
+
+</details>
+
+
+## `app.benefit_entitlement`
+
+> Uma linha por pessoa por ciclo. Colunas de dias nulas para cesta. reason grava QUAL causa tirou o direito — falta injustificada ou admissão depois do início do período.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `cycle_id` | uuid | não |  | `app.benefit_cycle` |  |
+| `employee_id` | uuid | não |  | `app.employee` |  |
+| `unit_id` | uuid | sim |  | `app.unit` |  |
+| `entitled` | boolean | não |  |  |  |
+| `reason` | text | sim |  |  |  |
+| `days_base` | smallint | sim |  |  |  |
+| `absences_prior` | smallint | sim |  |  |  |
+| `net_days` | smallint | sim |  |  |  |
+| `unit_amount` | numeric(12,2) | sim |  |  |  |
+| `round_trip_amount` | numeric(12,2) | sim |  |  |  |
+| `total_amount` | numeric(12,2) | sim |  |  |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `benefit_entitlement_read` | SELECT | `(util.can_see_domain(tenant_id, 'compensation'::app.sensitive_domain) AND util.can_see_employee(employee_id))` | `-` |
+| `benefit_entitlement_write` | ALL | `(util.can_see_domain(tenant_id, 'compensation'::app.sensitive_domain) AND util.can_see_employee(employee_id) A` | `(util.can_see_domain(tenant_id, 'compensation'::app.sensitive_domain) ` |
+
+<details><summary>Índices</summary>
+
+- `benefit_entitlement_ciclo_idx` — `app.benefit_entitlement USING btree (tenant_id, cycle_id)`
+- `benefit_entitlement_colab_idx` — `app.benefit_entitlement USING btree (tenant_id, employee_id)`
+- `UNIQUE benefit_entitlement_cycle_id_employee_id_key` — `app.benefit_entitlement USING btree (cycle_id, employee_id)`
+
+</details>
+
+
+## `app.benefit_plan`
+
+> Plano de benefício (operadora e preço) com vigência. Reajuste = linha nova; o valor de uma vigência já publicada nunca é editado.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `benefit_type_id` | uuid | não |  | `app.benefit_type` |  |
+| `code` | text | não |  |  |  |
+| `provider` | text | não |  |  |  |
+| `name` | text | não |  |  |  |
+| `amount` | numeric(12,2) | não |  |  |  |
+| `effective_from` | date | não |  |  |  |
+| `effective_to` | date | sim |  |  |  |
+| `reason` | text | sim |  |  |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Restrições**
+
+- `CHECK (((effective_to IS NULL) OR (effective_to >= effective_from)))`
+- `CHECK ((amount >= (0)::numeric))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `benefit_plan_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+| `benefit_plan_read` | SELECT | `util.can_see_domain(tenant_id, 'compensation'::app.sensitive_domain)` | `-` |
+
+<details><summary>Índices</summary>
+
+- `UNIQUE benefit_plan_open_band_idx` — `app.benefit_plan USING btree (tenant_id, code) WHERE (effective_to IS NULL)`
+
+</details>
+
+
+## `app.benefit_type`
+
+> Catálogo de verbas do tenant. `composes_base` é a regra 8 do PRD-DP virando dado: a folha base é salary + sum(amount) where composes_base, nunca uma lista no backend.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `code` | text | não |  |  |  |
+| `name` | text | não |  |  |  |
+| `composes_base` | boolean | não |  |  | Entra na folha salarial base. Definição do KPI: mudar esta coluna muda o número da tela. |
+| `calculation` | text | não | `'fixed_amount'::text` |  | fixed_amount = valor digitado; salary_rate = derivado do salário vigente (mecanismo do triênio). |
+| `domain` | app.sensitive_domain | não | `'compensation'::app.sensitive_domain` |  |  |
+| `active` | boolean | não | `true` |  |  |
+
+**Restrições**
+
+- `CHECK ((calculation = ANY (ARRAY['fixed_amount'::text, 'salary_rate'::text])))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `benefit_type_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+| `benefit_type_read` | SELECT | `util.can_see_domain(tenant_id, 'compensation'::app.sensitive_domain)` | `-` |
+
+<details><summary>Índices</summary>
+
+- `UNIQUE benefit_type_tenant_id_code_key` — `app.benefit_type USING btree (tenant_id, code)`
+
+</details>
+
+
 ## `app.company`
 
 *tabela — RLS ligada*
@@ -893,6 +1048,43 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.employee_benefit`
+
+> Verba do colaborador com vigência. Domínio compensation: leitura com dois eixos, escrita com três. A folha base soma daqui filtrando por benefit_type.composes_base.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `employee_id` | uuid | não |  | `app.employee` |  |
+| `benefit_type_id` | uuid | não |  | `app.benefit_type` |  |
+| `effective_from` | date | não |  |  |  |
+| `effective_to` | date | sim |  |  |  |
+| `amount` | numeric(12,2) | sim |  |  |  |
+| `rate` | numeric(6,4) | sim |  |  | Percentual por unidade (mecanismo do triênio). Com quantity, o valor deriva do salário vigente e acompanha o aumento. |
+| `quantity` | smallint | sim |  |  |  |
+| `benefit_plan_id` | uuid | sim |  | `app.benefit_plan` |  |
+| `transport_fare_id` | uuid | sim |  | `app.transport_fare` |  |
+| `reason` | text | sim |  |  |  |
+| `recorded_by` | uuid | sim |  |  |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `employee_benefit_read` | SELECT | `(util.can_see_domain(tenant_id, 'compensation'::app.sensitive_domain) AND util.can_see_employee(employee_id))` | `-` |
+| `employee_benefit_write` | ALL | `(util.can_see_domain(tenant_id, 'compensation'::app.sensitive_domain) AND util.can_see_employee(employee_id) A` | `(util.can_see_domain(tenant_id, 'compensation'::app.sensitive_domain) ` |
+
+<details><summary>Índices</summary>
+
+- `employee_benefit_colab_idx` — `app.employee_benefit USING btree (tenant_id, employee_id, effective_from DESC)`
+
+</details>
+
+
 ## `app.employee_compensation`
 
 *tabela — RLS ligada*
@@ -1022,6 +1214,8 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `cargo` | text | não |  |  |  |
 | `unit_id` | uuid | sim |  | `app.unit` |  |
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
+| `work_post_id` | uuid | sim |  | `app.work_post` | Posto do Quadro de Postos em que a pessoa exerce este cargo. Anulável: cargo sem posto mapeado é o estado inicial. |
+| `level` | text | sim |  |  | Nível dentro do cargo ("OPERADOR" na ficha do legado). Rótulo do cliente, não enum. |
 
 **Policies**
 
@@ -1379,6 +1573,41 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.leave_justification_map`
+
+> JustificativaNome do espelho -> categoria do domínio. Linha sem validated_at NÃO entra em cálculo: o apurador de ciclo recusa a competência nomeando a string. Silêncio aqui dá vale transporte a quem faltou.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `tenant_id` 🔑 | uuid | não |  | `app.tenant` |  |
+| `justification` 🔑 | text | não |  |  | Canonicalizada em upper(btrim(...)). Acento preservado: FÉRIAS e FERIAS são duas strings e cada uma se cura sozinha — normalizar acento seria adivinhar que são a mesma. |
+| `category` | text | não |  |  |  |
+| `validated_by` | uuid | sim |  | `auth.users` |  |
+| `validated_at` | timestamp with time zone | sim |  |  | Nulo = provisório, e provisório NÃO é usado. Mais estreito que app.payroll_event_map de propósito: lá o indicador sai com aviso, aqui a apuração para. |
+| `notes` | text | sim |  |  |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Restrições**
+
+- `CHECK ((btrim(justification) <> ''::text))`
+- `CHECK ((category = ANY (ARRAY['vacation'::text, 'leave_period'::text, 'leave_of_absence'::text, 'suspension'::text, 'unjustified_absence'::text])))`
+- `CHECK ((justification = upper(btrim(justification))))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `leave_justification_map_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+
+<details><summary>Índices</summary>
+
+- `leave_justification_map_categoria_idx` — `app.leave_justification_map USING btree (tenant_id, category)`
+
+</details>
+
+
 ## `app.leave_period`
 
 > Rótulo neutro por decisão de produto. Motivo de leave_period é dado de saúde e não é capturado.
@@ -1390,7 +1619,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
 | `tenant_id` | uuid | não |  | `app.tenant` |  |
 | `employee_id` | uuid | não |  | `app.employee` |  |
-| `category` | text | não |  |  |  |
+| `category` | text | não |  |  | Rótulo neutro: nunca o motivo. unjustified_absence é a exceção deliberada — ela afirma a AUSÊNCIA de justificativa, não uma condição, e as duas rotinas financeiras do DP (cesta e vale transporte) a leem. Sem ela, quem faltou recebe como quem trabalhou. |
 | `start_date` | date | não |  |  |  |
 | `end_date` | date | sim |  |  |  |
 | `source` | text | não | `'secullum'::text` |  |  |
@@ -1399,7 +1628,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 **Restrições**
 
 - `CHECK (((end_date IS NULL) OR (end_date >= start_date)))`
-- `CHECK ((category = ANY (ARRAY['vacation'::text, 'leave_period'::text, 'leave_of_absence'::text, 'suspension'::text])))`
+- `CHECK ((category = ANY (ARRAY['vacation'::text, 'leave_period'::text, 'leave_of_absence'::text, 'suspension'::text, 'unjustified_absence'::text])))`
 - `CHECK ((source = ANY (ARRAY['secullum'::text, 'manual'::text, 'spreadsheet'::text])))`
 
 **Policies**
@@ -1904,6 +2133,45 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.transport_fare`
+
+> Tarifa de transporte por linha e tipo (unitária ou ida-e-volta), com vigência. Reajuste = linha nova; a anterior fecha a faixa e mantém o valor que valeu.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `code` | text | não |  |  |  |
+| `name` | text | não |  |  |  |
+| `kind` | text | não |  |  |  |
+| `amount` | numeric(12,2) | não |  |  |  |
+| `effective_from` | date | não |  |  |  |
+| `effective_to` | date | sim |  |  |  |
+| `reason` | text | sim |  |  |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Restrições**
+
+- `CHECK (((effective_to IS NULL) OR (effective_to >= effective_from)))`
+- `CHECK ((amount >= (0)::numeric))`
+- `CHECK ((kind = ANY (ARRAY['single'::text, 'round_trip'::text])))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `transport_fare_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+| `transport_fare_read` | SELECT | `util.can_see_domain(tenant_id, 'compensation'::app.sensitive_domain)` | `-` |
+
+<details><summary>Índices</summary>
+
+- `UNIQUE transport_fare_open_band_idx` — `app.transport_fare USING btree (tenant_id, code, kind) WHERE (effective_to IS NULL)`
+
+</details>
+
+
 ## `app.unit`
 
 *tabela — RLS ligada*
@@ -2026,6 +2294,37 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 - `user_scope_lookup_idx` — `app.user_scope USING btree (user_id, tenant_id)`
 - `user_scope_tenant_id_fkidx` — `app.user_scope USING btree (tenant_id)`
 - `user_scope_unidade_idx` — `app.user_scope USING btree (unit_id) WHERE (unit_id IS NOT NULL)`
+
+</details>
+
+
+## `app.work_post`
+
+> Quadro de Postos — unidade + código, o par que a rotina de vale transporte usa para achar a escala do colaborador. O elo posto -> escala (secullum_schedule_id) entra em migration própria: ver docs/SPEC-DP.md §0-bis.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `unit_id` | uuid | não |  | `app.unit` |  |
+| `code` | text | não |  |  | Código do posto dentro da unidade. Único por (tenant, unidade), nunca global. |
+| `name` | text | sim |  |  |  |
+| `active` | boolean | não | `true` |  |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `work_post_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+| `work_post_read` | SELECT | `util.can_see_unit(unit_id)` | `-` |
+
+<details><summary>Índices</summary>
+
+- `work_post_unit_idx` — `app.work_post USING btree (tenant_id, unit_id)`
+- `UNIQUE work_post_tenant_id_unit_id_code_key` — `app.work_post USING btree (tenant_id, unit_id, code)`
 
 </details>
 
@@ -3132,6 +3431,9 @@ Não são API. `security definer` com `search_path` travado, `EXECUTE` revogado 
 | `util.can_see_domain` | `p_tenant_id uuid, p_domain app.sensitive_domain` | `boolean` |
 | `util.can_see_employee` | `p_employee_id uuid` | `boolean` |
 | `util.can_see_unit` | `p_unit_id uuid` | `boolean` |
+| `util.enforce_benefit_cycle_immutable` | `` | `trigger` |
+| `util.enforce_benefit_entitlement_immutable` | `` | `trigger` |
+| `util.enforce_single_open_base_benefit` | `` | `trigger` |
 | `util.has_tenant` | `p_tenant_id uuid` | `boolean` |
 | `util.is_admin` | `p_tenant_id uuid` | `boolean` |
 | `util.lock_down_new_function` | `` | `event_trigger` |

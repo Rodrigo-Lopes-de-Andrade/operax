@@ -1,9 +1,13 @@
-<!-- verificar-docs: inexistentes-de-proposito app.benefit_type app.work_post public.fn_dp_panel public.fn_dp_alerts app.work_schedule_day app.messaging_identity -->
+<!-- verificar-docs: inexistentes-de-proposito public.fn_dp_panel public.fn_dp_alerts app.work_schedule_day app.messaging_identity -->
 <!-- `app.work_schedule_day` continua aqui porque o Quadro REPORTA que ela não
      existe — e agora a SPEC diz o mesmo, então a contradição entre os dois
      documentos acabou. `app.schedule_rotation_map` SAIU desta lista: ela existe
      (migration 25), e declarar exceção para objeto existente é mentira que o
-     verificador não pega, porque ele só suprime e nunca reclama de sobra. -->
+     verificador não pega, porque ele só suprime e nunca reclama de sobra.
+     ⚠️ `app.benefit_type` e `app.work_post` SAÍRAM em 06/09 pelo mesmo motivo:
+     `dp_work_post` e `dp_benefit_catalog` as criaram, e a suíte confirmou. Uma
+     exceção que sobrevive ao objeto que ela desculpava é a forma silenciosa
+     deste verificador ficar cego — ele suprime e nunca reclama de sobra. -->
 
 # OperaX — sprints da etapa DP
 
@@ -181,9 +185,9 @@ andaime que a orquestração exige e que o documento não tinha.
 
 | Sprint | Status | Slot(s) de migration | Revisores OK | Ciclos |
 |---|---|---|---|---|
-| S1 — Fundação | ⛔ **retida no ⛔ da semente** | `dp_work_post`, `dp_benefit_catalog` | — | 0 |
+| S1 — Fundação | ✅ **aprovada** (06/09) — **backend e banco; a metade de frontend não foi despachada** | `dp_work_post`, `dp_benefit_catalog` | guardião ✅ · revisor ✅ | 2 |
 | S2 — Domínio `banking` | ✅ **aprovada** (05/09) | `dp_banking_domain`, `dp_banking_account` | guardião ✅ · revisor ✅ | 1 |
-| S3 — Ciclo mensal | pendente | `dp_benefit_cycle` | — | 0 |
+| S3 — Ciclo mensal | ✅ **aprovada** (06/09) — **backend e banco; frontend não despachado; reconciliação com o legado ABERTA** | `dp_benefit_cycle`, `dp_leave_category`, `dp_absence_map` | guardião ✅ · revisor ✅ | 2 |
 | S4 — Painel e alertas | pendente | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | — | 0 |
 | S5 — Laudos e rubricas | pendente | `dp_unit_compliance`, `dp_payroll_code_map` | — | 0 |
 
@@ -542,6 +546,731 @@ Ou seja: a proteção não é estrutural, é nominal. **A próxima tabela sensí
 `app` não herda a guarda** — ela precisa que alguém lembre de escrever a
 asserção. Fora do escopo de S2; entra como item próprio, porque é o tipo de
 buraco que só aparece quando já vazou.
+
+## Despacho de 06/09/2026 — S1, e a metade que chegou sem despacho registrado
+
+A onda 1 executa em série nesta máquina (§ acima). S2 reportou e foi aprovada em
+`bd175d4`, então S1 saiu.
+
+⚠️ **A metade de banco do S1 já estava no disco quando este despacho começou** —
+`dp_work_post` e `dp_benefit_catalog`, escritas em 06/09 às 04:23 e 04:26, **não
+versionadas**, com a sprint ainda marcada `⛔ retida`. É exatamente o estado que a
+regra 3 do despachante existe para não deixar acontecer: *"sprint marcada
+`pendente` com trabalho no disco é indistinguível de uma nunca iniciada"*. O
+status foi corrigido para `em execução` antes deste despacho, e fica registrado
+que a correção veio depois do trabalho, não antes.
+
+**O que foi medido antes de construir em cima:** a suíte inteira
+(`scripts/testar_migrations.sh`) rodou com as duas migrations no diretório e
+fechou `SUÍTE COMPLETA OK` — as 40 aplicam em ordem, o isolamento passa, o
+dicionário regenera e `verificar_docs.py` fica verde. **A metade de banco do S1
+está verde**, e o slot está fechado: o agente de backend lê as duas e reporta em
+vez de editar.
+
+Conferência das paradas, refeita para este despacho:
+
+| # | Condição | Estado em 06/09 |
+|---|---|---|
+| 1 | os quatro documentos | ✅ os quatro no repositório |
+| 2 | FORCE · captura | ✅ fechadas em 05/09 — §2a-bis e `DECISAO-FRONTEIRA-CAMINHO-2.md` |
+| 3 | §1d-bis · a semente | ✅ **a parada do S1 caiu**: são oito, e o bloco `do $$` da migration falha alto se `seniority_bonus` aparecer |
+| 4 | arquivos e critérios | ✅ preenchidos, e o gate ganhou quatro asserções — abaixo |
+| 5 | decisão fechada | ✅ nenhuma sprint pede |
+| — | elenco contra `/agents` | ✅ os quatro agentes existem |
+
+**Despachada: a metade de backend do S1**, para `fastapi-developer`. Arquivos:
+`operax/dp/postos.py`, `operax/dp/beneficios.py`, `server/routers/dp.py`,
+`server/models.py`, `tests/test_dp_beneficios.py`. Sem slot de migration — o do
+S1 está fechado.
+
+### A pergunta do falso verde, aplicada ao gate do S1
+
+O plano dizia que os gates de S1, S3 e S5 são *"de igualdade contra o legado, que
+são positivos por construção"*. ⚠️ **Isso é verdade do critério de reconciliação e
+falso do gate escrito.** O gate do S1 é *"salário + ajuda de custo + cargo de
+confiança + periculosidade entram, VR fica fora"* — e a implementação errada que
+passa nele tem nome:
+
+⛔ **Uma lista de códigos escrita no backend passa em todas essas asserções.** Ela
+soma os três certos, exclui o VR, e fecha verde — enquanto destrói a única coisa
+que `benefit_type.composes_base` existe para dar, que é o cliente mudar a
+definição do KPI sem deploy. O gate mediria o resultado e não o mecanismo.
+
+📌 **Quatro asserções acrescentadas antes do despacho** (acrescentar caso é o
+processo funcionando; nenhuma asserção existente foi tocada):
+
+1. **A fórmula lê o dado, não uma constante** — virar `composes_base` de um tipo
+   dentro do teste e provar que **o total muda**. Total que não se mexe é a
+   lista no backend, denunciada.
+2. **A vigência fecha de verdade** — reajuste cria linha nova, a anterior mantém
+   o valor que valeu, a leitura numa data antiga devolve o valor antigo, e o
+   índice único parcial rejeita duas faixas abertas.
+3. **O triênio por fixture sintética** — tipo `salary_rate` criado no teste (nunca
+   na semente): aumento de salário muda o valor **na mesma leitura**. É taxa, não
+   montante — e o mecanismo é provado sem que o tipo exista em produção, que é o
+   desenho da §1d.
+4. **Verba fora da vigência não conta**, e o catálogo de um tenant não devolve
+   linha do outro.
+
+## S1, backend — entregue em 06/09, e o gate provado por mutação
+
+`fastapi-developer` reportou os cinco arquivos do escopo. **Portões conferidos
+por quem orquestra, não aceitos do relato:** `uv run pytest -q` → **428 passed**;
+`ruff check` + `ruff format --check` → limpos, 89 arquivos.
+
+O que faz esta entrega valer mais que o verde: o agente **rodou três mutações
+contra a própria implementação** e mostrou quais testes ficam vermelhos.
+
+| Mutação aplicada de propósito | Testes que reprovaram |
+|---|---|
+| `composes_base` trocado por lista fixa de códigos | 4 |
+| o fechamento da faixa anterior removido do reajuste | 6, incluindo a violação do índice parcial |
+| o filtro de tenant virado tautologia (`is not null`) | 2 |
+
+📌 **A terceira é a que mais importa, e confirma por medição o que
+`DECISAO-FRONTEIRA-CAMINHO-2.md` §3 já dizia em prosa:** o `bind_tenant` **deixa a
+tautologia passar** — ele é lint sintático, não fronteira. A resposta do agente
+foi estrutural: o dublê de cursor exige `tenant_id = %(tenant_id)s` literal em
+todo `select`/`update` que passa por `tenant_scope`, além de filtrar as linhas.
+Sem essa asserção, o teste multi-tenant seria falso verde — a terceira vez nesta
+etapa que a pergunta do falso verde paga.
+
+⚠️ **E uma asserção que o gate não pediu:** um teste varre
+`inspect.getsource(beneficios)` atrás dos oito códigos da semente. A asserção do
+gate prova que o comportamento está certo na fixture; esta prova que o mecanismo
+errado **não existe** nem num caminho que a fixture não exercite. É a diferença
+entre medir o resultado e medir o desenho.
+
+### As três coisas que o agente subiu em vez de decidir sozinho
+
+**1. ⚠️ Não existe porta para criar a PRIMEIRA vigência de plano ou tarifa — e a
+lacuna é do plano, não da entrega.** A SPEC §2 lista `GET /dp/beneficios/catalogo`
+e `POST /dp/beneficios/reajuste`, e reajustar exige uma faixa aberta para
+reajustar. Consequência: `app.benefit_plan` e `app.transport_fare` **nascem
+vazias e ficam vazias**, e o catálogo é inutilizável até existir criação. O
+agente não inventou a rota — reportou, que é a regra. **Sobe ao dono**: ou entram
+`POST /dp/beneficios/planos` e `POST /dp/beneficios/tarifas` num sprint (S3 é o
+candidato natural: é ele que consome tarifa), ou a carga inicial de plano e
+tarifa entra por outro caminho. ⛔ **S3 depende disso**: o apurador de VT lê
+tarifa, e tarifa nenhuma existe.
+
+**2. 🔴→✅ A `dp_benefit_catalog` criava dois índices e não garantia nenhum.** O
+bloco `do $$` conferia `tenant_id`, RLS, grants, as oito policies, `calculation`,
+`rate`/`quantity` e a semente inteira — e **não** que
+`benefit_plan_open_band_idx` e `transport_fare_open_band_idx` existem. A
+`dp_work_post` ao lado garante o `unique` dela com o conjunto de colunas
+comparado inteiro; o padrão estava no slot e a lacuna era só nesta.
+
+O índice parcial é a **tradução estrutural** de "reajuste cria vigência nova",
+que é o item 3 do gate. Garantia que não alcança o que a própria migration chama
+de "o pior tipo" de divergência é o falso verde de novo, dentro da migration
+desta vez. 📌 **Slot reaberto pelo orquestrador para exatamente este acréscimo** —
+é *acrescentar* garantia, não enfraquecer, e nenhuma das duas migrations está
+aplicada em lugar nenhum. Não consome ciclo: não é reprovação, é escopo reaberto.
+
+**3. `test_dp_beneficios.py` carrega também os testes do Quadro de Postos.** Fica
+como está: a lista `Arquivos` do S1 nomeia um arquivo de teste só, rota sem teste
+é pior que nome largo, e a seção está declarada no docstring.
+
+### Duas decisões de desenho que valem para as sprints seguintes
+
+- **A regra de vigência é uma função Python, não um predicado SQL.** Escrita nos
+  dois lugares ela divergiria, e a metade SQL é a que o pytest não alcança —
+  **pytest não abre banco neste projeto**. Com a regra em Python, os seis itens
+  do gate exercitam o código que roda em produção. O recorte de tenant continua
+  sendo do banco. S3 herda isto: o apurador de ciclo é a mesma forma.
+- **A leitura das cinco tabelas desta etapa não roda como o usuário, e é de
+  propósito.** Elas não concedem nada a `authenticated` (as migrations fazem
+  `revoke all`, e o `grant select on all tables` da 04 é pontual no tempo e não
+  alcança tabela criada depois) — um `select` sob `user_scope` morreria com
+  `permission denied` em vez de ser filtrado. Vai por `tenant_scope` com filtro
+  explícito, e quem autoriza é a rota. O recorte por unidade dos postos vem de
+  `app.unit`, que **é** legível pelo usuário e cuja policy chama
+  `util.can_see_unit`: a regra continua morando na policy; aqui ela é consultada.
+
+## S1, ciclo 1 — as duas revisões acharam a mesma coisa, sozinhas
+
+`code-reviewer` **reprovou**; `guardiao-de-superficie` **escalou** em vez de
+aprovar ou reprovar. Nenhuma reprovação automática disparou em nenhuma das duas.
+
+⚠️ **O revisor recusou-se a contar o `SUÍTE COMPLETA OK` como evidência dele**,
+porque não foi ele quem rodou — foi relato de terceiro. É o comportamento certo,
+e vale registrar como padrão: quem revisa mede, ou declara que não mediu.
+
+### O que as duas acharam em separado, e é o achado mais importante do ciclo
+
+**As policies de leitura do catálogo eram mais frouxas que a rota.**
+`benefit_type_read`, `benefit_plan_read` e `transport_fare_read` liam por
+`util.has_tenant` — **sem domínio** — enquanto `GET /dp/beneficios/catalogo`
+exige `compensation`. O guardião mediu que a policy dizia **sim** para o `hr`,
+que a rota nega.
+
+Não expunha nada hoje (sem grant a `authenticated`, e o Caminho 2 ignora RLS). O
+que quebrava era a justificativa escrita no cabeçalho da própria migration — *"se
+um PR futuro conceder `select` por engano, a policy é o que ainda está de pé"*.
+Nesse dia ela não estaria.
+
+✅ **Decisão do dono, 06/09: apertar a policy.** As três leituras passam a exigir
+`util.can_see_domain(tenant_id, 'compensation')`. Escrita (`util.is_admin`) e
+`work_post_read` (`util.can_see_unit`) ficam como estão.
+
+### O guardião: seis itens verdes, e duas medições que mudam o que se sabe
+
+**1. O argumento do grant se sustentou, e ele o testou em vez de aceitar.** Criou
+tabela em `app` **sem `revoke` nenhum**: nasceu sem grant para `authenticated`.
+📌 **`grant select on all tables in schema app` (migration 04) é pontual no tempo
+e não alcança tabela criada depois** — então o `revoke all` das migrations do S1
+é **defensivo, não load-bearing**. Vale para toda tabela futura de `app`.
+
+**2. O falso verde da S2 se reproduz no S1, e os pares novos o cobrem.** Mutando
+a semente para dar `compensation` ao `hr`, a asserção literal continuou verde e
+**o par positivo pegou**. Ele levou o `98` de **52 para 96 asserções** — 230
+adições, **zero remoções**, zero `skip`. O S1 tinha acrescentado zero.
+
+Precisou generalizar o `pg_temp.policy_says`, que era preso a
+`employee_bank_account`: `policy_says_on(tabela, policy, tenant, employee, unit,
+qual|with_check)` lê de `pg_policies` na sessão do usuário — não é cópia da regra
+no teste.
+
+### O revisor: dois ALTO que a letra do gate não alcançava
+
+**1. `read_base_payroll` lia estado atual dentro de uma função datada.** O filtro
+era `status <> 'desligado'` — hoje, não `on`. Ler competência passada excluía quem
+foi desligado depois dela: **o número do mês encolhe retroativamente, sem
+sintoma**. É o gate do S3 que quebraria, onde "divergência de uma pessoa é falha
+do gate" e a reconciliação roda sobre mês fechado.
+
+**2. A regra de vigência do SALÁRIO não era exercitada — e o salário é o maior
+termo da soma.** Medido: trocando o filtro de vigência por `list(bands)`, os 35
+testes seguiam verdes. O teste que existia não pegava porque a faixa vigente era
+também a de maior `effective_from`; um `max()` ingênuo passaria. O item 3 do gate
+estava provado para tarifa e plano, **não** para o termo que domina o total.
+
+**3. A asserção do dublê tinha o buraco que o despacho mandou procurar.**
+`assert "tenant_id = %(tenant_id)s" in sql` pegava a tautologia **substitutiva**
+— que foi a mutação do próprio implementador — e **não** a **disjuntiva**:
+`where (tenant_id = %(tenant_id)s or true)` passava com 35 verdes. O SQL entregue
+estava correto; o docstring é que prometia mais do que o teste entregava.
+
+### O ciclo 1, fechado — 439 passed, tudo provado por mutação
+
+Os oito itens entraram. O implementador refez cada mutação e mostrou o vermelho.
+Duas escolhas dele que ficam valendo para as sprints seguintes:
+
+- **Uma resposta só para "coluna faltando".** `quantity` ausente passou a
+  levantar `MalformedBenefitError` em vez de virar `1` calado. A forma silenciosa
+  **inventava dinheiro** numa parcela que compõe a base, contradizendo a regra
+  que o módulo declarava três linhas acima para o `rate`.
+- **`hired_on > on` sai pelo mesmo recorte do vínculo**, não por exceção dentro
+  da soma — a regra escrita duas vezes é a que diverge. `without_salary` passou a
+  significar uma coisa só: estava na casa em `on` e não tem faixa salarial.
+
+⚠️ **E um mea culpa de método que vale mais que o acerto:** a primeira mutação do
+arredondamento deu **14 failed**, e ia ser reportada como prova. Era `NameError` —
+o símbolo não estava importado. **Mutação que quebra o import não prova asserção
+nenhuma**, prova que o módulo não carrega. Refeita, deu 1 failed na asserção
+certa, com o diff de centavo. O número inflado era mais bonito e teria passado.
+
+### As outras duas decisões do dono, 06/09
+
+**A porta de criação da primeira vigência entra no S3.** `POST
+/dp/beneficios/planos` e `/tarifas` não existem, e `reajuste` exige faixa aberta
+para reajustar — `app.benefit_plan` e `app.transport_fare` nasceriam e ficariam
+vazias. ⛔ **S3 abre com isso no escopo dele**, que é quem consome tarifa; S1
+fecha sem elas.
+
+**A dupla faixa aberta trava só nos tipos que compõem a base.** Nada impedia duas
+faixas abertas do mesmo `(colaborador, tipo)`, e a soma pega todas as vigentes —
+a mesma ajuda de custo contada duas vezes, calada. VT e os demais **continuam
+podendo repetir**, porque duas linhas de VT são legítimas. ⚠️ O mecanismo é
+questão de engenharia e não da decisão: o predicado de índice parcial só enxerga
+colunas da própria tabela, e `composes_base` mora em `app.benefit_type` — a
+verificação disso ficou com quem implementa, com ordem de medir em vez de
+aceitar.
+
+## A rodada de migration — e a armadilha que "prefira o índice" quase criou
+
+As três decisões do dono entraram em `20260906120100_dp_benefit_catalog.sql`.
+Backend estável em **439 passed**, ruff limpo.
+
+### O achado técnico que vale além desta etapa
+
+O despacho dizia: *"o predicado de um índice parcial só enxerga colunas da própria
+tabela — mas **meça em vez de aceitar a minha palavra**. Se houver forma de índice
+que funcione, prefira o índice."* As três formas, medidas:
+
+| Tentativa | Resultado |
+|---|---|
+| predicado citando `bt.composes_base` | `ERROR: missing FROM-clause entry for table "bt"` |
+| predicado com subconsulta | `ERROR: cannot use subquery in index predicate` |
+| predicado com função de lookup declarada `immutable` | **o índice é criado** — e é a armadilha |
+
+⛔ **A terceira parece funcionar e não funciona.** O índice é criado sem
+reclamação; virando `composes_base` de `false` para `true` e inserindo a terceira
+faixa aberta do mesmo par, **as três sobrevivem** — o índice não reavalia o
+predicado de linha que já entrou, e a mentira sobre imutabilidade só cobra no dia
+em que o cliente usa a tela.
+
+📌 **A forma da instrução é que produziu a medição.** Tivesse ela vindo como fato
+("prefira o índice"), o S1 teria entregue uma trava que só falha em produção,
+meses depois, sem sintoma. Vale como padrão de despacho desta etapa: quando quem
+orquestra tem uma hipótese técnica, ela vai como hipótese a medir, nunca como
+premissa a obedecer.
+
+Saiu, então, **gatilho `before insert or update`** restrito a `composes_base`, com
+`errcode = 'unique_violation'` — o mesmo código que o índice de `benefit_plan`
+levanta, para não haver dois códigos para um choque só.
+
+✅ **Com `pg_advisory_xact_lock` no par (colaborador, verba), decisão do
+orquestrador.** Gatilho **não é** índice único: duas transações concorrentes
+fariam o `exists` cada uma antes de a outra confirmar, e as duas passariam.
+Entregar isso chamando de trava seria substituir uma garantia à prova de corrida
+por uma que não é, no caso em que o dano é dinheiro na folha base. Nada grava
+`app.employee_benefit` até S3/RH — a corrida não é impossível, é **futura**.
+
+### Oito sabotagens, e duas que ensinaram algo
+
+As garantias novas foram provadas uma a uma: gatilho ausente, `after` em vez de
+`before`, só `insert`, existe-e-não-recusa, **recusa-demais (barra o VT)**, não
+libera após fechar, policy voltando a `has_tenant`, e `can_see_domain` com o
+domínio errado (`pii`). ⚠️ A quinta é a que importa tanto quanto a quarta: **uma
+trava que barra o legítimo é pior que a ausência dela**, e duas linhas de vale
+transporte são legítimas.
+
+### 🔴→✅ O quarto falso verde da sprint foi escrito por quem caçava os outros
+
+As sabotagens D e E passaram **verdes** na primeira rodada. Causa: a prova viva
+reusava uma `app.company` existente porque `app.employee.company_id` é `not
+null` — e o banco do `db-test` tem **1 tenant e 0 empresas**. A prova pulava,
+calada, **no único ambiente que a executa**.
+
+📌 O que a pegou não foi releitura: foi a sabotagem voltar verde e o verde ser
+tratado como suspeito em vez de como resultado. `0 empresas` no banco de ensaio
+não é coisa que se note lendo código. **A mutação precisa ser rotina, não zelo.**
+
+### A colisão que o implementador não resolveu sozinho, e fez certo
+
+`scripts/98_teste_isolamento_tenant.sql:645` — a asserção do guardião que
+registra a lacuna medida (*"o catálogo NÃO filtra por domínio — `hr` passa na
+policy"*, esperando `1`) passou a reprovar com `obtido 0`, porque `0` é a
+correção funcionando. O comentário do próprio guardião previa: *"trocar o `1` por
+`0` aqui é a correção, e ela é migration nova."*
+
+⚠️ **E não é troca de um caractere.** Com `0`, o rótulo afirma o oposto do que
+mede — a asserção **muda de natureza**: deixa de registrar lacuna e passa a
+garantir que o domínio é exigido. Rótulo, comentário e valor mudam juntos, e quem
+faz é o dono do arquivo. O implementador mediu o efeito (virou, rodou, restaurou)
+e conferiu o `sha256` contra o original antes de devolver — padrão a repetir
+sempre que alguém mexer num arquivo alheio para medir.
+
+## S1, ciclo 2 — aprovada pelos dois, e a re-revisão mediu em vez de reler
+
+`code-reviewer`: **APROVADO**. `guardiao-de-superficie`: **APROVADO**. Ciclos: 2
+de 3.
+
+Desta vez o revisor rodou os três portões ele mesmo — `SUÍTE COMPLETA OK`, 439
+backend, 387 frontend, ruff limpo, dicionário estável, árvore intacta ao fim. E
+**refez as cinco mutações na forma sutil**, não na caricatural: removeu só a
+metade `terminated_on` do vínculo, honrou `effective_from` ignorando só
+`effective_to`. Todas vermelhas.
+
+📌 **Duas observações dele que valem como padrão:**
+
+- **O gap 1 foi resolvido melhor do que ele pediu.** Ele sugeriu o predicado
+  datado; o implementador **conferiu** que `status` e `terminated_on` são ambos
+  `Owner.SYNC` e ambos espelham `Funcionario.Demissao`, escritos no mesmo
+  `insert` de `motor/cadastro.py` — então não podem divergir, e a troca é segura.
+  Sem essa conferência teria sido um chute que funciona.
+- **O dublê deixou de mentir a favor do código.** `_vinculo` passou a ramificar
+  no **texto do statement**: SQL que não fala de `terminated_on` faz o fake
+  aplicar o recorte por estado atual, e o teste fica vermelho. Era a objeção do
+  ciclo 1 — um fake que filtra por conta própria nunca contradiz a consulta.
+
+### O quinto falso verde: a fixture do `98` divergia da matriz do produto
+
+Achado do guardião, **contraditado em parte pelo revisor** — que foi o pedido.
+
+A fixture zerava `compensation` para todo papel fora de `owner`/`personnel`; a
+semente da migration 02 dá o domínio a **quatro** (`owner`, `personnel`,
+`executive`, `accounting`). Enquanto `compensation` só guardava dado por pessoa a
+divergência dormia; desde 06/09 ele guarda a leitura do catálogo, e aí ela
+esconderia a pergunta que importa: *o aperto trancou fora quem concilia a folha?*
+A asserção "`accounting` é barrado no catálogo" ficaria **verde no teste e falsa
+em produção**. Conserto confirmado necessário pelos dois.
+
+⚠️ **Mas o revisor foi célula a célula e a matriz continua encolhida para o
+`hr`** — `pii`, `health` e `disciplinary` estão `f` na fixture e `t` no produto.
+Não produz falso verde hoje (nenhuma asserção exercita `hr` contra os três), e é
+armadilha latente: `hr` é justamente o papel de PII, então a primeira asserção
+sobre `hr` e PII nasce falsa.
+
+📌 **E ele nomeou a classe, que é o que importa:** o padrão adotado é *remendar um
+domínio por vez* — `banking` em 05/09, `compensation` em 06/09, `hr` ainda não
+porque ninguém precisou. **Três remendos são um sintoma.** Trocar a semente
+genérica do `98` pelo mesmo `case` da migration 02 mata a classe e torna os dois
+blocos de override desnecessários; `supabase/seed.sql` já faz assim e está
+correto. Item próprio.
+
+### A lacuna do flip de `composes_base` — confirmada, com o caminho de volta medido
+
+O revisor confirmou a medição do guardião e acrescentou dois fatos que ela não
+tinha:
+
+| Passo medido | Resultado |
+|---|---|
+| flip de `transport_voucher` para `composes_base = true` | as 2 faixas abertas **sobrevivem** |
+| `update` numa das sobreviventes | **recusado** — o estado se denuncia |
+| `update` fechando uma delas | **aceito** — o caminho de recuperação existe |
+
+O gatilho retorna cedo quando `new.effective_to is not null`, então **fechar é
+sempre permitido**: o estado não encrava e a próxima escrita qualquer o anuncia.
+
+📌 **Não bloqueia o S1, e por um motivo mais forte que "é pequeno": o S1 não
+entrega rota nenhuma que escreva `benefit_type` nem `employee_benefit`.** As seis
+rotas de `/dp` são conta, três de posto, catálogo (leitura) e reajuste (que toca
+`benefit_plan`/`transport_fare`). Virar `composes_base` hoje só acontece por SQL
+direto — a superfície do produto não alcança a lacuna. Ela vira real no sprint que
+entregar a **tela de catálogo**, e é lá que o conserto pertence, como gatilho em
+`app.benefit_type` que confere antes de deixar o flip passar. **Fechar isso agora
+seria escrever a trava longe da porta que a exige.**
+
+### Resíduos com endereço — nenhum bloqueia
+
+- **R1** — a fixture do arredondamento **não distingue nada**: 1750 × 0,0333 dá
+  58,28 tanto em `ROUND_HALF_UP` quanto em `ROUND_HALF_EVEN`, e **apagar o
+  argumento `rounding=` inteiro também passa**, porque o default do `Decimal` é
+  `HALF_EVEN` — que é justamente a alternativa que o comentário do módulo
+  rejeita. Correção de um dígito (`rate="0.0331"` → 57,925 → 57,93 vs 57,92),
+  despachada em 06/09.
+- **R2** — o predicado datado do vínculo está coberto na **presença**, não na
+  semântica: invertê-lo para trazer só quem já saiu passa 46 de 46. 📌
+  **Recomendação para S3:** o vínculo *é* uma vigência, e `in_effect(on,
+  hired_on, terminated_on)` já existe no módulo — movê-lo para Python o põe sob a
+  mesma cobertura de todo o resto e apaga a regra escrita duas vezes, que é a
+  decisão de desenho que o próprio S1 declarou para preço.
+- **R3** — a guarda de tautologia tem uma terceira fuga (`(tenant_id = ...) or
+  (1=1)`) fora das duas declaradas. Não é acidente plausível — o erro real, sem
+  parênteses, é pego. É precisão de docstring, despachada junto com R1.
+
+✅ **Os três fechados em 06/09.** A fixture passou a `rate="0.0331"` (57,925 →
+**57,93** em `HALF_UP` e **57,92** em `HALF_EVEN`, `DOWN` e sem argumento), e as
+**três** mutações ficam vermelhas — inclusive a remoção do `rounding=`. O
+comentário de `_money` foi corrigido junto: ele nomeava `ROUND_DOWN` como a
+mutação a temer, que era o mesmo auto-engano do teste. O docstring do dublê passou
+a listar as três fugas e a dizer **por que** a terceira fica de fora.
+
+### 📌 A lição de método do S1, e ela não é sobre benefícios
+
+O implementador nomeou, ao fechar: *"minha mutação `ROUND_DOWN` ficou vermelha e
+eu li aquilo como 'a asserção tem dentes'. Tinha dentes para a substituição
+grosseira e nenhum para a remoção — e a remoção é a regressão que de fato
+acontece, porque `rounding=ROUND_HALF_UP` parece verbosidade."*
+
+⛔ **Mutação escolhida por quem escreveu o código herda o ponto cego de quem
+escreveu o código.** Ele mutou o que sabia estar lá; o revisor mutou **a
+ausência**. Foi o mesmo padrão nas cinco mutações do ciclo 2, refeitas na forma
+sutil em vez da caricatural — e é o que separa mutação como rotina de mutação
+como zelo. Vale para S3, S4 e S5: a mutação que conta é a que o autor não
+escolheria.
+
+## Antes do S3 — o gate não podia fechar, e a SPEC §1e afirmava algo falso
+
+Medido em **06/09/2026**, antes de despachar. O S3 é o sprint que aposenta o
+legado e tem o gate mais exigente da etapa: *"apuração de um mês real de staging
+confere com o legado linha a linha — não só no total. Divergência de uma pessoa é
+falha do gate."*
+
+### O que a medição mostrou
+
+| Onde | Estado em 06/09 |
+|---|---|
+| **staging** (`wbzaqjlfpqteesehapnn`) | 0 colaborador, 0 unidade, 0 `leave_period`, 1 tenant — **vazio**, e o gate nomeia staging |
+| **produção** | 176 colaboradores, 27 unidades, 5 empresas, 6.395 `expected_workday`, **821 desvios** |
+| produção · `app.leave_period` | **0** |
+| produção · `app.employee_compensation` | **0** |
+| repositório | **nenhum export do legado** para conferir contra |
+
+⚠️ **E uma nota de projeto virou falsa no caminho:** até 04/09 o domínio de
+produção estava em zero e o motor nunca tinha rodado lá. **Entre 04/09 e 06/09 o
+motor rodou** — `app.sync_run` foi de 5 para 271. ✅ **A regra 8 está respeitada, e
+foi conferida e não presumida:** os 821 desvios estão **todos** em `mode =
+'shadow'` (29/08 a 04/09), e `app.alert_queue` e `app.report_cycle` estão em
+**zero**. Nada foi entregue a gestor nenhum.
+
+### 🔴 A SPEC §1e mandava ler uma coluna que não pode responder
+
+*"Os dois leem `app.leave_period` com `category` de falta injustificada."* O check
+da coluna aceita `('vacation','leave_period','leave_of_absence','suspension')` — e
+**nenhum deles é falta**. Não é descuido: o comentário da tabela declara *"rótulo
+neutro por decisão de produto; motivo de leave_period é dado de saúde e não é
+capturado"*.
+
+📌 **É o mesmo padrão da §1b na S2**: a frase se falsifica lendo o repositório, e
+a sprint teria transcrito uma instrução impossível. Corrigida na SPEC.
+
+### Onde a falta vive de verdade — e por que ela não basta
+
+Espelho de produção, 62 afastamentos:
+
+| `JustificativaNome` | Linhas | Período |
+|---|---|---|
+| Férias | 43 | 07/2024 → 09/2026 |
+| Atested | 13 | 06/2025 → 04/2026 |
+| ATEST M | 4 | 03/2026 → 08/2026 |
+| AFASTAD | 1 | 07/2026 |
+| **FALTA** | **1** | **30–31/08/2025** |
+
+⚠️ **A distinção existe só como texto livre.** `AfastamentoId` foi conferido e é
+identificador de registro — **62 distintos em 62 linhas** —, não código de tipo.
+Sobra o `JustificativaNome`, digitado no Secullum do cliente e truncado em 7
+caracteres: `Atested` e `ATEST M` são o mesmo conceito escrito de dois jeitos.
+
+⛔ **E existe UMA falta em 26 meses.** Mesmo com toda a canalização pronta, a
+reconciliação de um mês recente compararia **zero faltas contra zero faltas**: o
+gate passaria sem provar a única regra que a SPEC chama de mais perigosa.
+
+### As duas decisões do dono, 06/09
+
+**1. Promover o espelho com curadoria.** `secullum."FuncionarioAfastamento"` →
+`app.leave_period`, com mapa `JustificativaNome` → categoria e migration nova
+acrescentando a categoria de falta ao check. A regra é a de
+`app.payroll_event_map` (migration 30), que já resolve exatamente este problema:
+**string não curada não entra em cálculo — falha alto em vez de virar "sem
+falta"**. Silêncio aqui não é neutro: ele dá VT a quem faltou.
+
+**2. O gate vira reconciliação + falta sintética.** A reconciliação linha a linha
+roda sobre o mês real (janela, dias úteis, tarifa, total); **a regra de falta é
+exercitada por fixture sintética** com casos construídos — falta no mês civil
+anterior, admissão no meio do período, desligamento no meio. Prova o mecanismo
+sem depender de o cliente ter faltado.
+
+⛔ **O que continua faltando, e não é código:** um **mês fechado do legado** para
+a metade da reconciliação. Sem ele a apuração é auto-consistente e não
+comprovada. Fica como item de aceite **aberto** do S3 — o sprint entrega o
+mecanismo provado por fixture; o "linha a linha" fecha quando o mês chegar.
+Registrar como fechado sem isso seria o falso verde que esta etapa passou o S1
+inteiro caçando.
+
+## S3, ciclo 1 — a porta que paga não exigia o ciclo congelado
+
+`code-reviewer`: **REPROVADO**, ciclo 1 de 3. Portões conferidos: **501 passed**
+(era 439), ruff limpo em 92 arquivos, `SUÍTE COMPLETA OK` com 45 migrations.
+
+### 🔴 O achado ALTO, e ele desmonta a própria maquinaria da sprint
+
+`routers/dp.py` não guarda `status` em nenhum ponto do caminho de export. Medido
+ao vivo, e reconferido depois contra a árvore restaurada:
+
+```
+status do ciclo: draft · HTTP 200 / 200
+arquivo 1: 1001;Ana Ribeiro;341;0001;987654321;checking;161.50
+arquivo 2: 1001;Ana Ribeiro;341;0001;987654321;checking;1881.00
+```
+
+**O mesmo ciclo, a mesma pessoa, dois arquivos de banco diferentes**, porque
+reapurar um rascunho apaga e reinsere as linhas — depois de a primeira remessa já
+ter saído.
+
+📌 É literalmente o que o docstring do congelamento diz que não pode acontecer:
+*"reapurar aqui deixaria o número da tela e o número da remessa dependerem de o
+dado não ter mudado no meio"*. **Toda a maquinaria de imutabilidade — gatilho,
+garantia, sessenta linhas de justificativa na migration — protege o ciclo
+congelado, e a porta que paga não exige que ele esteja congelado.** E o teste do
+caminho feliz exporta de um rascunho: **o teste que existe é o defeito.**
+
+### 🔴 O segundo ALTO é reincidência exata do ciclo 1 do S1
+
+`_vinculo_na_janela`: apagando o recorte de `terminated_on`, os **62 testes
+passam**. O teste que deveria pegar não pega porque a fixture já entrega a escala
+terminando no fim do mês — a redução vem da escala, não do recorte. O par do lado
+da **admissão** existe e é forte; o espelho dele nunca foi escrito. `_cobertura`
+tem a mesma assimetria.
+
+📌 Terceira vez nesta etapa que uma metade de uma regra datada fica sem asserção
+enquanto a outra tem. **Vale como item de checklist para S4 e S5: toda regra com
+duas pontas precisa das duas asserções, e a que falta é sempre a de baixo.**
+
+### O que o revisor atacou e NÃO achou defeito
+
+- **A união das duas fontes de falta está correta.** Mutou `merge_absence_days`
+  para somar por fonte em vez de unir por dia → vermelho, com o positivo ao lado
+  (`fontes diferentes somam dias diferentes`). ⚠️ E a assimetria é o que torna a
+  recusa possível: o espelho é lido **cru** (a curadoria classifica em Python)
+  enquanto o domínio já vem curado e pode filtrar no `where`.
+- **Cinco das seis regras de leitura são transcrição fiel**, incluindo a recusa
+  quando `expected_workday` não cobre o vínculo: *"dia sem linha não é dia sem
+  expediente; tratá-lo como zero paga a menos sem sintoma"*.
+- **A conta bancária não escapa** por log, mensagem de erro, nome de arquivo nem
+  trilha — os quatro caminhos conferidos. A remessa exige `banking` e,
+  corretamente, **não** exige admin: `accounting` confere sem apurar.
+- **Os dois resíduos do S1 foram fechados de verdade** — reaplicou a mutação que
+  passava verde no ciclo 2 do S1 (apagar o `rounding=`) e agora ela fica vermelha.
+
+### ✅ A janela de falta da cesta — confirmada pelo dono
+
+Era o único item que o revisor marcou como **interpretação, não transcrição**: a
+SPEC escreve a janela só para o VT e o `ANEXO` §4.2 não nomeia o período da
+cesta. ✅ **Dono, 06/09: a cesta conta no mesmo mês civil anterior que o VT.** Uma
+regra só para as duas rotinas — a segunda cópia é a que diverge. Nenhum código
+muda; o que muda é o estatuto da linha.
+
+## ⛔ Incidente de 06/09/2026 — um revisor destruiu um arquivo não versionado
+
+O `code-reviewer`, ao restaurar `backend/operax/dp/beneficios.py` depois de uma
+mutação, **copiou por cima a versão do S1** em vez da do S3. Arquivo não
+versionado: o git não recupera.
+
+**Medido por quem orquestra, não aceito do relato:** 705 linhas, zero ocorrências
+dos cinco símbolos do S3, `3 failed / 498 passed`. O `.pyc` foi recompilado a
+partir da versão errada — `strings` nele não acha nenhum símbolo. Sem recuperação
+por ali. O `find` do revisor achou três caminhos e os três eram **o mesmo inode**
+(vistas de WSL, não cópias).
+
+✅ **Resolvido:** o implementador reescreveu os cinco símbolos a partir dos três
+testes vermelhos, que sobreviveram e serviram de especificação. O arquivo voltou
+com **as duas camadas** — as correções do S1 (arredondamento, vínculo datado,
+`quantity`) e a superfície do S3 —, e o revisor conferiu marcador por marcador.
+501 passed.
+
+### 📌 A causa é de desenho, e é de quem despacha
+
+Um revisor com ferramenta de escrita, mutando arquivos **não versionados** para
+medir, é uma armadilha montada no despacho — não um descuido dele. Três coisas
+mudam a partir daqui:
+
+1. **Quem muta arquivo alheio confere o `sha256` contra o original ao restaurar.**
+   O implementador do S1 já fazia isso por conta própria em 06/09; passa a ser
+   instrução no despacho, não virtude individual.
+2. **Trabalho aprovado é commitado antes de a próxima sprint começar.** O S1
+   estava aprovado e não versionado quando o S3 começou; se estivesse em git, o
+   estrago seria `git checkout` e não uma reescrita.
+3. ✅ **O revisor reportou o próprio estrago em primeiro lugar**, com a superfície
+   exata para restaurar, e reconferiu os dois ALTO contra a árvore restaurada para
+   o veredito não repousar em medição feita sobre o arquivo quebrado. É o
+   comportamento certo, e é o que tornou o incidente barato.
+
+## S3 aprovado — e o critério de despacho que o guardião derrubou
+
+`code-reviewer` **APROVADO** (ciclo 2). `guardiao-de-superficie` **APROVADO**, na
+segunda passada. ✅ **As cinco policies de RLS autorizadas pelo dono em 06/09**,
+como estão.
+
+**Passada final do guardião, com a árvore congelada por hash ANTES de medir:**
+
+```
+ANTES : e25f6b46…  DEPOIS: e25f6b46…   >>> os dois portões mediram a MESMA árvore
+db-test exit=0 · 357 asserções · SUÍTE COMPLETA OK · 519 passed
+```
+
+### 🔴 O item 7 do despacho era inenunciável — e a causa vale para S4 e S5
+
+O critério que **quem orquestra** escreveu (*"supervisor não vê ciclo de outra
+unidade e vê o da dele"*) **não tem como ser verdadeiro** nas tabelas do S3, e o
+guardião o derrubou com medição. O revisor conferiu as três premissas na fonte:
+
+1. `unit_supervisor` **não tem domínio sensível nenhum** — `compensation` já o
+   barra, então ele não vê a linha da unidade dele **nem** a da outra.
+2. `app.benefit_cycle` **não tem coluna de unidade** — o ciclo é do tenant, e
+   "ciclo de outra unidade" não existe como objeto.
+3. 📌 **A que fecha o argumento:** `util.can_see_employee` e `util.can_see_unit`
+   **curto-circuitam em `util.is_admin`**. Para `owner`/`hr`/`personnel` o eixo de
+   unidade é **inerte**. Sobra **um** papel no produto em que ele decide algo
+   nestas tabelas: `accounting`.
+
+A reenunciação pelo `accounting` não é troca de conveniência — é o único lugar
+onde a pergunta tem resposta. Medida com controle, dentro de savepoint:
+
+```
+com escopo do tenant, LÊ A Centro (1) e A Norte (1)     <- o positivo
+recortado em A Centro, VÊ A Centro (1), NÃO vê A Norte (0)  <- o eixo discrimina
+o CICLO não tem eixo de unidade: segue visível (1)      <- a assimetria, declarada
+desfeito o recorte, A Norte volta (1)                   <- o controle
+```
+
+⚠️ **E ele não abandonou o supervisor** — aplicou-o em `app.work_post`, onde é
+expressível, e no S3 enunciou a verdade (*"não vê nem o da unidade dele"*) em vez
+da meia-verdade, que seria verdadeira e vazia.
+
+📌 **A forma geral, para não redescobrir em S4 e S5:** *o eixo de unidade é
+exercido pelo papel que tem o domínio da tabela **e** não está na lista curta de
+`util.can_see_unit`. Se nenhum papel satisfaz as duas coisas, a tabela **não tem**
+eixo de unidade e o item é inaplicável — **declare isso** em vez de escrever um
+par impossível.*
+
+### ⛔ Dois dos cinco motivos da reprovação eram de quem orquestra
+
+O guardião reprovou por cinco motivos, todos bem medidos. **Dois não eram de quem
+implementou, e ele não tinha como saber:**
+
+1. *"Entregou vermelho"* — os três testes falhando eram os que o **revisor**
+   derrubou ao destruir `beneficios.py`. O implementador entregou com **501
+   verdes**. Medição certa, atribuição impossível.
+2. *"A árvore se moveu sob o gate"* — quatro arquivos de produção mudaram durante
+   as medições dele porque **quem orquestra despachou guardião e revisor em
+   paralelo e ainda mandou o implementador corrigir enquanto ele media.**
+
+📌 **E o achado de método da rodada é dele:** *mtime não serve de registro de
+mudança* — o de `beneficios.py` era **anterior** ao `grep` que provou a ausência
+do símbolo. **Congelar por hash antes de medir** passa a ser instrução no
+despacho, e foi o que ele fez na segunda passada.
+
+Os motivos 3 e 4 (zero asserção no `98`/`99`; varredura de conta em 3 de 11 rotas)
+ele mesmo corrigiu — 58 asserções e `test_dp_gate_s3.py` —, e **pediu que fossem
+revistas por outro**, que é o pedido certo. O revisor mediu por diferença: o `98`
+tinha **110** no S1 e tem **168** agora; delta de 58, `700 / 0`. Aprovadas.
+
+### A pergunta que fica registrada como decisão, não como acidente
+
+✅ **Dono, 06/09: as cinco policies ficam como estão.** `leave_justification_map_admin`
+é `ALL` + `is_admin` — **`app.payroll_event_map` palavra por palavra**, conferido
+na fonte pelos dois revisores.
+
+⚠️ **Consequência declarada:** `accounting` tem `compensation` e **não lê o mapa
+que classificou as faltas da folha que ele concilia**. Em `payroll_event_map` isso
+é inócuo porque lá o conferente não é auditado contra o mapa; aqui a curadoria
+decide quem perde cesta e quantos dias de VT cada um recebe. Fica revisável
+quando o `accounting` precisar auditar a curadoria — e fica **escrito**.
+
+### O que o S3 NÃO fechou, e está declarado
+
+- ⛔ **A reconciliação linha a linha contra o legado continua ABERTA** — falta o
+  mês fechado do cliente. Não foi fechada por baixo, e nenhum legado sintético foi
+  inventado. Conferido pelo revisor.
+- ⛔ **S3 nasce inerte em produção, por dois bloqueios independentes:**
+  `app.leave_justification_map` nasce vazia e **não há rota para curá-la**; e
+  `app.expected_workday` cobre ~6 dias, então a apuração de VT **recusa**. ✅ O
+  revisor confirmou que recusar é o comportamento certo: *"dia sem linha não é dia
+  sem expediente; tratá-lo como zero paga a menos sem sintoma"*.
+- A metade de frontend (`frontend/src/app/dashboard/dp/`) não foi despachada.
+
+## Itens próprios abertos pelo S1 — fora do escopo de qualquer sprint desta etapa
+
+**A. 🔴 A matriz dono-do-campo do RH passou a mentir para o cliente.** As
+migrations do S1 criaram casa para sete das dez lacunas declaradas em
+`backend/operax/rh/ownership.py` (`SEM_COLUNA`): `nivel` diz *"`app.employee_position`
+tem só cargo"* e a coluna `level` agora existe; seis `beneficios_*`,
+`periculosidade` e `cargo_de_confianca` dizem *"`app.employee_compensation` tem só
+`salary`"*, que é exatamente o que `app.employee_benefit` + `app.benefit_type`
+resolveram — com os oito códigos da semente batendo um a um.
+
+⛔ **`backend/operax/rh/carga_inicial.py` imprime esse texto para o cliente
+durante a implantação.** A reconciliação da matriz é sprint própria; o texto
+errado ao cliente é o que não espera por ela.
+
+📌 **E a causa é a terceira aparição do mesmo cego:** `scripts/95_teste_matriz_rh.py`
+só recusa nome que esteja em `SEM_COLUNA` **e** na matriz — **nunca reclama de
+exceção que sobrou**. É o mesmo defeito do `verificar_docs.py` (que já custou
+duas exceções vencidas neste arquivo, corrigidas em 06/09) e do check 4 do `99`.
+Três ferramentas de guarda deste repositório suprimem e não reclamam de sobra.
+
+**B. `pg_default_acl` do schema `public` concede `authenticated=arwdDxtm` em
+tabelas.** Medido pelo guardião. O que separa isso de um vazamento total é **só o
+event trigger que bloqueia `CREATE TABLE` em `public`**. Anterior ao S1 e
+permanente — nada desta etapa o introduziu e nada desta etapa o remove.
+
+**C. A metade de frontend do S1 não existe.** `frontend/src/app/dashboard/administracao/`
+está na lista `Arquivos` do S1 e o despacho de 06/09 cobriu só o backend.
+Registrado para que "S1 fechado" não seja lido como "S1 inteiro".
 
 ## Arquivos por sprint
 
