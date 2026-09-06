@@ -6,11 +6,11 @@ lembrando de mascarar em cada rota nova: é o **tipo** que sai daqui.
 `MaskedBankAccount` não tem campo para o número completo, então uma rota futura
 que devolva o objeto inteiro continua devolvendo máscara — não há o que vazar.
 
-A única função que devolve o número inteiro é a que monta o arquivo de remessa,
-que escreve em `bytes` e nunca em JSON. **Ela ainda não existe** (é S3): nesta
-sprint existe a máscara, e é por isso que `_row_to_masked` é o único caminho de
-saída do `select`. Quando a remessa chegar, ela nasce aqui, ao lado, e não numa
-segunda cópia deste SQL espalhada pelo backend.
+A única função que devolve o número inteiro é a que alimenta o arquivo de
+remessa, que escreve em `bytes` e nunca em JSON. Ela chegou no S3 e nasceu aqui,
+ao lado, e não numa segunda cópia deste SQL espalhada pelo backend:
+`load_accounts` devolve `dict` cru **para `operax/dp/export.build_remittance` e
+para mais ninguém**. Todo o resto sai por `_row_to_masked`.
 
 ⚠️ A MÁSCARA NÃO É DA COLUNA
 No banco o número é inteiro, porque a remessa precisa dele. A fronteira é esta
@@ -40,6 +40,7 @@ completo ali seria a segunda cópia que este módulo existe para não permitir.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -145,6 +146,27 @@ _LOAD_SQL = """
       and a.tenant_id = %(tenant_id)s
 """
 
+# ⛔ O SEGUNDO — E ÚLTIMO — `select` QUE TRAZ O NÚMERO INTEIRO
+# Ele existe porque a remessa precisa de muitas contas de uma vez, e o docstring
+# deste módulo já prometia que ela nasceria aqui, ao lado, e não numa segunda
+# cópia deste SQL espalhada pelo backend. Quem o consome é
+# `operax/dp/export.build_remittance`, que escreve `bytes`.
+#
+# ⛔ CINCO COLUNAS, E A LISTA É CURTA DE PROPÓSITO
+# `holder_document` (CPF/CNPJ de TERCEIRO, quando a conta não é do próprio
+# colaborador) e `updated_at` saíram: nem o arquivo nem a trilha os usam. Este
+# módulo se sustenta em "a garantia é estrutural, não alguém lembrando de
+# mascarar" — e trazer coluna sensível sem consumidor enfraquece exatamente
+# isso, porque o `dict` cru atravessa dois módulos e a próxima pessoa a lê como
+# se fosse o que a remessa precisa. `select *` seria a mesma falha, escrita mais
+# curta.
+_LOAD_MANY_SQL = """
+    select a.employee_id, a.bank_code, a.branch, a.account, a.account_type
+    from app.employee_bank_account a
+    where a.tenant_id = %(tenant_id)s
+      and a.employee_id = any(%(employee_ids)s::uuid[])
+"""
+
 _UPSERT_SQL = """
     insert into app.employee_bank_account
       (employee_id, tenant_id, bank_code, branch, account, account_type,
@@ -191,6 +213,27 @@ async def resolve_employee(tenant: TenantContext, employee_id: UUID) -> UUID | N
         await scope.execute(_EMPLOYEE_SQL, {"employee_id": employee_id})
         row = await scope.fetchone()
     return row["id"] if row else None
+
+
+async def load_accounts(
+    tenant: TenantContext, employee_ids: Sequence[UUID]
+) -> list[dict[str, Any]]:
+    """As contas inteiras, para o arquivo de remessa. **Só para bytes.**
+
+    ⛔ ESTA É A ÚNICA FUNÇÃO DO PRODUTO QUE DEVOLVE O NÚMERO COMPLETO EM LOTE,
+    e ela devolve `dict`, não `MaskedBankAccount` — de propósito. O tipo
+    mascarado não tem campo para o número, então ele não serviria à remessa; e um
+    `dict` cru que escapasse para uma rota seria um vazamento silencioso. O que
+    impede isso não é esta docstring: é que o único consumidor é
+    `operax/dp/export.build_remittance`, cujo retorno é `bytes`, e
+    `tests/test_dp_ciclo.py` varre o JSON de todas as rotas atrás de `account`.
+
+    Quem não tem conta simplesmente não volta — a remessa o reporta pelo nome, e
+    uma linha com conta em branco é o que faz o banco recusar o arquivo inteiro.
+    """
+    async with tenant_scope(tenant) as scope:
+        await scope.execute(_LOAD_MANY_SQL, {"employee_ids": list(employee_ids)})
+        return [dict(linha) for linha in await scope.fetchall()]
 
 
 async def save_account(

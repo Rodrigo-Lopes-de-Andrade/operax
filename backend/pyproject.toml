@@ -23,6 +23,11 @@ dependencies = [
     "langchain-anthropic>=1.0",
     "langchain-openai>=1.0",
     "langchain-google-genai>=3.0",
+    # O PDF do ciclo mensal (`operax/dp/export.py`). Puro Python, sem compilar,
+    # e as fontes base cobrem pt-BR sem arquivo de fonte embutido — a mesma razao
+    # pela qual openpyxl entrou. Escrever um serializador de PDF a mao daria
+    # controle que esta tabela nao precisa e arquivos que leitor nenhum garante.
+    "fpdf2>=2.8",
 ]
 
 [dependency-groups]

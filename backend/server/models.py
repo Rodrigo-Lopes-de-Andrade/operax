@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from operax.core.tenant import UserRole
 
@@ -917,6 +917,292 @@ class BankAccountMasked(BaseModel):
     account_type: str
     holder_document: str | None = None
     updated_at: datetime
+
+
+class WorkPostCreate(BaseModel):
+    """Um posto novo no Quadro. `active` não está aqui: posto nasce ativo.
+
+    O código é único por `(tenant, unidade)` no banco — a frase da tela de VT
+    ("a escala é obtida do Quadro de Postos: código do posto + unidade") virando
+    constraint. O 409 que a rota devolve é essa constraint traduzida.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    unit_id: UUID
+    #: "7703" no legado. O teto é folga sobre o que a origem usa; a coluna é
+    #: `text` e quem recusa por último continua sendo o banco.
+    code: str = Field(min_length=1, max_length=40)
+    name: str | None = Field(default=None, max_length=120)
+
+
+class WorkPostPatch(BaseModel):
+    """O que muda num posto: o rótulo e a operação. Nunca o código, nunca a unidade.
+
+    ⛔ **Não há como apagar.** Posto sai de operação com `active = false`, porque
+    o ciclo de VT do mês passado aponta para ele — regra 6 do projeto estendida
+    ao cadastro. Mudar o código quebraria o histórico do mesmo jeito, e por isso
+    ele também não está aqui.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    active: bool | None = None
+
+    @model_validator(mode="after")
+    def _algo_a_mudar(self) -> WorkPostPatch:
+        # Corpo vazio é 422, não 200: um `PATCH` que não pede nada e responde
+        # sucesso faz a tela acreditar que gravou.
+        if self.name is None and self.active is None:
+            raise ValueError("informe `name` ou `active` — não há o que alterar")
+        return self
+
+
+class WorkPostRow(BaseModel):
+    """Um posto, com o nome da unidade já resolvido para a tela."""
+
+    id: UUID
+    unit_id: UUID
+    unit_name: str
+    code: str
+    name: str | None = None
+    active: bool
+    created_at: datetime
+
+
+class WorkPostList(BaseModel):
+    """O Quadro das unidades que quem pergunta enxerga — ativos e inativos.
+
+    `can_write` é cortesia para esconder o botão, não segurança: as rotas de
+    escrita recusam por conta própria.
+    """
+
+    rows: list[WorkPostRow]
+    can_write: bool
+
+
+class BenefitTypeRow(BaseModel):
+    """Uma verba do catálogo. `composes_base` é a definição do KPI, não um rótulo."""
+
+    code: str
+    name: str
+    #: Entra na folha salarial base. Mudar isto muda o número da tela.
+    composes_base: bool
+    #: `fixed_amount` | `salary_rate`. O segundo é o mecanismo do triênio.
+    calculation: str
+    domain: str
+    active: bool
+
+
+class BenefitPlanRow(BaseModel):
+    """A vigência de plano que valia na data consultada."""
+
+    id: UUID
+    benefit_type_code: str
+    code: str
+    provider: str
+    name: str
+    amount: Decimal
+    effective_from: date
+    effective_to: date | None = None
+    reason: str | None = None
+
+
+class TransportFareRow(BaseModel):
+    """A vigência de tarifa que valia na data consultada.
+
+    `kind` faz parte da identidade: a unitária e a ida-e-volta sobem separadas,
+    porque integração e desconto de linha quebram a conta de "duas vezes".
+    """
+
+    id: UUID
+    code: str
+    name: str
+    kind: str
+    amount: Decimal
+    effective_from: date
+    effective_to: date | None = None
+    reason: str | None = None
+
+
+class BenefitCatalog(BaseModel):
+    """O catálogo **numa data**, e nunca "o catálogo".
+
+    Preço tem vigência: perguntar sem data é perguntar por hoje e receber a
+    resposta certa por acidente no dia seguinte ao reajuste.
+    """
+
+    on: date
+    types: list[BenefitTypeRow]
+    plans: list[BenefitPlanRow]
+    fares: list[TransportFareRow]
+    can_write: bool
+
+
+class BenefitAdjustment(BaseModel):
+    """Um reajuste: **nova vigência**, nunca edição do valor publicado.
+
+    Não existe campo para o valor antigo, para a data de fim da faixa que sai ou
+    para o id da linha a alterar — e a ausência é o desenho. O que se envia é
+    "desde, valor, motivo", que é exatamente a tela de Reajuste do legado; o
+    resto o backend deriva da faixa aberta.
+
+    `kind` só existe para tarifa, e é obrigatório lá: sem ele o reajuste da
+    unitária subiria a ida-e-volta junto.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    target: Literal["plan", "fare"]
+    code: str = Field(min_length=1, max_length=60)
+    kind: Literal["single", "round_trip"] | None = None
+    effective_from: date
+    amount: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
+    reason: str | None = Field(default=None, max_length=200)
+
+    @model_validator(mode="after")
+    def _kind_combina_com_o_alvo(self) -> BenefitAdjustment:
+        if self.target == "fare" and self.kind is None:
+            raise ValueError("tarifa exige `kind`: single ou round_trip")
+        if self.target == "plan" and self.kind is not None:
+            raise ValueError("plano não tem `kind`")
+        return self
+
+
+class AdjustedBandRow(BaseModel):
+    """A vigência que nasceu, e a que ela fechou.
+
+    As duas voltam juntas porque é a frase que o gestor confere na tela:
+    "R$ 4,80 até 31/08, R$ 5,10 a partir de 01/09". `previous_amount` sai da
+    linha antiga **depois** do fechamento — é a prova de que ela manteve o valor
+    que valeu.
+    """
+
+    target: Literal["plan", "fare"]
+    id: UUID
+    code: str
+    kind: str | None = None
+    name: str
+    amount: Decimal
+    effective_from: date
+    reason: str | None = None
+    previous_id: UUID
+    previous_amount: Decimal
+    previous_effective_to: date
+
+
+class BenefitPlanCreate(BaseModel):
+    """A PRIMEIRA vigência de um plano. Reajuste é outra rota, e de propósito.
+
+    Não há `effective_to` aqui: uma vigência nasce aberta, e a data de fim é
+    escrita pelo reajuste que a substitui. Um campo de fim no formulário de
+    criação convidaria a cadastrar um preço que já nasce vencido.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    #: `health_plan`, `dental_plan`… a verba do catálogo a que este plano pertence.
+    benefit_type_code: str = Field(min_length=1, max_length=60)
+    code: str = Field(min_length=1, max_length=60)
+    provider: str = Field(min_length=1, max_length=120)
+    name: str = Field(min_length=1, max_length=120)
+    effective_from: date
+    amount: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class TransportFareCreate(BaseModel):
+    """A PRIMEIRA vigência de uma tarifa. `kind` faz parte da identidade.
+
+    A unitária e a ida-e-volta entram em duas chamadas: `round_trip` não é sempre
+    duas vezes `single`, e deduzir uma da outra inventaria o preço que o apurador
+    de vale transporte multiplica por dias líquidos.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    code: str = Field(min_length=1, max_length=60)
+    name: str = Field(min_length=1, max_length=120)
+    kind: Literal["single", "round_trip"]
+    effective_from: date
+    amount: Decimal = Field(ge=0, max_digits=12, decimal_places=2)
+    reason: str | None = Field(default=None, max_length=200)
+
+
+class NewBandRow(BaseModel):
+    """A vigência que nasceu. Sem `previous_*`: não havia nada antes dela."""
+
+    target: Literal["plan", "fare"]
+    id: UUID
+    code: str
+    kind: str | None = None
+    name: str
+    amount: Decimal
+    effective_from: date
+    reason: str | None = None
+
+
+class CycleRequest(BaseModel):
+    """Que competência apurar. Três campos, e a janela é derivada deles.
+
+    ⛔ Não há `window_start`/`window_end` no pedido, e a ausência é o desenho: a
+    janela 21 → 20 é regra do cliente transcrita da tela, não parâmetro. Aceitá-la
+    do formulário deixaria alguém apurar setembro com a janela de agosto e o
+    número sairia plausível.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    kind: Literal["food_basket", "transport_voucher"]
+    period_year: int = Field(ge=2000, le=2100)
+    period_month: int = Field(ge=1, le=12)
+
+
+class CycleEntitlementRow(BaseModel):
+    """A linha por pessoa, como a tela a mostra.
+
+    ⛔ NÃO HÁ CAMPO DE CONTA BANCÁRIA, e é isso que faz a regra 10 do `PRD-DP.md`
+    valer nesta rota. O número existe só dentro do arquivo de remessa, em `bytes`.
+    """
+
+    employee_id: UUID
+    name: str
+    registration_number: str | None = None
+    unit_id: UUID | None = None
+    unit_name: str | None = None
+    entitled: bool
+    #: Qual das duas causas tirou o direito. A pessoa vai perguntar.
+    reason: str | None = None
+    #: As quatro seguintes ficam nulas para cesta: ela não tem janela nem dias.
+    days_base: int | None = None
+    absences_prior: int | None = None
+    net_days: int | None = None
+    unit_amount: Decimal | None = None
+    round_trip_amount: Decimal | None = None
+    total_amount: Decimal | None = None
+
+
+class CycleView(BaseModel):
+    """A competência apurada — em rascunho ou congelada.
+
+    `status` viaja porque a tela precisa dele para decidir se ainda dá para
+    reapurar: `draft` reapura, `generated` não, e a diferença é a regra 9 do PRD.
+    """
+
+    id: UUID | None = None
+    kind: Literal["food_basket", "transport_voucher"]
+    period_year: int
+    period_month: int
+    window_start: date
+    window_end: date
+    #: Dias com expediente na janela. Cabeçalho; não entra em nenhuma conta.
+    business_days: int | None = None
+    status: str
+    entitled_count: int
+    denied_count: int
+    total_amount: Decimal
+    rows: list[CycleEntitlementRow]
 
 
 class AssistantQuestion(BaseModel):

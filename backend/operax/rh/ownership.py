@@ -191,8 +191,12 @@ ENUMS: dict[tuple[str, str], frozenset[str]] = {
         {"pre_employment", "periodic", "exit", "return_to_work_exam", "job_change"}
     ),
     ("occupational_exam", "result"): frozenset({"fit", "unfit", "fit_with_restriction"}),
+    # ⛔ A quinta chegou com a migration `dp_leave_category` (06/09/2026), e ela
+    #    é a única categoria que vale dinheiro: cesta e vale transporte a leem.
+    #    `scripts/95_teste_matriz_rh.py` reprova se esta lista e o `check` do
+    #    banco divergirem — foi ele que exigiu esta linha no mesmo PR.
     ("leave_period", "category"): frozenset(
-        {"vacation", "leave_period", "leave_of_absence", "suspension"}
+        {"vacation", "leave_period", "leave_of_absence", "suspension", "unjustified_absence"}
     ),
     ("workforce_movement", "type"): frozenset(
         {"hire", "termination", "transfer", "promotion", "leave_period", "return_to_work"}
