@@ -298,6 +298,34 @@ class Cycle:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class CycleSummary:
+    """A competência sem as linhas — o que a lista de ciclos mostra.
+
+    ⛔ SEM `rows`, E A AUSÊNCIA É O DESENHO. Vinte e quatro competências de 176
+    pessoas são 4.200 linhas para uma tela que só precisa saber qual mês está
+    pendente. Quem quer a linha por pessoa abre a competência.
+
+    ⚠️ Os três agregados são calculados pelo BANCO aqui e por `Cycle` em Python
+    lá — duas contas para o mesmo número, que é a forma que diverge. O que as
+    prende juntas é `test_o_resumo_da_lista_bate_com_o_detalhe_do_ciclo`: ele
+    compara o resumo desta lista com o detalhe da mesma competência, campo a
+    campo. Sem esse teste, esta classe seria a segunda cópia sem guarda.
+    """
+
+    id: UUID
+    kind: str
+    period_year: int
+    period_month: int
+    window_start: date
+    window_end: date
+    business_days: int | None
+    status: str
+    entitled_count: int
+    denied_count: int
+    total_amount: Decimal
+
+
 def _vinculo_na_janela(
     employee: Mapping[str, Any], window_start: date, window_end: date
 ) -> tuple[date, date]:
@@ -858,6 +886,82 @@ async def load_cycle(tenant: TenantContext, cycle_id: UUID) -> Cycle | None:
         status=cabecalho["status"],
         lines=tuple(linhas),
     )
+
+
+# ⛔ UMA CONSULTA, E OS AGREGADOS VÊM DO BANCO
+# `left join lateral` e não subconsulta por coluna: as três contagens saem da
+# mesma varredura das linhas, e uma competência recém-criada sem linha nenhuma
+# ainda aparece na lista — com zero, que é a verdade, em vez de sumir.
+#
+# Os quatro filtros são opcionais na mesma forma que `postos._LIST_SQL` usa: o
+# `or` mora dentro do próprio parêntese, longe do predicado de tenant.
+_LIST_CYCLES_SQL = """
+    select c.id, c.kind, c.period_year, c.period_month, c.window_start, c.window_end,
+           c.business_days, c.status,
+           coalesce(agg.entitled_count, 0) as entitled_count,
+           coalesce(agg.denied_count, 0)   as denied_count,
+           coalesce(agg.total_amount, 0)   as total_amount
+    from app.benefit_cycle c
+    left join lateral (
+        select count(*) filter (where b.entitled)     as entitled_count,
+               count(*) filter (where not b.entitled) as denied_count,
+               sum(b.total_amount)                    as total_amount
+        from app.benefit_entitlement b
+        where b.cycle_id = c.id and b.tenant_id = c.tenant_id
+    ) agg on true
+    where c.tenant_id = %(tenant_id)s
+      and (%(kind)s::text is null      or c.kind = %(kind)s::text)
+      and (%(status)s::text is null    or c.status = %(status)s::text)
+      and (%(period_year)s::int is null  or c.period_year = %(period_year)s::int)
+      and (%(period_month)s::int is null or c.period_month = %(period_month)s::int)
+    order by c.period_year desc, c.period_month desc, c.kind, c.status
+"""
+
+
+async def list_cycles(
+    tenant: TenantContext,
+    *,
+    kind: str | None = None,
+    status: str | None = None,
+    period_year: int | None = None,
+    period_month: int | None = None,
+) -> list[CycleSummary]:
+    """As competências do tenant, da mais recente para a mais antiga.
+
+    Existe porque o `id` do ciclo só nascia na resposta do `POST` — recarregar a
+    página perdia o ciclo congelado, e reencontrá-lo obrigava a apurar de novo,
+    o que **cria um segundo rascunho ao lado do gerado** (o `unique` inclui o
+    `status`). E porque `accounting`, que baixa a remessa sem ser admin, não
+    tinha por onde chegar a um ciclo.
+    """
+    async with tenant_scope(tenant) as scope:
+        await scope.execute(
+            _LIST_CYCLES_SQL,
+            {
+                "kind": kind,
+                "status": status,
+                "period_year": period_year,
+                "period_month": period_month,
+            },
+        )
+        linhas = await scope.fetchall()
+
+    return [
+        CycleSummary(
+            id=linha["id"],
+            kind=linha["kind"],
+            period_year=linha["period_year"],
+            period_month=linha["period_month"],
+            window_start=linha["window_start"],
+            window_end=linha["window_end"],
+            business_days=linha["business_days"],
+            status=linha["status"],
+            entitled_count=linha["entitled_count"],
+            denied_count=linha["denied_count"],
+            total_amount=Decimal(str(linha["total_amount"])),
+        )
+        for linha in linhas
+    ]
 
 
 async def freeze(tenant: TenantContext, cycle_id: UUID) -> Cycle:

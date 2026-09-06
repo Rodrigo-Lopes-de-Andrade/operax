@@ -871,6 +871,14 @@ class FakeDB:
         if "from app.transport_fare f" in sql:
             return [dict(linha) for linha in self._do_tenant(self.tarifas, params)]
 
+        # ⛔ ANTES das duas abaixo, e por dois motivos: a listagem lê
+        #    `from app.benefit_cycle c` (que `_ciclo` despacha esperando outros
+        #    parâmetros) E cita `from app.benefit_entitlement b` DENTRO do
+        #    lateral dos agregados. Testar o trecho mais específico primeiro é o
+        #    que impede o dublê de responder a consulta errada — e a resposta
+        #    errada aqui é um KeyError, que ao menos é barulhento.
+        if "left join lateral" in sql:
+            return self._listar_ciclos(sql, params)
         if "from app.benefit_entitlement b" in sql:
             return self._linhas_do_ciclo(params)
         if "from app.benefit_cycle c" in sql:
@@ -1018,6 +1026,62 @@ class FakeDB:
             and c["period_month"] == params["period_month"]
             and c["status"] == params["draft"]
         ]
+
+    def _listar_ciclos(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """A lista com os agregados.
+
+        ⛔ RAMIFICA NO TEXTO DO STATEMENT, E NÃO POR CONTA PRÓPRIA
+        A primeira versão aplicava os quatro filtros e contava `entitled`
+        sempre — e aí três mutações passaram VERDES: tornar os filtros uma
+        tautologia, tirar o `filter (where b.entitled)` dos agregados e soltar o
+        tenant do lateral. Um fake que decide sozinho nunca contradiz a consulta;
+        é a mesma objeção que o ciclo 1 do S1 fez ao dublê do vínculo.
+        """
+        saida = []
+        for c in self._do_tenant(self.ciclos, params):
+            for campo, coluna in (
+                ("kind", "kind"),
+                ("status", "status"),
+                ("period_year", "period_year"),
+                ("period_month", "period_month"),
+            ):
+                # Só filtra pelo que a consulta de fato compara.
+                if f"c.{coluna} = %({campo})s" not in sql:
+                    continue
+                if params[campo] is not None and c[coluna] != params[campo]:
+                    break
+            else:
+                linhas = [
+                    linha
+                    for linha in self.linhas
+                    if linha["cycle_id"] == c["id"]
+                    # O lateral só recorta por tenant se o SQL disser.
+                    and (
+                        "b.tenant_id = c.tenant_id" not in sql
+                        or linha["tenant_id"] == c["tenant_id"]
+                    )
+                ]
+                com_direito = (
+                    [linha for linha in linhas if linha["entitled"]]
+                    if "count(*) filter (where b.entitled)" in sql
+                    else linhas
+                )
+                saida.append(
+                    {
+                        **c,
+                        "entitled_count": len(com_direito),
+                        "denied_count": sum(1 for linha in linhas if not linha["entitled"]),
+                        "total_amount": sum(
+                            (
+                                linha["total_amount"]
+                                for linha in linhas
+                                if linha["total_amount"] is not None
+                            ),
+                            start=Decimal("0"),
+                        ),
+                    }
+                )
+        return sorted(saida, key=lambda c: (-c["period_year"], -c["period_month"], c["kind"]))
 
     def _criar_ciclo(self, params: dict[str, Any]) -> list[dict[str, Any]]:
         linha = {
@@ -1637,6 +1701,245 @@ def test_a_trilha_da_remessa_guarda_a_mascara_e_nunca_o_numero(
     assert CONTA not in texto
     assert "•••• 4321" in texto
     assert ciclo_id in texto
+
+
+# ---------------------------------------------------------------------------
+# 8-bis. A lista de competências, e o eixo que a tela precisa
+# ---------------------------------------------------------------------------
+def listar(client: TestClient, issue_token: Any, **filtros: Any):
+    return client.get("/dp/ciclos", params=filtros, headers=cabecalho(issue_token))
+
+
+def test_a_lista_reencontra_o_ciclo_congelado_sem_apurar_de_novo(
+    client: TestClient, issue_token: Any, fake_db: FakeDB
+) -> None:
+    """⛔ SEM ESTA ROTA, O `id` SÓ NASCIA NA RESPOSTA DO `POST`.
+
+    Recarregar a página perdia o ciclo congelado, e reencontrá-lo obrigava a
+    apurar de novo — o que cria um SEGUNDO rascunho ao lado do gerado, porque o
+    `unique` da competência inclui o `status`. Duas competências do mesmo mês na
+    tela é a confusão que faz alguém exportar a errada.
+    """
+    cenario_vt(fake_db)
+    ciclo_id = apurar_e_gerar(client, issue_token)
+
+    resposta = listar(client, issue_token, ano=ANO, mes=MES, kind="transport_voucher")
+    assert resposta.status_code == 200
+    corpo = resposta.json()
+    assert [linha["id"] for linha in corpo["rows"]] == [ciclo_id]
+    assert corpo["rows"][0]["status"] == "generated"
+    # E nenhum rascunho novo nasceu: a lista não apura.
+    assert len(fake_db.ciclos) == 1
+
+
+def test_o_resumo_da_lista_bate_com_o_detalhe_do_ciclo(
+    client: TestClient, issue_token: Any, fake_db: FakeDB
+) -> None:
+    """⛔ OS AGREGADOS SÃO CONTADOS DUAS VEZES — pelo SQL e por `Cycle`, em Python.
+
+    Duas contas para o mesmo número é a forma que diverge. Esta asserção é o que
+    as prende juntas: qualquer uma que mude sozinha faz o resumo e o detalhe da
+    MESMA competência deixarem de bater.
+    """
+    cenario_vt(fake_db)
+    fake_db.semear_pessoa(pessoa(BRUNO, "Bruno Alves", hired_on=date(2026, 9, 15)))
+    fake_db.semear_escala(escala(date(2026, 9, 15), VT_FIM, employee_id=BRUNO))
+    fake_db.semear_atribuicao(atribuicao(employee_id=BRUNO))
+
+    detalhe = apurar(client, issue_token).json()
+    resumo = listar(client, issue_token).json()["rows"][0]
+
+    for campo in (
+        "id",
+        "kind",
+        "period_year",
+        "period_month",
+        "window_start",
+        "window_end",
+        "business_days",
+        "status",
+        "entitled_count",
+        "denied_count",
+    ):
+        assert resumo[campo] == detalhe[campo], campo
+    assert Decimal(str(resumo["total_amount"])) == Decimal(str(detalhe["total_amount"]))
+    # O positivo: os agregados não são todos zero — uma comparação de zeros
+    # bateria sem provar conta nenhuma.
+    assert resumo["entitled_count"] == 2
+    assert Decimal(str(resumo["total_amount"])) > 0
+
+
+def test_a_lista_nao_carrega_a_linha_por_pessoa(
+    client: TestClient, issue_token: Any, fake_db: FakeDB
+) -> None:
+    """Vinte e quatro competências de 176 pessoas seriam 4.200 linhas na tela."""
+    cenario_remessa(fake_db)
+    apurar_e_gerar(client, issue_token)
+
+    resposta = listar(client, issue_token)
+    assert "rows" not in resposta.json()["rows"][0]
+    assert "name" not in resposta.json()["rows"][0]
+    assert CONTA not in resposta.text
+
+
+@pytest.mark.parametrize(
+    ("filtro", "acha"),
+    [
+        ({"ano": ANO, "mes": MES}, True),
+        ({"ano": ANO, "mes": 8}, False),
+        ({"ano": 2025}, False),
+        ({"kind": "transport_voucher"}, True),
+        ({"kind": "food_basket"}, False),
+        ({"situacao": "generated"}, True),
+        ({"situacao": "draft"}, False),
+        ({}, True),
+    ],
+)
+def test_a_lista_filtra_por_competencia_e_situacao(
+    client: TestClient, issue_token: Any, fake_db: FakeDB, filtro: dict[str, Any], acha: bool
+) -> None:
+    cenario_vt(fake_db)
+    apurar_e_gerar(client, issue_token)
+
+    encontrados = listar(client, issue_token, **filtro).json()["rows"]
+    assert bool(encontrados) is acha
+
+
+def test_o_resumo_separa_quem_tem_direito_de_quem_perdeu(
+    client: TestClient, issue_token: Any, fake_db: FakeDB
+) -> None:
+    """⛔ O `filter (where b.entitled)` do agregado, exercitado.
+
+    Sem ele os dois contadores viram o mesmo número e a lista diz "142 com
+    direito" sobre uma competência em que 30 perderam. `test_o_resumo_da_lista_bate_com_o_detalhe`
+    não pega sozinho: numa competência em que ninguém perde, contar todos e
+    contar os com direito dá o mesmo.
+    """
+    cenario_vt(fake_db)
+    # Bruno perde: admitido depois, sem dias líquidos suficientes na janela.
+    fake_db.semear_pessoa(pessoa(BRUNO, "Bruno Alves", hired_on=date(2026, 9, 18)))
+    fake_db.semear_escala(escala(date(2026, 9, 18), VT_FIM, employee_id=BRUNO))
+    fake_db.semear_atribuicao(atribuicao(employee_id=BRUNO))
+    fake_db.afastamentos_dominio.append(
+        {
+            "tenant_id": TENANT_ID,
+            "employee_id": BRUNO,
+            "starts_on": date(2026, 7, 1),
+            "ends_on": date(2026, 7, 31),
+            "category": ciclo.UNJUSTIFIED_ABSENCE,
+        }
+    )
+    apurar(client, issue_token)
+
+    resumo = listar(client, issue_token).json()["rows"][0]
+    assert resumo["entitled_count"] == 1
+    assert resumo["denied_count"] == 1
+
+
+def test_o_agregado_nao_soma_linha_de_outro_tenant(
+    client: TestClient, issue_token: Any, fake_db: FakeDB
+) -> None:
+    """O `and b.tenant_id = c.tenant_id` do lateral, exercitado.
+
+    ⚠️ Pelo produto isto é inalcançável — o lateral casa por `c.id`, que é chave
+    primária. Alcançável por dado ruim: `app.benefit_entitlement` tem `tenant_id`
+    próprio e nada obriga que ele seja o do ciclo. Uma linha com o tenant errado
+    inflaria a contagem e o total da competência de outro cliente, calada.
+    """
+    cenario_vt(fake_db)
+    ciclo_id = apurar(client, issue_token).json()["id"]
+    intrusa = dict(fake_db.linhas[0])
+    intrusa["tenant_id"] = OUTRO_TENANT
+    intrusa["employee_id"] = BRUNO
+    fake_db.linhas.append(intrusa)
+    fake_db.semear_pessoa(pessoa(BRUNO, "Bruno Alves"), tenant_id=OUTRO_TENANT)
+
+    resumo = next(
+        linha for linha in listar(client, issue_token).json()["rows"] if linha["id"] == ciclo_id
+    )
+    assert resumo["entitled_count"] == 1
+    assert Decimal(str(resumo["total_amount"])) == Decimal("161.50")
+
+
+def test_a_lista_nao_devolve_competencia_de_outro_tenant(
+    client: TestClient, issue_token: Any, fake_db: FakeDB
+) -> None:
+    cenario_vt(fake_db)
+    apurar_e_gerar(client, issue_token)
+    for linha in fake_db.ciclos:
+        linha["tenant_id"] = OUTRO_TENANT
+
+    assert listar(client, issue_token).json()["rows"] == []
+
+
+def test_a_lista_exige_compensation(client: TestClient, issue_token: Any, fake_db: FakeDB) -> None:
+    cenario_vt(fake_db)
+    fake_db.compensation = False
+    assert listar(client, issue_token).status_code == 403
+
+
+def test_a_lista_nao_exige_admin(client: TestClient, issue_token: Any, fake_db: FakeDB) -> None:
+    """⛔ É METADE DO MOTIVO DE ESTA ROTA EXISTIR.
+
+    `accounting` baixa a remessa sem ser admin — decisão do S3 — e não tinha por
+    onde chegar a um ciclo: o `id` só nascia no `POST`, que exige admin. Exigir
+    admin aqui devolveria a mesma parede uma porta adiante.
+    """
+    cenario_vt(fake_db)
+    apurar_e_gerar(client, issue_token)
+    fake_db.admin = False
+
+    resposta = listar(client, issue_token)
+    assert resposta.status_code == 200
+    assert len(resposta.json()["rows"]) == 1
+
+
+@pytest.mark.parametrize(
+    ("banking", "admin"),
+    [(True, True), (True, False), (False, True), (False, False)],
+)
+def test_o_botao_e_a_guarda_concordam(
+    client: TestClient, issue_token: Any, fake_db: FakeDB, banking: bool, admin: bool
+) -> None:
+    """⛔ A ARMADILHA DESTA MUDANÇA, PERCORRIDA NA MATRIZ INTEIRA.
+
+    Um `can_export_remittance` que a rota calcula e que a guarda real não usa
+    seria pior que campo nenhum: a tela esconde o botão e o endpoint continua
+    aceitando — trava de mentira, do tipo que só se descobre quando alguém digita
+    a URL. Aqui as duas respostas saem de `pode_exportar_remessa`, e esta
+    asserção exige que **concordem nos quatro cantos**.
+
+    O par `(banking=True, admin=False)` é o que reprova a troca do eixo por
+    `is_admin`: é o `accounting`, que confere a remessa e não apura nada.
+    """
+    cenario_remessa(fake_db)
+    ciclo_id = apurar_e_gerar(client, issue_token)
+    fake_db.banking, fake_db.admin = banking, admin
+
+    campo = listar(client, issue_token).json()["can_export_remittance"]
+    resposta = client.get(
+        f"/dp/ciclos/{ciclo_id}/export?formato=banco", headers=cabecalho(issue_token)
+    )
+
+    assert campo is banking, "o campo não reflete o domínio bancário"
+    # Quem vê o botão baixa; quem não vê leva 403 se chamar a rota direto.
+    assert (resposta.status_code == 200) is campo
+    if not campo:
+        assert resposta.status_code == 403
+        assert CONTA not in resposta.text
+
+
+def test_o_detalhe_do_ciclo_tambem_carrega_o_eixo_da_remessa(
+    client: TestClient, issue_token: Any, fake_db: FakeDB
+) -> None:
+    """As três respostas de ciclo trazem o campo — a tela de detalhe também tem botão."""
+    cenario_vt(fake_db)
+    apurado = apurar(client, issue_token)
+    ciclo_id = apurado.json()["id"]
+    gerado = client.post(f"/dp/ciclos/{ciclo_id}/gerar", headers=cabecalho(issue_token))
+
+    assert apurado.json()["can_export_remittance"] is True
+    assert gerado.json()["can_export_remittance"] is True
 
 
 # ---------------------------------------------------------------------------

@@ -58,7 +58,9 @@ from server.models import (
     BenefitPlanRow,
     BenefitTypeRow,
     CycleEntitlementRow,
+    CycleList,
     CycleRequest,
+    CycleSummary,
     CycleView,
     NewBandRow,
     TransportFareCreate,
@@ -435,8 +437,25 @@ def _linha(linha: ciclo.EntitlementLine) -> CycleEntitlementRow:
     )
 
 
-def _ciclo(cycle: ciclo.Cycle) -> CycleView:
+async def pode_exportar_remessa(tenant: CurrentTenant) -> bool:
+    """O eixo da remessa, perguntado ao banco. **Uma implementação só.**
+
+    ⛔ O CAMPO E A GUARDA SAEM DAQUI, E É ISSO QUE OS FAZ CONCORDAR
+    Um `can_export_remittance` que a rota calcula e que a guarda real não usa
+    seria pior que campo nenhum: a tela esconderia o botão e o endpoint
+    continuaria aceitando: uma falsa sensação de trava, do tipo que só se
+    descobre quando alguém digita a URL. Com uma função, quem não vê o botão
+    recebe 403 pela mesma resposta do banco — e
+    `test_o_botao_e_a_guarda_concordam` percorre a matriz inteira provando isso.
+
+    ⚠️ `banking` e NÃO `is_admin`: `accounting` confere a remessa sem apurar.
+    """
+    return (await banking.check_permissions(tenant)).banking
+
+
+def _ciclo(cycle: ciclo.Cycle, *, can_export_remittance: bool) -> CycleView:
     return CycleView(
+        can_export_remittance=can_export_remittance,
         id=cycle.id,
         kind=cycle.kind,
         period_year=cycle.period_year,
@@ -483,7 +502,7 @@ async def apurar_ciclo(payload: CycleRequest, tenant: CurrentTenant) -> CycleVie
         gravado = await ciclo.save_draft(tenant, apurado)
     except ciclo.CycleError as recusa:
         raise _recusa_de_apuracao(recusa) from recusa
-    return _ciclo(gravado)
+    return _ciclo(gravado, can_export_remittance=await pode_exportar_remessa(tenant))
 
 
 @router.post("/ciclos/{cycle_id}/gerar")
@@ -498,7 +517,61 @@ async def gerar_ciclo(cycle_id: UUID, tenant: CurrentTenant) -> CycleView:
     except ciclo.CycleAlreadyGeneratedError as choque:
         # 409: o pedido está bem formado, o estado é que não permite.
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(choque)) from choque
-    return _ciclo(congelado)
+    return _ciclo(congelado, can_export_remittance=await pode_exportar_remessa(tenant))
+
+
+@router.get("/ciclos")
+async def listar_ciclos(
+    tenant: CurrentTenant,
+    kind: Annotated[
+        Literal["food_basket", "transport_voucher"] | None,
+        Query(description="Filtra por tipo de ciclo"),
+    ] = None,
+    situacao: Annotated[
+        Literal["draft", "generated", "exported", "cancelled"] | None,
+        Query(description="Filtra por status"),
+    ] = None,
+    ano: Annotated[int | None, Query(ge=2000, le=2100)] = None,
+    mes: Annotated[int | None, Query(ge=1, le=12)] = None,
+) -> CycleList:
+    """As competências já apuradas. Leitura: `compensation`, **sem admin**.
+
+    ⛔ SEM ADMIN DE PROPÓSITO, e é metade do motivo de esta rota existir.
+    `accounting` baixa a remessa sem ser admin (decisão do S3) e não tinha por
+    onde chegar a um ciclo: o `id` só nascia na resposta do `POST /dp/ciclos`,
+    que exige admin. Exigir admin aqui devolveria a mesma parede uma porta
+    adiante.
+
+    ⚠️ A outra metade: recarregar a página perdia o ciclo congelado, e
+    reencontrá-lo obrigava a apurar de novo — o que **cria um segundo rascunho
+    ao lado do gerado**, porque o `unique` da competência inclui o `status`.
+    """
+    permissoes = await check_permissions(tenant)
+    if not permissoes.compensation:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_SEM_COMPENSATION)
+
+    competencias = await ciclo.list_cycles(
+        tenant, kind=kind, status=situacao, period_year=ano, period_month=mes
+    )
+    return CycleList(
+        rows=[
+            CycleSummary(
+                id=resumo.id,
+                kind=resumo.kind,
+                period_year=resumo.period_year,
+                period_month=resumo.period_month,
+                window_start=resumo.window_start,
+                window_end=resumo.window_end,
+                business_days=resumo.business_days,
+                status=resumo.status,
+                entitled_count=resumo.entitled_count,
+                denied_count=resumo.denied_count,
+                total_amount=resumo.total_amount,
+            )
+            for resumo in competencias
+        ],
+        can_export_remittance=await pode_exportar_remessa(tenant),
+    )
 
 
 _EXPORTS: dict[str, tuple[str, str]] = {
@@ -551,8 +624,7 @@ async def exportar_ciclo(
 
 async def _remessa(tenant: CurrentTenant, cycle_id: UUID, cycle: ciclo.Cycle) -> bytes:
     """A remessa, com o eixo bancário e a trilha que a `SPEC-DP.md` §5 exige."""
-    bancario = await banking.check_permissions(tenant)
-    if not bancario.banking:
+    if not await pode_exportar_remessa(tenant):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_SEM_BANKING)
 
     # ⛔ O ESTADO É CONFERIDO ANTES DE AS CONTAS SEREM LIDAS

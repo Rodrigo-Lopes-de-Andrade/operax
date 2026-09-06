@@ -1202,7 +1202,52 @@ class CycleView(BaseModel):
     entitled_count: int
     denied_count: int
     total_amount: Decimal
+    #: ⛔ O EIXO DA REMESSA, E ELE NÃO É `can_write`.
+    #: A SPEC §3 manda o botão de remessa aparecer só para quem tem o domínio
+    #: `banking` — regra 5 do projeto: quem não pode, não vê; não vê desabilitado.
+    #: Sem este campo a tela não tem como saber, e deduzir de lista de papéis no
+    #: frontend seria a matriz de domínios escrita duas vezes — ela muda por
+    #: `UPDATE`, e a cópia divergiria sem ninguém notar.
+    #:
+    #: ⚠️ `banking` E NÃO `is_admin`, e a assimetria é decisão do S3:
+    #: `accounting` confere a remessa e não apura competência nenhuma. Um campo
+    #: alimentado por `is_admin` esconderia o botão exatamente de quem existe
+    #: para conferi-lo.
+    can_export_remittance: bool
     rows: list[CycleEntitlementRow]
+
+
+class CycleSummary(BaseModel):
+    """A competência na lista — sem as linhas.
+
+    ⛔ Não há `rows` aqui de propósito: vinte e quatro competências de 176
+    pessoas seriam 4.200 linhas numa tela que só precisa saber qual mês está
+    pendente. Quem quer a pessoa abre a competência.
+    """
+
+    id: UUID
+    kind: Literal["food_basket", "transport_voucher"]
+    period_year: int
+    period_month: int
+    window_start: date
+    window_end: date
+    business_days: int | None = None
+    status: str
+    entitled_count: int
+    denied_count: int
+    total_amount: Decimal
+
+
+class CycleList(BaseModel):
+    """As competências que o tenant já apurou, da mais recente para a mais antiga.
+
+    `can_export_remittance` viaja no container e não em cada linha porque ele é
+    propriedade de **quem perguntou**, não da competência — do mesmo jeito que
+    `can_write` em `WorkPostList` e `BenefitCatalog`.
+    """
+
+    rows: list[CycleSummary]
+    can_export_remittance: bool
 
 
 class AssistantQuestion(BaseModel):
