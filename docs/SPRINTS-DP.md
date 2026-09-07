@@ -214,7 +214,7 @@ andaime que a orquestração exige e que o documento não tinha.
 | S1 — Fundação | ✅ **aprovada** (06/09) — **backend e banco; a metade de frontend não foi despachada** | `dp_work_post`, `dp_benefit_catalog` | guardião ✅ · revisor ✅ | 2 |
 | S2 — Domínio `banking` | ✅ **aprovada** (05/09) | `dp_banking_domain`, `dp_banking_account` | guardião ✅ · revisor ✅ | 1 |
 | S3 — Ciclo mensal | ✅ **aprovada** (06/09) — **backend e banco; frontend não despachado; reconciliação com o legado ABERTA** | `dp_benefit_cycle`, `dp_leave_category`, `dp_absence_map` | guardião ✅ · revisor ✅ | 2 |
-| S4 — Painel e alertas | 🔵 **em execução** (06/09) — templates fora, `public.fn_dp_panel` fora, painel pelo Caminho 2 | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | — | 0 |
+| S4 — Painel e alertas | ✅ **aprovada** (07/09) — **backend e banco; frontend não despachado; reconciliação dos 9 KPIs ABERTA** | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | guardião ✅ · revisor ✅ | 2 |
 | S5 — Laudos e rubricas | pendente | `dp_unit_compliance`, `dp_payroll_code_map` | — | 0 |
 
 Onze slots, um arquivo por slot. ⛔ `dp_banking_domain` e `dp_banking_account`
@@ -1306,6 +1306,83 @@ fica ABERTA**, como no S3, até o mês fechado do cliente chegar.
 registra que `ativos / total no filtro` **não é retenção** — muda de significado
 conforme o filtro. O S4 **transcreve a fórmula do legado** (é o que o gate
 compara) e não a conserta; o rótulo é decisão do dono, pendente.
+
+## S4 aprovado — e a cobertura saiu de 9/21 para 40/41
+
+`guardiao-de-superficie` **APROVADO** no ciclo 1. `code-reviewer` **REPROVADO** no
+ciclo 1 com doze achados, **APROVADO** no ciclo 2. Portões: **584 passed**, ruff
+limpo, `SUÍTE COMPLETA OK` com as 49 migrations.
+
+📌 **A medida que resume o ciclo:** no ciclo 1, **12 de 21 mutações sobreviviam**.
+No ciclo 2, o revisor refez **41 mutações próprias** e **40 morreram** — a única
+sobrevivente é o predicado que a migration e o `87` agora **declaram** como defesa
+em profundidade (`util.can_see_employee` é preso a `app.tenant_member` e barra
+sozinho, então nenhuma fixture consegue fazer o outro morder).
+
+### O método que mudou, e veio do revisor
+
+⚠️ **Ele subiu um Postgres descartável próprio** (container e porta próprios) em
+vez de disputar o `operax_test`. **Isso resolve a colisão que custou dois motivos
+de reprovação no S3** e que vinha sendo contornada por sequenciamento. Passa a ser
+a forma recomendada de despachar revisor e guardião juntos.
+
+⚠️ **E ele entregou as somas `md5` da árvore que aprovou.** Conferi as nove antes
+de commitar: batem. O veredito passa a valer para uma árvore identificável, e não
+para "o que estava lá quando eu olhei" — que é exatamente o que faltava quando a
+árvore se moveu sob o gate no S3.
+
+### Três decisões do implementador que valem além do S4
+
+**1. Prazo de férias vencido CONTA**, e o argumento é de direção, não de gosto:
+sem o piso em `current_date`, quem já estourou o prazo — onde o empregador passa
+a dever em dobro (CLT art. 137) — aparece. *"Se o legado o exclui, a divergência
+ACRESCENTA gente ao alerta e nunca some com ninguém."* ✅ O revisor confirmou a
+assimetria: **falso positivo custa uma conferência; falso negativo custa o
+pagamento em dobro.**
+
+**2. A regra saiu do SQL em vez de ser copiada no dublê.** Dois `status` sem
+teste seriam "cobertos" ensinando o dublê a decidir — que é como um teste vira
+cópia da regra em vez de prova dela. Ele moveu a decisão para o Python, e o dublê
+voltou a não decidir nada. É o precedente que `beneficios.in_effect` abriu no S1.
+
+**3. Ele remediu antes de reescrever, e achou o gêmeo.** No item do eixo de
+tenant, em vez de só corrigir o comentário apontado, refez a medição — e
+descobriu que **o mesmo exagero estava no passo 4 da garantia da própria
+migration**. Dois textos prometiam um eixo que nenhum dos dois media.
+
+### 🔴 A guarda de PII do `99` falava dois vocabulários — e o mais fraco era o permanente
+
+Achado do revisor no ciclo 2, medido: o item 8 (colunas de view) enumera
+`mother_name|father_name|race_color|dependents|…`; o item 9 (retorno de função
+definer) usava `\mname\M`. **`_` é caractere de palavra no regex do Postgres**,
+então `mother_name`, `father_name` e `dependents_names` **não casavam**, e
+`race_color` nem estava na lista. Uma função definer de `public` devolvendo
+qualquer uma das quatro passava verde.
+
+📌 **A correção não foi sincronizar as duas listas — foi haver uma só.**
+`pg_temp.pii_regex()` é a fonte, e os dois itens a chamam: duas listas que
+precisam concordar e podem divergir sempre divergem. Provado por sondagem: as
+quatro colunas agora reprovam, e removidas as sondas o `99` volta verde **por
+mérito**. E o limite que a varredura **não** alcança ficou declarado no arquivo:
+`returns json`, `jsonb` e `setof record` não têm nome de coluna em
+`pg_get_function_result`.
+
+### O que o S4 NÃO fechou, e está declarado
+
+- ⛔ **A reconciliação dos 9 KPIs com o legado continua ABERTA** — mesmo motivo do
+  S3: não há mês fechado do cliente no repositório. Nenhum legado sintético foi
+  inventado.
+- ⏳ **Documento × pessoa:** `document_expired` e `document_expiring` contam
+  **documento**; os outros seis contam **pessoa**. O `ANEXO` §2c não fecha, e com
+  CNH (uma por pessoa) as duas leituras dão o mesmo número — por isso a tela do
+  legado não resolve. Reportado ao dono, **com o número fixado no `87`**: o dia
+  em que a decisão vier, o teste fica vermelho e a mudança é deliberada.
+- ⏳ **O legado rotula dois cartões como "CNH" e a função não.**
+  `app.document_type` não tem `code` — a identidade é o `name`, texto livre por
+  tenant. Um `ilike 'cnh%'` poria regra de negócio numa string e erraria
+  **calado** no tenant que chamasse o tipo de "Carteira de Habilitação".
+- ⏳ **Retenção** segue transcrita do legado e não consertada — canetada do dono.
+- A metade de frontend do S4 não foi despachada, como em S1 e S3.
 
 ## Itens próprios abertos pelo S1 — fora do escopo de qualquer sprint desta etapa
 

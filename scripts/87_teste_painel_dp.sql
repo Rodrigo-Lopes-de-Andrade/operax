@@ -12,6 +12,14 @@
 --      O negativo sozinho fica verde num banco onde ninguém lê nada, então cada
 --      "ele não vê" vem com o "ele vê" ao lado, na mesma tabela de dados.
 --
+--   B-bis) O EIXO DE TENANT NÃO É MEDIDO AQUI, e dizer que era foi um erro
+--      corrigido em 07/09/2026. Medido pelos dois gates: apagando
+--      `e.tenant_id = any (util.user_tenants())` de `visible`, todo contador
+--      continua igual — quem apaga a pessoa do outro tenant é
+--      `util.can_see_employee`, que é preso a `app.tenant_member`. O predicado
+--      de tenant é defesa em profundidade, e o cabeçalho da migration o chama
+--      assim. Quem quiser o eixo medido de verdade tem `scripts/98`.
+--
 -- E uma terceira, que é o motivo de a função ser `security definer`:
 --   C) O supervisor NÃO lê `app.employee_pii` (zero linhas, pela RLS) e ainda
 --      assim recebe o contador de aniversariantes da unidade dele. Contar não é
@@ -101,10 +109,32 @@ insert into app.employee (id, tenant_id, company_id, unit_id, name, hired_on, st
   ('87a70000-0000-0000-0000-0000000000b3', '87a70000-0000-0000-0000-0000000000a1',
    '87a70000-0000-0000-0000-0000000000e1', '87a70000-0000-0000-0000-0000000000c1',
    'Carla Painel', current_date - 2000, 'active'),
-  -- Dilma: outro TENANT, aniversário no mês. O eixo de tenant tem de apagá-la.
+  -- Dilma: outro TENANT, aniversário no mês. Nenhum contador pode alcançá-la.
   ('87a70000-0000-0000-0000-0000000000b4', '87a70000-0000-0000-0000-0000000000a2',
    '87a70000-0000-0000-0000-0000000000e2', '87a70000-0000-0000-0000-0000000000c3',
-   'Dilma Painel', current_date - 10, 'active');
+   'Dilma Painel', current_date - 10, 'active'),
+  -- ⛔ Diego é DESLIGADO e tem tudo: aniversário no mês, dez dias de casa,
+  -- documento vencido e férias hoje. Ele é o par negativo de
+  -- `status <> 'desligado'` em `visible` — sem ele, apagar aquele predicado não
+  -- mudava número nenhum, e a regra declarada no cabeçalho não tinha quem a
+  -- medisse.
+  ('87a70000-0000-0000-0000-0000000000b5', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000e1', '87a70000-0000-0000-0000-0000000000c1',
+   'Diego Painel', current_date - 10, 'desligado'),
+  -- ⛔ Elisa e Fábio são a FRONTEIRA da experiência: 61 dias (fora) e 0 dias
+  -- (admitido hoje, dentro). Com um só deles, `between 1 and 90` passaria verde.
+  ('87a70000-0000-0000-0000-0000000000b6', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000e1', '87a70000-0000-0000-0000-0000000000c1',
+   'Elisa Painel', current_date - 61, 'active'),
+  ('87a70000-0000-0000-0000-0000000000b7', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000e1', '87a70000-0000-0000-0000-0000000000c1',
+   'Fábio Painel', current_date, 'active'),
+  -- Gustavo é da unidade 2 e existe por um motivo só: dar ao contador de data
+  -- limite um caso FORA da unidade do supervisor. Sem ele, o número do owner e o
+  -- do supervisor coincidiam naquele cartão, e o recorte não estava sendo medido.
+  ('87a70000-0000-0000-0000-0000000000b8', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000e1', '87a70000-0000-0000-0000-0000000000c2',
+   'Gustavo Painel', current_date - 2000, 'active');
 
 insert into app.employee_pii (employee_id, tenant_id, birth_date) values
   ('87a70000-0000-0000-0000-0000000000b1', '87a70000-0000-0000-0000-0000000000a1',
@@ -116,13 +146,26 @@ insert into app.employee_pii (employee_id, tenant_id, birth_date) values
   ('87a70000-0000-0000-0000-0000000000b3', '87a70000-0000-0000-0000-0000000000a1',
    (date_trunc('month', current_date) + interval '6 months' - interval '30 years')::date),
   ('87a70000-0000-0000-0000-0000000000b4', '87a70000-0000-0000-0000-0000000000a2',
-   (date_trunc('month', current_date) - interval '30 years')::date);
+   (date_trunc('month', current_date) - interval '30 years')::date),
+  -- Diego faz aniversário no mês e está desligado: ele é o número a mais que
+  -- aparece se `visible` parar de recortar por status.
+  ('87a70000-0000-0000-0000-0000000000b5', '87a70000-0000-0000-0000-0000000000a1',
+   (date_trunc('month', current_date) - interval '30 years')::date),
+  ('87a70000-0000-0000-0000-0000000000b6', '87a70000-0000-0000-0000-0000000000a1',
+   (date_trunc('month', current_date) + interval '6 months' - interval '30 years')::date),
+  ('87a70000-0000-0000-0000-0000000000b7', '87a70000-0000-0000-0000-0000000000a1',
+   (date_trunc('month', current_date) + interval '6 months' - interval '30 years')::date);
 
 insert into app.document_type (id, tenant_id, name, requires_expiry, expiry_alert_days, domain) values
   ('87a70000-0000-0000-0000-0000000000f1', '87a70000-0000-0000-0000-0000000000a1',
    '__painel_doc__', true, 30, 'pii'),
   ('87a70000-0000-0000-0000-0000000000f2', '87a70000-0000-0000-0000-0000000000a1',
-   '__painel_aso__', true, 30, 'health');
+   '__painel_aso__', true, 30, 'health'),
+  -- ⛔ O tipo que NÃO exige validade — contrato de trabalho, no legado. Um
+  -- documento dele com data no passado não é vencimento de nada, e é o par
+  -- negativo de `dt.requires_expiry`.
+  ('87a70000-0000-0000-0000-0000000000f3', '87a70000-0000-0000-0000-0000000000a1',
+   '__painel_sem_validade__', false, 30, 'pii');
 
 insert into app.document
   (id, tenant_id, employee_id, type_id, storage_path, valid_until, status) values
@@ -146,7 +189,37 @@ insert into app.document
    'painel/ana-aso.pdf', null, 'active'),
   ('87a70000-0000-0000-0000-00000000d005', '87a70000-0000-0000-0000-0000000000a1',
    '87a70000-0000-0000-0000-0000000000b2', '87a70000-0000-0000-0000-0000000000f2',
-   'painel/bruno-aso.pdf', null, 'active');
+   'painel/bruno-aso.pdf', null, 'active'),
+  -- ⛔ O SEGUNDO documento vencido de Ana. Ele é o que fixa a semântica: estes
+  -- dois contadores contam DOCUMENTO, não pessoa. Ver o cabeçalho da migration —
+  -- a decisão está reportada, e este número é o que fica vermelho quando ela vier.
+  ('87a70000-0000-0000-0000-00000000d006', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b1', '87a70000-0000-0000-0000-0000000000f1',
+   'painel/ana-vencido-2.pdf', current_date - 40, 'active'),
+  -- ⛔ `status = 'vencido'`, vencido de fato: CONTA. Alguém marcou a data que
+  -- passou, e um filtro `status = 'active'` perderia justamente o documento que
+  -- o cartão existe para mostrar.
+  ('87a70000-0000-0000-0000-00000000d007', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b3', '87a70000-0000-0000-0000-0000000000f1',
+   'painel/carla-vencido.pdf', current_date - 5, 'vencido'),
+  -- ⛔ `substituido`: NÃO conta. Já foi renovado; mandar o DP atrás dele é
+  -- mandar atrás de trabalho que já foi feito.
+  ('87a70000-0000-0000-0000-00000000d008', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b3', '87a70000-0000-0000-0000-0000000000f1',
+   'painel/carla-substituido.pdf', current_date - 5, 'substituido'),
+  -- ⛔ Tipo sem exigência de validade: data no passado e nada a alertar.
+  ('87a70000-0000-0000-0000-00000000d009', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b3', '87a70000-0000-0000-0000-0000000000f3',
+   'painel/carla-contrato.pdf', current_date - 5, 'active'),
+  -- ⛔ Diego está desligado: o documento vencido dele não é problema de ninguém.
+  ('87a70000-0000-0000-0000-00000000d010', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b5', '87a70000-0000-0000-0000-0000000000f1',
+   'painel/diego-vencido.pdf', current_date - 5, 'active'),
+  -- Bruno, unidade 2: é ele que faz o número do owner e o do supervisor
+  -- diferirem neste cartão.
+  ('87a70000-0000-0000-0000-00000000d011', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b2', '87a70000-0000-0000-0000-0000000000f1',
+   'painel/bruno-vencido.pdf', current_date - 5, 'active');
 
 insert into app.occupational_exam
   (id, tenant_id, employee_id, type, performed_on, valid_until, result, document_id) values
@@ -166,7 +239,19 @@ insert into app.occupational_exam
   -- Carla: vencido há 3 dias e SEM anexo — janela desconhecida, conta assim mesmo.
   ('87a70000-0000-0000-0000-00000000e104', '87a70000-0000-0000-0000-0000000000a1',
    '87a70000-0000-0000-0000-0000000000b3', 'periodic', current_date - 368,
-   current_date - 3, 'fit', null);
+   current_date - 3, 'fit', null),
+  -- ⛔ Elisa tem dois exames no MESMO dia, com validades opostas. Sem desempate,
+  -- `distinct on` escolhe linha arbitrária e o cartão oscila entre duas leituras
+  -- idênticas. A ordem declarada (validade mais longa, depois `id`) escolhe o de
+  -- +300: Elisa está em dia. ⚠️ Esta asserção FIXA a escolha; ela não garante
+  -- vermelho se o desempate sumir, porque aí o resultado passa a ser arbitrário
+  -- — e arbitrário é exatamente o defeito.
+  ('87a70000-0000-0000-0000-00000000e105', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b6', 'periodic', current_date - 30,
+   current_date - 1, 'fit', null),
+  ('87a70000-0000-0000-0000-00000000e106', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b6', 'periodic', current_date - 30,
+   current_date + 300, 'fit', null);
 
 insert into app.leave_period
   (id, tenant_id, employee_id, category, start_date, end_date, source, limit_date) values
@@ -184,7 +269,47 @@ insert into app.leave_period
   -- "em férias hoje = 1" também seria o resultado de ignorar a categoria.
   ('87a70000-0000-0000-0000-00000000f103', '87a70000-0000-0000-0000-0000000000a1',
    '87a70000-0000-0000-0000-0000000000b3', 'leave_of_absence',
-   current_date - 2, current_date + 2, 'manual', current_date + 30);
+   current_date - 2, current_date + 2, 'manual', current_date + 30),
+  -- ⛔ FÉRIAS FRACIONADAS, e é isso que os `count(distinct)` existem para tratar.
+  -- Ana tem uma segunda metade que também cobre hoje e um segundo período
+  -- aquisitivo com data limite: são DUAS linhas de UMA pessoa. `count(*)` daria
+  -- dois cartões inflados, e ninguém veria — a inflação tem cara de movimento.
+  ('87a70000-0000-0000-0000-00000000f104', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b1', 'vacation',
+   current_date, current_date + 5, 'manual', current_date + 45),
+  -- Bruno idem, no mês que vem: duas metades, uma pessoa.
+  -- E a data limite dele é +120 — FORA dos 90. É o par que mede o teto: sem
+  -- alguém além da janela, apagar o `<= hoje + 90` não mudava número nenhum.
+  ('87a70000-0000-0000-0000-00000000f105', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b2', 'vacation',
+   (date_trunc('month', current_date) + interval '1 month' + interval '20 days')::date,
+   (date_trunc('month', current_date) + interval '1 month' + interval '25 days')::date,
+   'manual', current_date + 120),
+  -- ⛔ Carla se afasta no mês que vem, e não são férias. Sem esta linha,
+  -- "férias próximas" ficava sem o par negativo que os outros dois cartões de
+  -- férias já tinham.
+  ('87a70000-0000-0000-0000-00000000f106', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b3', 'leave_of_absence',
+   (date_trunc('month', current_date) + interval '1 month' + interval '3 days')::date,
+   (date_trunc('month', current_date) + interval '1 month' + interval '8 days')::date,
+   'manual', null),
+  -- ⛔ ELISA TEM A DATA LIMITE JÁ VENCIDA (hoje - 10). Decisão (b) do cabeçalho
+  -- da migration: ela CONTA. É onde o empregador passa a dever em dobro, e era o
+  -- único estado que o painel inteiro não mostrava. As férias em si são antigas,
+  -- para não mexer nos outros dois cartões.
+  ('87a70000-0000-0000-0000-00000000f107', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b6', 'vacation',
+   current_date - 300, current_date - 290, 'manual', current_date - 10),
+  -- Gustavo, unidade 2, data limite dentro da janela: o caso que o supervisor
+  -- NÃO pode contar.
+  ('87a70000-0000-0000-0000-00000000f108', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b8', 'vacation',
+   current_date - 300, current_date - 290, 'manual', current_date + 30),
+  -- Diego está desligado e em férias hoje: o par negativo do status no cartão
+  -- de férias, que é lido por um caminho diferente do de documentos.
+  ('87a70000-0000-0000-0000-00000000f109', '87a70000-0000-0000-0000-0000000000a1',
+   '87a70000-0000-0000-0000-0000000000b5', 'vacation',
+   current_date - 2, current_date + 2, 'manual', null);
 
 -- ---------------------------------------------------------------------------
 \echo '--- Owner do tenant A: os oito contadores, com o eixo de tenant valendo'
@@ -196,24 +321,38 @@ do $$ begin
   perform pg_temp.assert_eq('a função devolve OITO contadores',
     (select count(*) from public.fn_dp_alerts()), 8);
 
-  -- Dilma faz aniversário no mês e é de outro tenant: 3 aqui seria o eixo de
-  -- tenant ausente, e 0 seria a função não enxergando nada.
-  perform pg_temp.assert_eq('aniversariantes do mês = Ana e Bruno (Dilma é de outro tenant)',
+  -- ⚠️ O QUE ESTA LINHA MEDE, DITO COM PRECISÃO
+  -- Ela mede que a pessoa do outro tenant (Dilma) e o desligado (Diego) não
+  -- entram: 4 seria os dois entrando, 3 seria um deles. Ela **não** mede o
+  -- predicado `e.tenant_id = any (util.user_tenants())` — medido em 07/09/2026:
+  -- apagando aquele predicado, o número continua 2, porque quem apaga Dilma é
+  -- `util.can_see_employee`, que já é preso à filiação (`app.tenant_member`). O
+  -- predicado de tenant é defesa em profundidade, e é honesto chamá-lo assim.
+  perform pg_temp.assert_eq('aniversariantes do mês = Ana e Bruno (Dilma é de outro tenant; Diego, desligado)',
     pg_temp.contador('birthday_month'), 2);
-  perform pg_temp.assert_eq('em experiência = Ana e Bruno (Carla tem 2000 dias de casa)',
-    pg_temp.contador('probation'), 2);
-  perform pg_temp.assert_eq('documento vencido = o de Ana',
-    pg_temp.contador('document_expired'), 1);
+
+  -- Ana (10d), Bruno (10d) e Fábio (0d, admitido hoje). Fora: Carla (2000d),
+  -- Elisa (61d, um dia além do teto) e Diego (desligado). O trio de fronteira é
+  -- o que separa `between 0 and 60` de `1 and 60` e de `0 and 90`.
+  perform pg_temp.assert_eq('em experiência = Ana, Bruno e Fábio (admitido hoje conta)',
+    pg_temp.contador('probation'), 3);
+
+  -- CONTA DOCUMENTO: os dois de Ana, o `vencido` de Carla e o de Bruno. Fora: o
+  -- `substituido` de Carla, o documento de tipo sem validade e o de Diego.
+  perform pg_temp.assert_eq('documentos vencidos = 2 de Ana + 1 de Carla (status vencido) + 1 de Bruno',
+    pg_temp.contador('document_expired'), 4);
   perform pg_temp.assert_eq('documento a vencer com janela de 30 = nenhum (os dois vencem em 40)',
     pg_temp.contador('document_expiring'), 0);
   perform pg_temp.assert_eq('ASO = Bruno (vence em 10, janela 30) + Carla (vencido, sem janela)',
     pg_temp.contador('exam_due'), 2);
-  perform pg_temp.assert_eq('férias hoje = só Ana (o afastamento de Carla não é férias)',
+  perform pg_temp.assert_eq('férias hoje = só Ana, e uma vez só (duas metades, uma pessoa)',
     pg_temp.contador('vacation_today'), 1);
-  perform pg_temp.assert_eq('férias no mês que vem = só Bruno',
+  perform pg_temp.assert_eq('férias no mês que vem = só Bruno, e uma vez só',
     pg_temp.contador('vacation_upcoming'), 1);
-  perform pg_temp.assert_eq('data limite dentro de 90 dias = só Ana (a de Carla não é férias)',
-    pg_temp.contador('vacation_limit'), 1);
+  -- Ana (2 períodos, dentro), Elisa (vencida — decisão (b)) e Gustavo (unidade
+  -- 2). Fora: Bruno, cuja única data limite é +120.
+  perform pg_temp.assert_eq('data limite = Ana + Elisa (vencida) + Gustavo; Bruno (+120) fica fora',
+    pg_temp.contador('vacation_limit'), 3);
 end $$;
 
 -- ---------------------------------------------------------------------------
@@ -228,8 +367,8 @@ set local request.jwt.claim.sub = '87000000-0000-0000-0000-000000000001';
 do $$ begin
   perform pg_temp.assert_eq('janela 45: os dois documentos de 40 dias entram',
     pg_temp.contador('document_expiring'), 2);
-  perform pg_temp.assert_eq('e o vencido continua vencido (a janela não o move)',
-    pg_temp.contador('document_expired'), 1);
+  perform pg_temp.assert_eq('e os vencidos continuam vencidos (a janela não os move)',
+    pg_temp.contador('document_expired'), 4);
 end $$;
 
 reset role;
@@ -274,16 +413,18 @@ do $$ begin
   -- que dá sentido a estes: 2 lá, 1 aqui.
   perform pg_temp.assert_eq('supervisor conta o aniversário de Ana',
     pg_temp.contador('birthday_month'), 1);
-  perform pg_temp.assert_eq('supervisor conta a experiência de Ana, não a de Bruno',
-    pg_temp.contador('probation'), 1);
-  perform pg_temp.assert_eq('supervisor conta o documento vencido de Ana',
-    pg_temp.contador('document_expired'), 1);
+  perform pg_temp.assert_eq('supervisor conta Ana e Fábio, não Bruno (owner conta 3)',
+    pg_temp.contador('probation'), 2);
+  perform pg_temp.assert_eq('supervisor conta os 3 vencidos da unidade dele, não o de Bruno (owner conta 4)',
+    pg_temp.contador('document_expired'), 3);
   perform pg_temp.assert_eq('supervisor conta o ASO de Carla, não o de Bruno',
     pg_temp.contador('exam_due'), 1);
   perform pg_temp.assert_eq('supervisor conta as férias de Ana, que é da unidade dele',
     pg_temp.contador('vacation_today'), 1);
   perform pg_temp.assert_eq('e NÃO conta as férias de Bruno no mês que vem',
     pg_temp.contador('vacation_upcoming'), 0);
+  perform pg_temp.assert_eq('data limite: Ana e Elisa, sem o Gustavo da unidade 2 (owner conta 3)',
+    pg_temp.contador('vacation_limit'), 2);
 
   -- (C) O motivo de a função ser `security definer`, dito em duas linhas: ele
   -- não lê a tabela e recebe o número. Se ela virar `security invoker`, a

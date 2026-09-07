@@ -3400,7 +3400,7 @@ public.fn_dp_alerts()
   returns TABLE(code text, total integer)
 ```
 
-Os oito contadores do painel de alertas do DP. Devolve CONTAGEM, nunca linha por pessoa — a lista é individual e sai pelo Caminho 2. security definer porque cinco dos oito leem domínio sensível e contar não é ler; o recorte de tenant e escopo continua sendo util.user_tenants() + util.can_see_employee. Janela de documento vem de app.document_type.expiry_alert_days, por tipo.
+Os oito contadores do painel de alertas do DP. Devolve CONTAGEM, nunca linha por pessoa — a lista é individual e sai pelo Caminho 2. security definer porque cinco dos oito leem domínio sensível e contar não é ler; o recorte de tenant e escopo continua sendo util.user_tenants() + util.can_see_employee. Janela de documento vem de app.document_type.expiry_alert_days, por tipo — o tenant que quiser os 90 dias do legado configura 90 no tipo. Os dois contadores de documento contam DOCUMENTO; os outros seis contam PESSOA (ver o cabeçalho da migration).
 
 
 ### `fn_kpi_period`

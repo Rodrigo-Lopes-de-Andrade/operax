@@ -105,6 +105,21 @@ begin
 end $$;
 
 \echo '--- 8. Nenhuma coluna de PII vazou para a superfície pública'
+-- ⛔ O VOCABULÁRIO DE PII MORA NUM LUGAR SÓ, e este bloco existe por isso.
+-- Os itens 8 e 9 procuram a mesma coisa em superfícies diferentes (coluna de
+-- view, e tipo de retorno de função definer), e até 07/09/2026 procuravam com
+-- listas DIFERENTES. O item 9 usava `\mname\M`, e `_` é caractere de palavra no
+-- regex do Postgres — então `mother_name`, `father_name` e `dependents_names`
+-- NÃO casavam, e `race_color` nem estava na lista dele. Medido: uma função
+-- definer de `public` devolvendo qualquer uma das quatro passava verde.
+-- Duas listas que precisam concordar e podem divergir sempre divergem; a
+-- correção não é sincronizá-las, é haver uma só.
+create or replace function pg_temp.pii_regex() returns text language sql immutable as $pii$
+  select '(cpf|^rg$|identidade|address|logradouro|cep|phone|celular|personal_email'
+      || '|mother_name|father_name|filiacao|nascimento|birth_date|^pis$|ctps|salary'
+      || '|race_color|marital_status|education_level|disability|dependents)'
+$pii$;
+
 do $$
 declare r record; falhas text := '';
 begin
@@ -122,30 +137,57 @@ begin
       --    medido em 07/09/2026, uma view de `public` expondo as três passava.
       --    Coluna nova em tabela de PII entra AQUI no mesmo PR, senão o item 8
       --    fica verde justamente sobre o que ainda não sabe procurar.
-      and a.attname ~* '(cpf|^rg$|identidade|address|logradouro|cep|phone|celular|personal_email|mother_name|father_name|filiacao|nascimento|birth_date|^pis$|ctps|salary|race_color|marital_status|education_level|disability|dependents)'
+      and a.attname ~* pg_temp.pii_regex()
   loop
     falhas := falhas || format('%s.%s ', r.view_name, r.col);
   end loop;
   if falhas <> '' then raise exception 'FALHA: PII exposta em view pública -> %', falhas; end if;
 end $$;
 
-\echo '--- 9. Helpers de RLS estão travados e sem EXECUTE para anon'
+\echo '--- 9. Função de util E de public: definer travado, sem EXECUTE para anon'
+-- ⚠️ O laço varria só `util` até 07/09/2026, e `public` tem QUATRO funções
+-- `security definer` — `fn_data_freshness`, `fn_detection_health`,
+-- `fn_whatsapp_readiness` e `fn_dp_alerts`. A garantia de cada uma vivia no
+-- bloco `do $$` da migration que a criou, que roda uma vez: um `create or
+-- replace` posterior trocava a função e nada ficava vermelho. Definer é definer
+-- em qualquer schema, e `public` é o único exposto ao PostgREST — se havia um
+-- schema para varrer com mais cuidado, era este.
 do $$
 declare r record; falhas text := '';
 begin
   for r in
-    select p.proname, p.prosecdef, p.proconfig, p.oid
+    select n.nspname as sch, p.proname, p.prosecdef, p.proconfig, p.oid
     from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-    where n.nspname = 'util' and p.prokind = 'f'
+    where n.nspname in ('util', 'public') and p.prokind = 'f'
   loop
     if r.prosecdef and (r.proconfig is null or not (r.proconfig::text like '%search_path=%')) then
-      falhas := falhas || format('%s(sem search_path) ', r.proname);
+      falhas := falhas || format('%s.%s(sem search_path) ', r.sch, r.proname);
     end if;
     if has_function_privilege('anon', r.oid, 'EXECUTE') then
-      falhas := falhas || format('%s(anon pode executar) ', r.proname);
+      falhas := falhas || format('%s.%s(anon pode executar) ', r.sch, r.proname);
+    end if;
+    -- ⛔ DEFINER EM `public` NÃO DEVOLVE PESSOA.
+    -- Ele ignora RLS por construção, então o que ele devolve não passa por
+    -- policy nenhuma: agregado é a única forma segura. As quatro de hoje
+    -- devolvem contagem, prontidão e idade de sincronização. A varredura é por
+    -- NOME DE COLUNA do tipo de retorno — o mesmo instrumento do item 8, e o
+    -- que impede um `create or replace` futuro de acrescentar `employee_id`
+    -- "já que estamos aqui".
+    if r.sch = 'public' and r.prosecdef
+       -- ⚠️ O vocabulário é o MESMO do item 8 (`pg_temp.pii_regex()`), mais os
+       -- identificadores de pessoa que só fazem sentido num retorno de função.
+       -- Até 07/09 esta linha tinha lista própria e mais curta — ver o bloco
+       -- que define a função.
+       -- ⛔ LIMITE CONHECIDO: `returns json`, `jsonb` e `setof record` não têm
+       -- nome de coluna em `pg_get_function_result`, então passam. É a forma
+       -- mais provável de devolver uma pessoa sem nomear nada, e esta varredura
+       -- não a alcança — fica declarado em vez de silencioso.
+       and (pg_get_function_result(r.oid) ~* pg_temp.pii_regex()
+            or pg_get_function_result(r.oid) ~* '(employee|colaborador|nome|registration)') then
+      falhas := falhas || format('%s.%s(definer devolve dado por pessoa) ', r.sch, r.proname);
     end if;
   end loop;
-  if falhas <> '' then raise exception 'FALHA: helpers inseguros -> %', falhas; end if;
+  if falhas <> '' then raise exception 'FALHA: função insegura -> %', falhas; end if;
 end $$;
 
 \echo '--- 10. Teste vivo: assumir o role anon e tentar ler'

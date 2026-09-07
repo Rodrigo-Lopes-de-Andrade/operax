@@ -24,10 +24,10 @@ ficou é conferida na vírgula, e o desligado aparece em `total_analyzed` e em
 
 O QUE ESTA SUÍTE **NÃO** PROVA, E ONDE ISSO É PROVADO
 O dublê responde por trecho de statement e devolve linhas plausíveis: ele modela
-o filtro de tenant (e falha alto quando falta), e **não** modela os predicados de
-`_OPEN_INSTALLMENTS_SQL` (`i.status = 'pending'`, `a.status = 'active'`). Esses
-dois literais não são exercitados por teste nenhum hoje — declarado aqui em vez
-de ficarem escondidos atrás de um fake que os copia e concorda consigo mesmo.
+o filtro de tenant, e falha alto quando falta. Ele **não** decide nada de
+negócio — devolve as parcelas com os dois `status` e deixa `compute_panel`
+filtrar. Foi assim que os literais de "parcela em aberto" saíram do SQL, onde
+nenhum teste os alcançava, e passaram a morrer sob mutação.
 Os oito contadores de alerta são de SQL e vivem em `scripts/87_teste_painel_dp.sql`,
 contra Postgres de verdade, com dois usuários — esta suíte não abre banco.
 """
@@ -156,6 +156,20 @@ def verbas_da_ana() -> list[dict[str, Any]]:
     ]
 
 
+def parcela(
+    *,
+    employee_id: UUID = ANA,
+    installment_status: str = "pending",
+    agreement_status: str = "active",
+) -> dict[str, Any]:
+    """Uma parcela de acordo, com os DOIS status que a consulta filtra."""
+    return {
+        "employee_id": employee_id,
+        "installment_status": installment_status,
+        "agreement_status": agreement_status,
+    }
+
+
 # ---------------------------------------------------------------------------
 # 1. A unidade de atuação — SPEC §1g, transcrita
 # ---------------------------------------------------------------------------
@@ -252,7 +266,7 @@ def kpis(**overrides: Any) -> painel.PanelKpis:
         "movements": [],
         "salary_bands": [faixa("3000.00")],
         "benefits": verbas_da_ana(),
-        "open_installments": set(),
+        "installments": [],
     }
     argumentos |= overrides
     return painel.compute_panel(
@@ -261,7 +275,7 @@ def kpis(**overrides: Any) -> painel.PanelKpis:
         argumentos["movements"],
         argumentos["salary_bands"],
         argumentos["benefits"],
-        argumentos["open_installments"],
+        argumentos["installments"],
         unit_id=argumentos.get("unit_id"),
         company_id=argumentos.get("company_id"),
     )
@@ -401,7 +415,7 @@ def test_o_cartao_de_sinistro_conta_unidades_e_nao_pessoas() -> None:
     """⛔ CONTAGEM (`ANEXO` §2b). Duas pessoas na mesma unidade são UMA unidade."""
     resultado = kpis(
         employees=[pessoa(), pessoa(BRUNO, "Bruno Alves")],
-        open_installments={ANA, BRUNO},
+        installments=[parcela(), parcela(employee_id=BRUNO)],
     )
     assert resultado.units_with_open_installment == 1
 
@@ -410,7 +424,7 @@ def test_o_cartao_de_sinistro_separa_unidades_distintas() -> None:
     """E o par positivo: unidades diferentes contam duas — senão bastaria `1`."""
     resultado = kpis(
         employees=[pessoa(), pessoa(BRUNO, "Bruno Alves", unit_id=DESTINO)],
-        open_installments={ANA, BRUNO},
+        installments=[parcela(), parcela(employee_id=BRUNO)],
     )
     assert resultado.units_with_open_installment == 2
 
@@ -420,13 +434,118 @@ def test_o_sinistro_segue_a_unidade_de_atuacao_e_nao_a_lotacao() -> None:
     resultado = kpis(
         employees=[pessoa(), pessoa(BRUNO, "Bruno Alves")],
         movements=[movimentacao(employee_id=BRUNO)],
-        open_installments={ANA, BRUNO},
+        installments=[parcela(), parcela(employee_id=BRUNO)],
     )
     assert resultado.units_with_open_installment == 2
 
 
 def test_quem_nao_tem_parcela_em_aberto_nao_conta_unidade() -> None:
-    assert kpis(open_installments=set()).units_with_open_installment == 0
+    assert kpis(installments=[]).units_with_open_installment == 0
+
+
+def test_parcela_processada_nao_acende_o_cartao_e_a_pendente_acende() -> None:
+    """⛔ OS DOIS `status` DE "PARCELA EM ABERTO", EXERCIDOS EM PAR.
+
+    Eram dois literais dentro do SQL até 07/09/2026, e nenhum teste os alcançava
+    — mutar qualquer um deixava a suíte inteira verde. A regra mudou de lugar
+    (para `compute_panel`) exatamente para caber aqui: parcela já processada foi
+    descontada, e acordo quitado não deve nada. Contar qualquer um dos dois
+    acende o cartão de sinistro de uma unidade que está em dia.
+    """
+    assert (
+        kpis(installments=[parcela(installment_status="processed")]).units_with_open_installment
+        == 0
+    )
+    assert kpis(installments=[parcela(agreement_status="settled")]).units_with_open_installment == 0
+    # O positivo ao lado, senão os dois acima ficariam verdes num cartão que
+    # nunca acende.
+    assert kpis(installments=[parcela()]).units_with_open_installment == 1
+
+
+def test_taxa_malformada_de_quem_nao_tem_faixa_nao_derruba_o_painel() -> None:
+    """⚠️ A GUARDA DE `salary_rate` SEM FAIXA, E O QUE ELA DE FATO COMPRA.
+
+    Não é o número: 30% de um salário ausente somaria zero de qualquer jeito. É a
+    exceção — `value_component` falha alto quando uma verba de taxa não declara
+    `rate` ou `quantity`, e sem a guarda o cadastro incompleto de alguém que nem
+    está na folha derrubaria o painel inteiro, com um 500 em vez de um cartão.
+
+    Bruno é ativo, não tem faixa salarial e tem uma periculosidade sem
+    `quantity`. O painel responde, e o número de Ana continua certo.
+    """
+    resultado = kpis(
+        employees=[pessoa(), pessoa(BRUNO, "Bruno Alves")],
+        benefits=[
+            *verbas_da_ana(),
+            {**verba("hazard_pay", employee_id=BRUNO, rate="0.30"), "quantity": None},
+        ],
+    )
+    assert resultado.trust_and_hazard == Decimal("1100.00")
+
+
+# ---------------------------------------------------------------------------
+# 2-bis. Os três cartões de verba — a população é "ativo", não "ativo com faixa"
+# ---------------------------------------------------------------------------
+def test_vr_de_quem_nao_tem_faixa_salarial_continua_no_cartao() -> None:
+    """⛔ O DEFEITO QUE O REVISOR MEDIU EM 07/09/2026.
+
+    A versão anterior exigia salário para somar QUALQUER verba, com a razão
+    "sem salário não há como valorizar taxa" — verdadeira para `salary_rate` e
+    **falsa para `fixed_amount`**, que nem olha o salário. O VR de quem está sem
+    faixa cadastrada sumia do cartão em silêncio, e `without_salary` explica o
+    total da folha, não o dos cartões.
+
+    Bruno é ativo, não tem faixa salarial e tem VR de 250: o cartão soma 850.
+    """
+    resultado = kpis(
+        employees=[pessoa(), pessoa(BRUNO, "Bruno Alves")],
+        benefits=[
+            *verbas_da_ana(),
+            verba(painel.MEAL_VOUCHER, employee_id=BRUNO, composes_base=False, amount="250.00"),
+        ],
+    )
+    assert resultado.meal_voucher == Decimal("850.00")
+    # E ele continua fora da folha base, que é datada e exige faixa vigente — as
+    # duas exclusões são de perguntas diferentes.
+    assert resultado.base_payroll == Decimal("4600.00")
+    assert resultado.without_salary == 1
+
+
+def test_verba_de_taxa_sem_faixa_salarial_fica_de_fora_e_e_a_unica_exclusao() -> None:
+    """⚠️ 30% DE UM SALÁRIO DESCONHECIDO NÃO TEM VALOR.
+
+    O par negativo do teste acima, e a divergência que sobra declarada: a
+    periculosidade de Bruno não entra porque não há de que tirar percentual —
+    chutar zero seria inventar um número. `without_salary` é a explicação, e
+    aqui ela é de fato a explicação certa.
+    """
+    resultado = kpis(
+        employees=[pessoa(), pessoa(BRUNO, "Bruno Alves")],
+        benefits=[
+            *verbas_da_ana(),
+            verba("hazard_pay", employee_id=BRUNO, rate="0.30", quantity=1),
+        ],
+    )
+    assert resultado.trust_and_hazard == Decimal("1100.00")
+    assert resultado.without_salary == 1
+
+
+def test_verba_de_desligado_nao_entra_em_cartao_nenhum() -> None:
+    """ "soma mensal, ativos" (`ANEXO` §2a) — e o positivo de Ana ao lado.
+
+    Sem esta linha, trocar a população dos cartões por "todo mundo do filtro"
+    passaria verde: o desligado não tem faixa vigente na fixture, e a exclusão
+    antiga o pegava por acidente.
+    """
+    resultado = kpis(
+        employees=[pessoa(), pessoa(CARLA, "Carla Dias", status="desligado")],
+        salary_bands=[faixa("3000.00"), faixa("9000.00", employee_id=CARLA)],
+        benefits=[
+            *verbas_da_ana(),
+            verba(painel.MEAL_VOUCHER, employee_id=CARLA, composes_base=False, amount="999.00"),
+        ],
+    )
+    assert resultado.meal_voucher == Decimal("600.00")
 
 
 # ---------------------------------------------------------------------------
@@ -526,6 +645,11 @@ class PainelDB:
         if "from app.workforce_movement m" in sql:
             return self._do_tenant(self.movimentacoes, params)
         if "from app.agreement_installment i" in sql:
+            # ⛔ O DUBLÊ DEVOLVE AS LINHAS CRUAS, com os dois `status`, e NÃO
+            # filtra: quem decide o que é "parcela em aberto" é
+            # `painel.compute_panel`. Um dublê que filtrasse seria a regra
+            # escrita no teste, concordando consigo mesma — e foi por isso que os
+            # dois literais viveram no SQL sem teste até 07/09/2026.
             return self._do_tenant(self.parcelas, params)
         if "from app.employee_compensation c" in sql:
             return self._do_tenant(self.faixas, params)
@@ -638,6 +762,22 @@ def test_movimentacao_de_outro_tenant_nao_remaneja_ninguem(
     assert pedir(client, issue_token, unidade=str(DESTINO)).json()["total_analyzed"] == 0
 
 
+def test_a_parcela_lida_do_banco_chega_ao_cartao(
+    client: TestClient, issue_token: Any, fake_db: PainelDB
+) -> None:
+    """O par acima é puro; este é o encanamento — a linha do banco vira cartão.
+
+    Sem ele, `_OPEN_INSTALLMENTS_SQL` poderia devolver a coluna com outro nome e
+    só a rota saberia. Com ele, o `KeyError` aparece aqui.
+    """
+    cenario(fake_db)
+    fake_db.semear(parcela(installment_status="processed"), "parcelas")
+    assert pedir(client, issue_token).json()["units_with_open_installment"] == 0
+
+    fake_db.semear(parcela(), "parcelas")
+    assert pedir(client, issue_token).json()["units_with_open_installment"] == 1
+
+
 def test_sem_o_dominio_de_remuneracao_o_painel_nao_abre(
     client: TestClient, issue_token: Any, fake_db: PainelDB
 ) -> None:
@@ -670,7 +810,7 @@ def test_nenhuma_resposta_do_painel_carrega_pessoa(
     cartão de sinistro devolve contagem, e o nome exige abrir a ficha.
     """
     cenario(fake_db)
-    fake_db.semear({"employee_id": ANA, "installment_status": "pending"}, "parcelas")
+    fake_db.semear(parcela(), "parcelas")
     corpo = json.dumps(pedir(client, issue_token).json())
     assert "Ana Ribeiro" not in corpo
     assert str(ANA) not in corpo

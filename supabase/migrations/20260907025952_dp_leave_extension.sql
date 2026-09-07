@@ -88,8 +88,11 @@ begin
     end if;
   end loop;
 
-  -- 2. `document_id` aponta para `app.document`. Um uuid solto aceitaria
-  --    qualquer id, inclusive o de outro tenant.
+  -- 2. `document_id` aponta para a TABELA `app.document` — um `uuid` sem FK
+  --    aceitaria qualquer id, inclusive o de um exame.
+  --    ⚠️ Ela não fecha o tenant: FK simples aceita documento de outro cliente.
+  --    Nenhuma FK de `app` é composta com `tenant_id`; a fronteira de tenant é
+  --    da RLS e do `tenant_scope`.
   select cl.relname into v_alvo
     from pg_constraint c
     join pg_class cl on cl.oid = c.confrelid

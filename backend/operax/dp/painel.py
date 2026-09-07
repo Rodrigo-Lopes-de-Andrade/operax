@@ -37,6 +37,18 @@ pela policy `employee_read`. As tabelas de dinheiro (`app.employee_compensation`
 `app.employee_benefit`) vêm por `tenant_scope`, como no S1 — a de verbas não
 concede nada a `authenticated` —, e só são usadas para gente que a leitura sob
 RLS já devolveu. O agregado nunca soma alguém que quem perguntou não enxerga.
+
+⚠️ E OS DOIS EIXOS DE UNIDADE NÃO SÃO O MESMO — CONSEQUÊNCIA DECLARADA
+Autorização é por **lotação**: `util.can_see_employee` decide por
+`app.employee.unit_id`, e é ela que a policy consulta. Filtro é por **atuação**:
+`_no_filtro` compara `placement.unit_id`. Quem foi remanejado PARA a unidade do
+supervisor e continua lotado em outra **não aparece para ele**, nem quando ele
+filtra pela própria unidade — o recorte de autorização vem antes e é mais
+restritivo. Não é vazamento (nunca mostra a mais); é um número parcial que quem
+o lê não tem como saber que é parcial. Fechar isso é mudar `util.can_see_employee`
+para enxergar a movimentação, e mudança de policy de RLS é parada obrigatória
+(`CLAUDE.md`) — decisão do dono, não daqui. A `dp_movement_period` registra a
+consequência gêmea do lado da policy de `app.workforce_movement`.
 """
 
 from __future__ import annotations
@@ -66,6 +78,16 @@ TERMINATED = "desligado"
 MEAL_VOUCHER = "meal_voucher"
 COST_ALLOWANCE = "cost_allowance"
 TRUST_AND_HAZARD = ("trust_position", "hazard_pay")
+
+#: O par que define "parcela em aberto": parcela pendente de acordo em vigor.
+#: `app.agreement_installment.status` aceita
+#: ('pending','processed','cancelled','renegotiated') e
+#: `app.financial_agreement.status` aceita ('active','settled','cancelled','suspended')
+#: — migration 08. Uma parcela processada já foi descontada, e um acordo quitado
+#: não deve nada: contar qualquer um dos dois acende o cartão de sinistro de uma
+#: unidade que está em dia.
+PENDING_INSTALLMENT = "pending"
+ACTIVE_AGREEMENT = "active"
 
 _CENTAVOS = Decimal("0.01")
 _QUATRO_CASAS = Decimal("0.0001")
@@ -200,29 +222,48 @@ def _no_filtro(
 def _sum_benefit(
     codes: Collection[str],
     benefits: Sequence[Mapping[str, Any]],
+    active_ids: Collection[UUID],
     salaries: Mapping[UUID, Decimal],
     on: date,
 ) -> Decimal:
-    """Soma mensal de uma verba sobre a população que tem salário vigente.
+    """Soma mensal de uma verba sobre os ATIVOS — `ANEXO` §2a, "soma mensal, ativos".
 
     ⛔ VALORIZADA POR `beneficios.value_component`, a mesma função que a folha
     base usa. Um `sum(amount)` aqui daria **zero** para verba de taxa
     (periculosidade é `salary_rate`, e o valor dela mora em `rate × quantity ×
     salário`) e o cartão mostraria um número menor com cara de número.
 
-    ⚠️ Quem não tem faixa salarial vigente fica de fora — a mesma exclusão que
-    `compute_base_payroll` faz, e pela mesma razão: sem salário não há como
-    valorizar taxa. `PanelKpis.without_salary` é quem conta essa gente.
+    ⛔ A POPULAÇÃO É "ATIVO", E NÃO "ATIVO COM FAIXA SALARIAL VIGENTE"
+    Corrigido em 07/09/2026, medido pelo revisor. A versão anterior exigia
+    salário para toda verba, com a justificativa "sem salário não há como
+    valorizar taxa" — que é verdadeira para `salary_rate` e **falsa para
+    `fixed_amount`**: `value_component` nem olha o salário nesse caso. O efeito
+    era o VR de quem está sem faixa cadastrada sumir do cartão em silêncio, e
+    `without_salary` explica o total da FOLHA, não o dos três cartões.
+
+    ⚠️ VERBA DE TAXA DE QUEM NÃO TEM FAIXA VIGENTE CONTINUA FORA, e o que isso
+    muda é MENOS do que parece: 30% de um salário ausente somaria zero de
+    qualquer jeito, então o total é o mesmo com ou sem a guarda. O que ela evita
+    é outra coisa, e é a razão de ela existir: `value_component` **falha alto**
+    quando uma verba de taxa não tem `rate` ou `quantity`, e sem a guarda esse
+    cadastro incompleto — de alguém que nem está na folha — derrubaria o painel
+    inteiro. Exercitado por `test_taxa_malformada_de_quem_nao_tem_faixa_nao_derruba_o_painel`.
     """
     total = _ZERO
     for verba in benefits:
         if verba["code"] not in codes:
             continue
-        salary = salaries.get(verba["employee_id"])
-        if salary is None:
+        if verba["employee_id"] not in active_ids:
             continue
         if not beneficios.in_effect(on, verba["effective_from"], verba["effective_to"]):
             continue
+        salary = salaries.get(verba["employee_id"])
+        if salary is None:
+            if verba["calculation"] == beneficios.SALARY_RATE:
+                continue
+            # `fixed_amount` ignora o salário — ver `value_component`. O zero
+            # aqui não entra em conta nenhuma; ele só satisfaz a assinatura.
+            salary = _ZERO
         total += beneficios.value_component(verba, salary).amount
     return total
 
@@ -233,7 +274,7 @@ def compute_panel(
     movements: Sequence[Mapping[str, Any]],
     salary_bands: Sequence[Mapping[str, Any]],
     benefits: Sequence[Mapping[str, Any]],
-    open_installments: Collection[UUID],
+    installments: Sequence[Mapping[str, Any]],
     *,
     unit_id: UUID | None = None,
     company_id: UUID | None = None,
@@ -263,13 +304,19 @@ def compute_panel(
 
     payroll = beneficios.compute_base_payroll(on, ativos, salary_bands, benefits)
     salarios = {linha.employee_id: linha.salary for linha in payroll.lines}
+    ativos_ids = {e["employee_id"] for e in ativos}
 
     total = len(selecionados)
+    em_aberto = {
+        linha["employee_id"]
+        for linha in installments
+        if linha["installment_status"] == PENDING_INSTALLMENT
+        and linha["agreement_status"] == ACTIVE_AGREEMENT
+    }
     unidades_com_parcela = {
         placements[e["employee_id"]].unit_id
         for e in selecionados
-        if e["employee_id"] in open_installments
-        and placements[e["employee_id"]].unit_id is not None
+        if e["employee_id"] in em_aberto and placements[e["employee_id"]].unit_id is not None
     }
 
     return PanelKpis(
@@ -290,9 +337,9 @@ def compute_panel(
             if not ativos
             else (payroll.total / Decimal(len(ativos))).quantize(_CENTAVOS, rounding=ROUND_HALF_UP)
         ),
-        meal_voucher=_sum_benefit({MEAL_VOUCHER}, benefits, salarios, on),
-        cost_allowance=_sum_benefit({COST_ALLOWANCE}, benefits, salarios, on),
-        trust_and_hazard=_sum_benefit(set(TRUST_AND_HAZARD), benefits, salarios, on),
+        meal_voucher=_sum_benefit({MEAL_VOUCHER}, benefits, ativos_ids, salarios, on),
+        cost_allowance=_sum_benefit({COST_ALLOWANCE}, benefits, ativos_ids, salarios, on),
+        trust_and_hazard=_sum_benefit(set(TRUST_AND_HAZARD), benefits, ativos_ids, salarios, on),
         without_salary=payroll.without_salary,
         units_with_open_installment=len(unidades_com_parcela),
     )
@@ -323,17 +370,25 @@ _MOVEMENTS_SQL = """
     order by m.employee_id, m.effective_from
 """
 
-# ⛔ PARCELA EM ABERTO DE ACORDO ATIVO — e só o `employee_id`, nunca o nome nem o
-# valor. O cartão é contagem de unidade; nada além do id precisa atravessar esta
-# fronteira, e o que não é lido não vaza.
+# ⛔ SÓ `employee_id` E OS DOIS `status` — nunca o nome, nunca o valor devido. O
+# cartão é contagem de unidade, e o que não é lido não vaza.
+#
+# ⚠️ O QUE É "PARCELA EM ABERTO" NÃO ESTÁ NESTE SQL, E ISSO É ESCOLHA
+# Corrigido em 07/09/2026. A versão anterior filtrava por `i.status = 'pending'`
+# e `a.status = 'active'` aqui — dois literais que decidem um cartão da home e
+# que **nenhum teste alcançava**: a suíte de pytest não abre banco, e
+# `scripts/87_teste_painel_dp.sql`, que abre, só enxerga `public.fn_dp_alerts`.
+# Mutar qualquer um dos dois deixava as 182 asserções verdes. Com a regra em
+# Python ela é exercitada pela mesma fixture que o resto do painel — é a escolha
+# que `beneficios.in_effect` já fez no S1, pelo mesmo motivo.
 _OPEN_INSTALLMENTS_SQL = """
-    select distinct a.employee_id
+    select a.employee_id,
+           i.status as installment_status,
+           a.status as agreement_status
     from app.agreement_installment i
     join app.financial_agreement a
       on a.id = i.agreement_id and a.tenant_id = i.tenant_id
     where i.tenant_id = %(tenant_id)s
-      and i.status = 'pending'
-      and a.status = 'active'
 """
 
 
@@ -358,7 +413,7 @@ async def read_panel(
         movements = [dict(linha) for linha in await scope.fetchall()]
 
         await scope.execute(_OPEN_INSTALLMENTS_SQL)
-        open_installments = {linha["employee_id"] for linha in await scope.fetchall()}
+        installments = [dict(linha) for linha in await scope.fetchall()]
 
     entradas = await beneficios.read_payroll_inputs(tenant)
     return compute_panel(
@@ -367,7 +422,7 @@ async def read_panel(
         movements,
         entradas.salary_bands,
         entradas.benefits,
-        open_installments,
+        installments,
         unit_id=unit_id,
         company_id=company_id,
     )

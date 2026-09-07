@@ -164,11 +164,15 @@ begin
       v_qual;
   end if;
 
-  -- 5. ⛔ NADA DISSO CHEGOU À SUPERFÍCIE PÚBLICA
+  -- 5. ⛔ NADA DISSO CHEGOU À SUPERFÍCIE PÚBLICA — VIEW **E** RPC
   --    `dependents_names` é nome de terceiro; `race_color` e `disability` são
   --    sensíveis. A varredura é a mesma ideia do item 8 de
   --    `scripts/99_verificacao_rls.sql`, feita aqui para que a migration falhe
   --    junto com a view que a expusesse, no mesmo PR.
+  --    ⚠️ As RPCs entraram em 07/09/2026: varrer só `relkind = 'v'` deixava
+  --    passar uma função de `public` devolvendo `race_color` — e `public` tem
+  --    dez RPCs, quatro delas `security definer`, que é justamente a forma que
+  --    não passa por policy nenhuma.
   select string_agg(format('%s.%s', c.relname, a.attname), ', ') into v_proibida
     from pg_class c
     join pg_namespace n on n.oid = c.relnamespace
@@ -177,6 +181,15 @@ begin
      and a.attname in ('race_color', 'disability', 'dependents_names', 'dependents_count');
   if v_proibida is not null then
     raise exception 'FALHA: dado sensível da ficha exposto em view pública -> %', v_proibida;
+  end if;
+
+  select string_agg(p.proname, ', ') into v_proibida
+    from pg_proc p
+    join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.prokind = 'f'
+     and pg_get_function_result(p.oid) ~* '(race_color|disability|dependents_names|dependents_count)';
+  if v_proibida is not null then
+    raise exception 'FALHA: dado sensível da ficha exposto em RPC de public -> %', v_proibida;
   end if;
 
   -- 6. A prova viva: os valores entram, e a quantidade negativa não.

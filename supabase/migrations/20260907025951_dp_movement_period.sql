@@ -123,8 +123,13 @@ begin
         v_coluna;
     end if;
 
-    -- 2. E as quatro de referência apontam para a tabela certa. Um `uuid` solto
-    --    aceitaria o id de qualquer coisa, inclusive de outro tenant.
+    -- 2. E as quatro de referência apontam para a TABELA certa — um `uuid` sem
+    --    FK aceitaria o id de um posto no lugar do de uma unidade.
+    --    ⚠️ O que ela NÃO garante: a FK é simples, então ela aceita a unidade de
+    --    OUTRO tenant. Nenhuma FK de `app` é composta com `tenant_id` — a
+    --    fronteira de tenant é da RLS e do `tenant_scope`, não do catálogo — e
+    --    dizer aqui que ela era da FK seria uma promessa que o schema inteiro
+    --    não cumpre.
     if v_esperado[i][3] <> '' then
       select cl.relname into v_alvo
         from pg_constraint c
