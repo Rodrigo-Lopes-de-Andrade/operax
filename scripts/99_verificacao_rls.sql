@@ -114,7 +114,15 @@ begin
     join pg_namespace n on n.oid = c.relnamespace
     join pg_attribute a on a.attrelid = c.oid and a.attnum > 0 and not a.attisdropped
     where n.nspname = 'public' and c.relkind = 'v'
-      and a.attname ~* '(cpf|^rg$|identidade|address|logradouro|cep|phone|celular|personal_email|mother_name|father_name|filiacao|nascimento|^pis$|ctps|salary)'
+      -- ⚠️ ESTA LISTA ENVELHECE COM O SCHEMA, e envelheceu duas vezes.
+      --    `nascimento` é o nome PRÉ-rename: a coluna virou `birth_date` e o
+      --    check parou de vê-la sem ficar vermelho. E as seis colunas que a
+      --    migration `dp_cadastral_fields` (S4) pôs em `app.employee_pii` —
+      --    `race_color` e `dependents_names` à frente — não estavam aqui:
+      --    medido em 07/09/2026, uma view de `public` expondo as três passava.
+      --    Coluna nova em tabela de PII entra AQUI no mesmo PR, senão o item 8
+      --    fica verde justamente sobre o que ainda não sabe procurar.
+      and a.attname ~* '(cpf|^rg$|identidade|address|logradouro|cep|phone|celular|personal_email|mother_name|father_name|filiacao|nascimento|birth_date|^pis$|ctps|salary|race_color|marital_status|education_level|disability|dependents)'
   loop
     falhas := falhas || format('%s.%s ', r.view_name, r.col);
   end loop;

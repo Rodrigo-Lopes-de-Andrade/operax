@@ -1,4 +1,19 @@
-<!-- verificar-docs: inexistentes-de-proposito app.work_post app.benefit_type app.benefit_plan app.transport_fare app.employee_benefit app.benefit_cycle app.benefit_entitlement app.unit_compliance_report app.payroll_code_map app.employee.hr_code public.fn_dp_panel public.fn_dp_alerts public.vw_unit_compliance app.work_schedule_day -->
+<!-- verificar-docs: inexistentes-de-proposito app.unit_compliance_report app.payroll_code_map public.fn_dp_panel public.vw_unit_compliance app.work_schedule_day -->
+<!-- ⚠️ NOVE exceções saíram em 07/09/2026, medidas UMA A UMA contra o catálogo e
+     não deduzidas: `app.work_post`, `app.benefit_type`, `app.benefit_plan`,
+     `app.transport_fare`, `app.employee_benefit` (S1), `app.benefit_cycle`,
+     `app.benefit_entitlement` (S3), `public.fn_dp_alerts` (S4) e
+     `app.employee.hr_code` (migration 16, que nunca deveria ter entrado aqui).
+     Todas existem. Ficam as cinco que de fato não existem: as duas do S5, a
+     `public.fn_dp_panel` que deixou de ser planejada em 06/09 (o painel vai
+     pelo Caminho 2), a view que desceu para o S5, e a tabela que nunca existiu.
+     ⚠️ Escreva sempre com o schema na frente, INCLUSIVE aqui: o verificador
+     varre o comentário também, e o nome cru não casa com a exceção qualificada.
+     Custou duas rodadas de suíte descobrir isso — a segunda porque o próprio
+     aviso trazia o nome cru como exemplo.
+     Este verificador SÓ SUPRIME e nunca reclama de sobra — então exceção que
+     sobrevive ao objeto que desculpava é a forma silenciosa de ele ficar cego,
+     e foi assim que oito delas se acumularam aqui sem ninguém notar. -->
 <!-- `app.work_schedule_day` entra na lista porque a §0 e a §0-bis a CITAM para
      dizer que ela NÃO existe — foi o nome errado que esta SPEC afirmou como
      existente até 05/09/2026. As demais são entidades que a etapa vai criar. -->

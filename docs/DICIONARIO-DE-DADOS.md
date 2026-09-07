@@ -1185,6 +1185,16 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `personal_email` | text | sim |  |  |  |
 | `address` | jsonb | sim |  |  |  |
 | `updated_at` | timestamp with time zone | não | `now()` |  |  |
+| `marital_status` | text | sim |  |  |  |
+| `race_color` | text | sim |  |  | Dado sensível. Protegido pelo domínio pii da policy pii_read — a coluna não tem proteção própria e não precisa de uma: ela herda a da tabela. |
+| `education_level` | text | sim |  |  |  |
+| `disability` | boolean | sim |  |  | BOOLEANO, e só. A cota legal conta pessoas; qual é a deficiência é dado de saúde e o produto não o guarda (regra 10). Nunca virar texto, nunca ganhar uma coluna irmã com o tipo. |
+| `dependents_count` | integer | sim |  |  |  |
+| `dependents_names` | text[] | sim |  |  | Nome de TERCEIRO. Mesma proteção de pii e nunca em view pública: quem aparece aqui não assinou contrato com o cliente. |
+
+**Restrições**
+
+- `CHECK (((dependents_count IS NULL) OR (dependents_count >= 0)))`
 
 **Policies**
 
@@ -1216,6 +1226,12 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
 | `work_post_id` | uuid | sim |  | `app.work_post` | Posto do Quadro de Postos em que a pessoa exerce este cargo. Anulável: cargo sem posto mapeado é o estado inicial. |
 | `level` | text | sim |  |  | Nível dentro do cargo ("OPERADOR" na ficha do legado). Rótulo do cliente, não enum. |
+| `workload_minutes` | integer | sim |  |  | Carga horária contratada, em minutos. Minuto e não hora pela mesma razão de app.deviation_event.minutes: 6h20 não cabe em decimal sem arredondar. |
+| `shift_label` | text | sim |  |  | Jornada como o legado a escreve ("10:00 AS 22:00 INT 14:30 AS 15:45"). Texto livre, com prazo: sai quando o Quadro de Postos cobrir todos. Não é insumo de cálculo. |
+
+**Restrições**
+
+- `CHECK (((workload_minutes IS NULL) OR (workload_minutes > 0)))`
 
 **Policies**
 
@@ -1624,6 +1640,9 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `end_date` | date | sim |  |  |  |
 | `source` | text | não | `'secullum'::text` |  |  |
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
+| `document_id` | uuid | sim |  | `app.document` | Anexo do afastamento (o atestado). Aponta para o ARQUIVO, nunca para o motivo: quem lê o documento continua passando por document_read, que exige o domínio do tipo. Regra 10 — sem diagnóstico, sem CID, sem restrição. |
+| `accrual_period` | text | sim |  |  | Período aquisitivo no formato do legado ("2025/2026"). Texto porque é rótulo de competência, não data: nada nesta etapa calcula sobre ele. |
+| `limit_date` | date | sim |  |  | Data limite para gozo das férias (admissão + 12 meses, no legado). É a fonte do contador "data limite de férias" de public.fn_dp_alerts. |
 
 **Restrições**
 
@@ -1639,6 +1658,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 <details><summary>Índices</summary>
 
+- `leave_period_limite_idx` — `app.leave_period USING btree (tenant_id, limit_date) WHERE (limit_date IS NOT NULL)`
 - `leave_period_periodo_idx` — `app.leave_period USING btree (employee_id, start_date, end_date)`
 - `leave_period_tenant_id_fkidx` — `app.leave_period USING btree (tenant_id)`
 
@@ -2346,9 +2366,16 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `estimated_cost` | numeric(14,2) | sim |  |  |  |
 | `notes` | text | sim |  |  |  |
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
+| `origin_unit_id` | uuid | sim |  | `app.unit` |  |
+| `destination_unit_id` | uuid | sim |  | `app.unit` | Destino do remanejamento. É daqui que sai a UNIDADE DE ATUAÇÃO: destino da movimentação vigente (sem effective_to, ou com effective_to no futuro); sem movimentação, vale a lotação de app.employee.unit_id. Derivada em leitura — nunca gravada de volta na ficha. |
+| `origin_work_post_id` | uuid | sim |  | `app.work_post` |  |
+| `destination_work_post_id` | uuid | sim |  | `app.work_post` | Posto de destino. Acompanha destination_unit_id na mesma projeção: a tela do legado atualiza os dois juntos, e separá-los deixaria a ficha com posto de uma unidade e unidade de outra. |
+| `effective_from` | date | sim |  |  |  |
+| `effective_to` | date | sim |  |  | Fim da vigência, inclusivo. Nulo = em aberto. Encerrar é escrever esta data — movimentação NUNCA é apagada (regra 6 estendida): apagar altera retroativamente onde a pessoa estava. |
 
 **Restrições**
 
+- `CHECK (((effective_to IS NULL) OR (effective_from IS NULL) OR (effective_to >= effective_from)))`
 - `CHECK ((type = ANY (ARRAY['hire'::text, 'termination'::text, 'transfer'::text, 'promotion'::text, 'leave_period'::text, 'return_to_work'::text])))`
 
 **Policies**
@@ -2363,6 +2390,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 - `movimentacao_data_idx` — `app.workforce_movement USING btree (tenant_id, event_date DESC)`
 - `workforce_movement_company_id_fkidx` — `app.workforce_movement USING btree (company_id)`
 - `workforce_movement_payroll_period_id_fkidx` — `app.workforce_movement USING btree (payroll_period_id)`
+- `workforce_movement_periodo_idx` — `app.workforce_movement USING btree (tenant_id, employee_id, effective_from DESC) WHERE (destination_unit_id IS NOT NULL)`
 - `workforce_movement_unit_id_fkidx` — `app.workforce_movement USING btree (unit_id)`
 
 </details>
@@ -3363,6 +3391,16 @@ public.fn_detection_health(p_backfill_max_age_hours integer DEFAULT 26)
 ```
 
 Backfill overdue is true when it has not completed in p_backfill_max_age_hours OR has never run. Never-ran must read as overdue, not as null.
+
+
+### `fn_dp_alerts`
+
+```sql
+public.fn_dp_alerts()
+  returns TABLE(code text, total integer)
+```
+
+Os oito contadores do painel de alertas do DP. Devolve CONTAGEM, nunca linha por pessoa — a lista é individual e sai pelo Caminho 2. security definer porque cinco dos oito leem domínio sensível e contar não é ler; o recorte de tenant e escopo continua sendo util.user_tenants() + util.can_see_employee. Janela de documento vem de app.document_type.expiry_alert_days, por tipo.
 
 
 ### `fn_kpi_period`
