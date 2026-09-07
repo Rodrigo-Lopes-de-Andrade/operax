@@ -121,11 +121,31 @@ dele). A etapa de canais resolve o destino de **Telegram** (`app.messaging_ident
 com titular `contact_id` XOR `employee_id`); a rota de **WhatsApp para
 colaborador continua sem modelo de destinatário**.
 
-⛔ **Isto precisa de decisão antes de S4 começar**, e as opções não são
+⛔ **Isto precisava de decisão antes de S4 começar**, e as opções não eram
 equivalentes: estender `app.contact` com elo opcional para colaborador, ou usar o
 `app.messaging_identity` da etapa de canais como modelo único de endereço. A
-segunda acopla S4 ao C3. Sem escolher, S4 entrega dois templates que não têm
+segunda acopla S4 ao C3. Sem escolher, S4 entregaria dois templates que não têm
 destinatário — e o sintoma é uma fila que nunca sai.
+
+✅ **Decidido pelo dono em 06/09/2026: os dois templates SAEM do S4.** Ele entrega
+o painel, os 9 KPIs e os 8 cartões de alerta — que é o valor dele —, e
+`birthday_greeting` e `cnh_renewal_request` descem para quando existir modelo de
+endereço. O próprio plano já dizia que o destino *"não é escopo dele"*.
+
+⚠️ **A medição que fechou a decisão foi refeita em 06/09 e é mais dura que o
+texto acima:** `app.contact` tem `name · whatsapp · email · type` e **nenhum
+`employee_id`** (migration 04, linhas 178-187); e `app.messaging_identity` **não
+existe em migration nenhuma** — só em `SPEC-CANAIS.md` —, onde o check é
+`channel in ('telegram')`. Ou seja: **não há modelo de destinatário de WhatsApp
+para colaborador em lugar nenhum do produto**, nem no DP nem na etapa de canais.
+A opção "usar o `messaging_identity`" não resolveria sem alargar o canal e
+construir a tabela antes.
+
+📌 **Consequência para o escopo do S4:** saem os dois templates e o
+`util.validate_alert_template` que os cobriria. Ficam `dp_movement_period`,
+`dp_leave_extension`, `dp_cadastral_fields` e `dp_panel_views`. **A parada de
+"coluna nova em view pública" continua de pé** — `public.fn_dp_panel` e
+`public.fn_dp_alerts` são superfície de `public`.
 
 ⛔ **Parada obrigatória antes de aplicar:** coluna nova em view pública.
 
@@ -188,7 +208,7 @@ andaime que a orquestração exige e que o documento não tinha.
 | S1 — Fundação | ✅ **aprovada** (06/09) — **backend e banco; a metade de frontend não foi despachada** | `dp_work_post`, `dp_benefit_catalog` | guardião ✅ · revisor ✅ | 2 |
 | S2 — Domínio `banking` | ✅ **aprovada** (05/09) | `dp_banking_domain`, `dp_banking_account` | guardião ✅ · revisor ✅ | 1 |
 | S3 — Ciclo mensal | ✅ **aprovada** (06/09) — **backend e banco; frontend não despachado; reconciliação com o legado ABERTA** | `dp_benefit_cycle`, `dp_leave_category`, `dp_absence_map` | guardião ✅ · revisor ✅ | 2 |
-| S4 — Painel e alertas | pendente | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | — | 0 |
+| S4 — Painel e alertas | 🔵 **em execução** (06/09) — templates fora, `fn_dp_panel` fora, painel pelo Caminho 2 | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | — | 0 |
 | S5 — Laudos e rubricas | pendente | `dp_unit_compliance`, `dp_payroll_code_map` | — | 0 |
 
 Onze slots, um arquivo por slot. ⛔ `dp_banking_domain` e `dp_banking_account`
@@ -1242,6 +1262,44 @@ quando o `accounting` precisar auditar a curadoria — e fica **escrito**.
   revisor confirmou que recusar é o comportamento certo: *"dia sem linha não é dia
   sem expediente; tratá-lo como zero paga a menos sem sintoma"*.
 - A metade de frontend (`frontend/src/app/dashboard/dp/`) não foi despachada.
+
+## Despacho do S4 — três coisas medidas antes, e duas mudaram o escopo
+
+**1. ✅ Superfície de `public` autorizada pelo dono (06/09), só agregado.** É a
+parada declarada do `CLAUDE.md`, e ela não foi presumida.
+
+**2. ⛔ `public.fn_dp_panel` não é criada — o painel vai pelo Caminho 2.**
+Decisão do dono. A folha base **já existe em Python** desde o S1
+(`beneficios.compute_base_payroll`), e o S1 declarou que a regra de vigência mora
+lá porque *"escrita nos dois lugares ela divergiria, e a metade SQL é a que o
+pytest não alcança"*. Uma RPC que recalculasse a mesma soma em SQL seria a regra
+escrita duas vezes — e o `ANEXO` §2a exige que a folha base **bata com a do
+cliente na vírgula**.
+
+📌 E é coerente com o Contrato: folha base é `compensation`, e o Caminho 1
+carrega **só agregado não sensível**. `public.fn_dp_alerts` fica, porque contagem
+de documento a vencer não é dado de pessoa.
+
+**3. ⛔ `public.vw_unit_compliance` desce para o S5.** Ela lê
+`app.unit_compliance_report` — a tabela que o **S5** cria. Conferido em 06/09:
+não existe em migration nenhuma. O `SPRINTS-DP.md` já listava só as duas RPCs e
+estava certo; a `SPEC-DP.md` §1k é que estava à frente do próprio plano, e foi
+corrigida.
+
+**O que foi conferido e estava certo:** `app.document_type.expiry_alert_days`
+existe desde a migration 08 (`integer not null default 30`), então o gate *"os 8
+contadores usam a coluna, não constante"* é satisfazível.
+
+⚠️ **E o gate do S4 herda o problema do S3:** *"os 9 KPIs batem com o legado
+sobre a mesma base"* — e **não há export do legado no repositório**. Os 9 KPIs
+estão enumerados no `ANEXO` §2a com as fórmulas declaradas na tela, então o
+sprint pode transcrevê-las e provar por fixture; a **conferência contra o legado
+fica ABERTA**, como no S3, até o mês fechado do cliente chegar.
+
+⚠️ **Retenção é canetada de produto, não de engenharia.** O `ANEXO` §2a já
+registra que `ativos / total no filtro` **não é retenção** — muda de significado
+conforme o filtro. O S4 **transcreve a fórmula do legado** (é o que o gate
+compara) e não a conserta; o rótulo é decisão do dono, pendente.
 
 ## Itens próprios abertos pelo S1 — fora do escopo de qualquer sprint desta etapa
 

@@ -797,8 +797,15 @@ def _current_salary(bands: Sequence[Mapping[str, Any]], on: date) -> Decimal | N
     return _decimal(max(vigentes, key=lambda b: b["effective_from"])["salary"])
 
 
-def _component(row: Mapping[str, Any], salary: Decimal) -> BaseComponent:
+def value_component(row: Mapping[str, Any], salary: Decimal) -> BaseComponent:
     """Quanto esta verba vale, segundo o `calculation` que o catálogo declara.
+
+    ⛔ PÚBLICA DESDE O S4, E POR UM MOTIVO E NÃO POR CONVENIÊNCIA
+    O painel precisa somar o VR — que **não** compõe a base e por isso não sai em
+    `BasePayroll.lines[].components`. Valorizá-lo lá com uma segunda conta
+    (`sum(amount)`, por exemplo) daria zero na verba de taxa e ninguém veria: o
+    cartão mostraria um número menor com cara de número. Uma função só valoriza
+    verba neste produto, componha ela a base ou não.
 
     `salary_rate` é o mecanismo do triênio: o valor deriva do salário vigente, e
     por isso acompanha o aumento na mesma leitura. Guardado como montante fixo
@@ -865,7 +872,7 @@ def compute_base_payroll(
             continue
 
         componentes = tuple(
-            _component(verba, salary)
+            value_component(verba, salary)
             for verba in verbas[employee_id]
             if verba["composes_base"]
             and in_effect(on, verba["effective_from"], verba["effective_to"])
@@ -888,6 +895,38 @@ def compute_base_payroll(
     )
 
 
+@dataclass(frozen=True, slots=True)
+class PayrollInputs:
+    """As duas leituras de dinheiro que alimentam a folha base.
+
+    ⛔ EXISTE PARA QUE HAJA UM LEITOR SÓ, e não por gosto de estrutura. O painel
+    do S4 monta a mesma soma sobre uma população diferente (quem está ativo hoje,
+    e não quem tinha vínculo em `on`), então ele não pode reusar
+    `read_base_payroll` inteiro — mas se ele reescrevesse estes dois `select`, o
+    dia em que um deles ganhasse um filtro o outro ficaria para trás, e o KPI de
+    custo passaria a discordar da folha base sem sintoma nenhum.
+    """
+
+    salary_bands: list[dict[str, Any]]
+    benefits: list[dict[str, Any]]
+
+
+async def read_payroll_inputs(tenant: TenantContext) -> PayrollInputs:
+    """Faixas salariais e verbas do tenant — o histórico inteiro, sem recorte de data.
+
+    A vigência é decidida em Python (`in_effect`), então a consulta traz o
+    histórico: é o custo declarado no cabeçalho deste módulo.
+    """
+    async with tenant_scope(tenant) as scope:
+        await scope.execute(_SALARY_SQL)
+        salary_bands = [dict(linha) for linha in await scope.fetchall()]
+
+        await scope.execute(_BENEFITS_SQL)
+        benefits = [dict(linha) for linha in await scope.fetchall()]
+
+    return PayrollInputs(salary_bands=salary_bands, benefits=benefits)
+
+
 async def read_base_payroll(tenant: TenantContext, *, on: date) -> BasePayroll:
     """A folha base do tenant em `on`.
 
@@ -898,10 +937,5 @@ async def read_base_payroll(tenant: TenantContext, *, on: date) -> BasePayroll:
         await scope.execute(_EMPLOYEES_SQL, {"on": on})
         employees = [dict(linha) for linha in await scope.fetchall()]
 
-        await scope.execute(_SALARY_SQL)
-        salary_bands = [dict(linha) for linha in await scope.fetchall()]
-
-        await scope.execute(_BENEFITS_SQL)
-        benefits = [dict(linha) for linha in await scope.fetchall()]
-
-    return compute_base_payroll(on, employees, salary_bands, benefits)
+    entradas = await read_payroll_inputs(tenant)
+    return compute_base_payroll(on, employees, entradas.salary_bands, entradas.benefits)

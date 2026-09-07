@@ -1250,6 +1250,43 @@ class CycleList(BaseModel):
     can_export_remittance: bool
 
 
+class DpPanel(BaseModel):
+    """Os nove KPIs do topo do painel de DP, mais os dois que a honestidade exige.
+
+    ⛔ NÚMEROS, E SÓ. Nenhum campo aqui carrega pessoa: nem nome, nem id, nem
+    lista. O cartão "unidades com sinistro ativo" é `units_with_open_installment`
+    — **contagem** (`ANEXO` §2b). O painel do legado nomeia quem tem parcela em
+    aberto na home; aqui o nome exige abrir a ficha, com `compensation`
+    revalidado. Um campo de nome neste contrato é a regra 7 quebrada por um
+    agregado.
+
+    ⚠️ `retention` CARREGA A FÓRMULA DO LEGADO — `ativos / total no filtro` —, que
+    o `ANEXO` §2a registra **não ser retenção**: muda de significado conforme o
+    filtro. Está assim porque é contra o legado que o gate compara. Consertá-la é
+    canetada de produto, pendente do dono; quem a mudar sem decisão quebra o gate.
+
+    ⚠️ `without_salary` e `base_payroll_average` viajam juntos de propósito: a
+    média divide a folha base por **todos** os ativos, e quem não tem faixa
+    salarial vigente não entra no numerador. Sem o primeiro, o segundo é um
+    número menor com cara de número certo.
+    """
+
+    on: date
+    total_analyzed: int
+    active_headcount: int
+    terminations: int
+    #: Proporção 0..1 com quatro casas. `null` quando não há registro no filtro —
+    #: dividir por zero e devolver 0 diria "nenhuma retenção" sobre uma base vazia.
+    retention: Decimal | None = None
+    base_payroll: Decimal
+    base_payroll_average: Decimal | None = None
+    meal_voucher: Decimal
+    cost_allowance: Decimal
+    trust_and_hazard: Decimal
+    without_salary: int
+    units_with_open_installment: int
+
+
 class AssistantQuestion(BaseModel):
     """A pergunta que entra no assistente.
 

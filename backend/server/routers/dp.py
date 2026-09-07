@@ -45,7 +45,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from operax.core.tenant import tenant_scope
-from operax.dp import banking, beneficios, ciclo, export, postos
+from operax.dp import banking, beneficios, ciclo, export, painel, postos
 from operax.rh.repository import audit, check_permissions
 from server.deps import CurrentTenant
 from server.models import (
@@ -62,6 +62,7 @@ from server.models import (
     CycleRequest,
     CycleSummary,
     CycleView,
+    DpPanel,
     NewBandRow,
     TransportFareCreate,
     TransportFareRow,
@@ -665,3 +666,52 @@ async def _remessa(tenant: CurrentTenant, cycle_id: UUID, cycle: ciclo.Cycle) ->
             origem={"route": "GET /dp/ciclos/{id}/export?formato=banco"},
         )
     return arquivo
+
+
+# ---------------------------------------------------------------------------
+# O painel de DP
+# ---------------------------------------------------------------------------
+@router.get("/painel")
+async def painel_de_dp(
+    tenant: CurrentTenant,
+    unidade: Annotated[
+        UUID | None, Query(description="Filtra pela unidade de ATUAÇÃO, não pela lotação")
+    ] = None,
+    empresa: Annotated[UUID | None, Query(description="Filtra pela empresa do colaborador")] = None,
+    em: Annotated[date | None, Query(description="Data da leitura; ausente = hoje")] = None,
+) -> DpPanel:
+    """Os nove KPIs de topo. **Caminho 2, e a decisão está no `painel.py`.**
+
+    ⛔ `compensation` PARA LER, SEM ADMIN
+    A folha base é dinheiro de pessoa, então o domínio é obrigatório; ser
+    administrador não é. `executive` e `accounting` têm `compensation` e não são
+    admin — são exatamente os papéis que existem para olhar este painel, e exigir
+    admin trancaria fora quem ele serve. Mesma escolha de `GET /dp/ciclos`.
+
+    ⛔ O ESCOPO NÃO É REVALIDADO AQUI, E ISSO É DE PROPÓSITO
+    A população é lida sob `user_scope`, com a RLS de pé: quem não enxerga a
+    unidade não recebe a linha, pela policy `employee_read`. Repetir o recorte
+    neste arquivo seria `util.can_see_unit` escrito uma segunda vez, em Python, e
+    a segunda cópia é a que diverge na primeira mudança de policy.
+    """
+    permissoes = await check_permissions(tenant)
+    if not permissoes.compensation:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_SEM_COMPENSATION)
+
+    kpis = await painel.read_panel(
+        tenant, on=em or date.today(), unit_id=unidade, company_id=empresa
+    )
+    return DpPanel(
+        on=kpis.on,
+        total_analyzed=kpis.total_analyzed,
+        active_headcount=kpis.active_headcount,
+        terminations=kpis.terminations,
+        retention=kpis.retention,
+        base_payroll=kpis.base_payroll,
+        base_payroll_average=kpis.base_payroll_average,
+        meal_voucher=kpis.meal_voucher,
+        cost_allowance=kpis.cost_allowance,
+        trust_and_hazard=kpis.trust_and_hazard,
+        without_salary=kpis.without_salary,
+        units_with_open_installment=kpis.units_with_open_installment,
+    )

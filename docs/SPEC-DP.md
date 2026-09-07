@@ -476,14 +476,36 @@ como texto até o Quadro de Postos cobrir todos, e então descontinuada).
 
 ### 1k. `dp_panel_views` — a superfície pública do painel
 
-Duas RPCs em `public`, `security definer` com `search_path = ''`, e uma view:
+⚠️ **Esta seção foi reescrita em 06/09/2026 por duas decisões do dono. O que ela
+pedia — duas RPCs e uma view — não sobreviveu à medição.**
 
-- `public.fn_dp_panel(p_from date, p_to date, p_unit uuid default null,
-  p_company uuid default null)` → os 9 KPIs de topo.
-- `public.fn_dp_alerts()` → os 8 contadores do painel de alertas, com as janelas
-  vindas de `app.document_type.expiry_alert_days` — não constantes no SQL.
-- `public.vw_unit_compliance` (`security_invoker = on`) → laudos com situação
-  derivada.
+**O que fica:**
+
+- `public.fn_dp_alerts()` → os 8 contadores do painel de alertas, `security
+  definer` com `search_path = ''`, com as janelas vindas de
+  `app.document_type.expiry_alert_days` — não constantes no SQL. ✅ Coluna
+  conferida em 06/09: existe desde a migration 08, `integer not null default 30`.
+  ⛔ **Devolve contagem, nunca linha por pessoa.**
+
+**O que saiu, e por quê:**
+
+⛔ **`public.fn_dp_panel` NÃO é criada. Os 9 KPIs vêm pelo Caminho 2** — decisão
+do dono, 06/09. A razão é a folha base: ela **já existe em Python**
+(`operax/dp/beneficios.compute_base_payroll`, S1), e o S1 declarou de propósito
+que a regra de vigência mora lá porque *"escrita nos dois lugares ela divergiria,
+e a metade SQL é a que o pytest não alcança"*. Uma RPC que recalculasse a mesma
+soma em SQL seria a regra escrita duas vezes — e o `ANEXO` §2a exige que a folha
+base **bata com a do cliente na vírgula**. Duas implementações de uma soma que
+precisa bater na vírgula é o defeito, não a otimização.
+
+E é coerente com o Contrato do `CLAUDE.md`: folha base é dado de `compensation`,
+e o Caminho 1 carrega **só agregado não sensível**.
+
+⛔ **`public.vw_unit_compliance` desce para o S5.** Ela lê
+`app.unit_compliance_report`, que é a tabela que o **S5** cria (`dp_unit_compliance`)
+— ✅ conferido em 06/09: não existe em migration nenhuma. Construí-la no S4 exigiria
+inventar a tabela de outra sprint. O `SPRINTS-DP.md` §S4 já listava só as RPCs e
+estava certo; era esta seção que estava à frente do próprio plano.
 
 **A folha base é uma soma filtrada, e é o ponto crítico do painel:**
 

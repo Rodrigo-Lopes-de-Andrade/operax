@@ -42,6 +42,8 @@ python3 scripts/89_teste_marcacao.py || exit 1
 
 echo "--- ciclo de relatório e fila de alertas"
 python3 scripts/93_teste_ciclo.py || exit 1
+echo "--- painel de DP (contadores de alerta, janela e escopo)"
+psql -q -v ON_ERROR_STOP=1 -f scripts/87_teste_painel_dp.sql 2>&1 | grep -Ev "^(INSERT|UPDATE|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- teste de regras de alerta e cadência"
 psql -q -v ON_ERROR_STOP=1 -f scripts/97_teste_regras_alerta.sql 2>&1 | grep -Ev "^(INSERT|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- teste funcional multi-tenant"
