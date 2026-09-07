@@ -1,11 +1,16 @@
 import "server-only";
 
+import type { SupabaseClient } from "@supabase/supabase-js";
+
 import { ApiError, requestApi } from "@/lib/api";
+import type { Database } from "@/lib/database.types";
 import {
   catalogQuery,
+  panelQuery,
   postosQuery,
   type CatalogFilters,
   type CycleKind,
+  type PanelFilters,
   type PostosFilters,
 } from "@/lib/dp/url";
 import { getServerSupabase } from "@/lib/supabase-server";
@@ -196,4 +201,165 @@ export async function loadBenefitCatalog(
 
     throw error;
   }
+}
+
+/**
+ * Os nove KPIs de topo, mais os dois que o backend manda junto por honestidade
+ * (`without_salary` e `units_with_open_installment`).
+ *
+ * ⛔ Nenhum campo aqui carrega pessoa — nem nome, nem id, nem lista. O cartão de
+ * sinistro é **contagem**: o painel do legado nomeia quem tem parcela em aberto
+ * na home, e aqui o nome exige abrir a ficha.
+ *
+ * `Decimal` do Pydantic chega como string. Ver `lib/dp/format.ts`.
+ */
+export type DpPanelKpis = {
+  on: string;
+  total_analyzed: number;
+  active_headcount: number;
+  terminations: number;
+  /** `ativos / total no filtro`, com quatro casas. `null` na base vazia. */
+  retention: string | null;
+  base_payroll: string;
+  base_payroll_average: string | null;
+  meal_voucher: string;
+  cost_allowance: string;
+  trust_and_hazard: string;
+  without_salary: number;
+  units_with_open_installment: number;
+};
+
+/**
+ * Três desfechos, e são três de propósito.
+ *
+ * `forbidden` é quem não alcança o domínio `compensation` — regra 5 do projeto:
+ * quem não pode **não vê**, e a metade de cima da tela simplesmente não existe
+ * para ele. Não é cadeado, não é cinza, não é erro.
+ *
+ * `unavailable` é a API fora do ar, e essa **precisa** aparecer: um painel em
+ * branco por falha de rede lido como "não tenho acesso" é a mesma tela contando
+ * duas histórias diferentes. As duas viraram um estado vazio só no catálogo do
+ * S1, onde a tela inteira dependia da mesma chamada; aqui não dá, porque a
+ * metade de baixo (os oito contadores) vem por outro caminho e continua de pé.
+ */
+export type PanelResult =
+  | { status: "ok"; kpis: DpPanelKpis }
+  | { status: "forbidden" }
+  | { status: "unavailable" };
+
+export async function loadDpPanel(filters: PanelFilters): Promise<PanelResult> {
+  const token = await accessToken();
+
+  if (!token) {
+    return { status: "forbidden" };
+  }
+
+  const query = panelQuery(filters);
+
+  try {
+    const kpis = await requestApi<DpPanelKpis>(
+      query ? `/dp/painel?${query}` : "/dp/painel",
+      { accessToken: token },
+    );
+
+    return { status: "ok", kpis };
+  } catch (error) {
+    if (error instanceof ApiError && [401, 403].includes(error.status)) {
+      return { status: "forbidden" };
+    }
+
+    // Sem `throw`: a página tem outra metade que não depende desta chamada, e
+    // derrubá-la inteira levaria junto oito contadores que responderam bem.
+    return { status: "unavailable" };
+  }
+}
+
+/** Empresa do seletor e do consolidado, derivada de `vw_unit`. */
+export type CompanyChoice = { id: string; name: string };
+
+/** Uma linha do consolidado por empresa. O nome vem de `vw_unit`, caminho 1. */
+export type CompanyPayrollRow = {
+  companyId: string;
+  companyName: string;
+  activeHeadcount: number;
+  basePayroll: string;
+};
+
+export type CompanyRollupResult =
+  { status: "ok"; rows: CompanyPayrollRow[] } | { status: "unavailable" };
+
+/**
+ * O consolidado por empresa do `ANEXO` §2e — empresa, ativos, folha base.
+ *
+ * ⚠️ É UMA CHAMADA POR EMPRESA, E ISSO É O CONTRATO QUE FALTA
+ * `GET /dp/painel` responde **um** agregado e aceita `empresa` como recorte; não
+ * existe rota que devolva a quebra por empresa num payload só. Então a tela
+ * compõe o que existe em vez de inventar rota que responderia 404 em produção —
+ * as chamadas saem em paralelo e a FastPark tem cinco e poucos CNPJs. O contrato
+ * que resolveria isso é uma lista por empresa dentro da própria resposta do
+ * painel; enquanto não existe, o custo é este e está declarado.
+ *
+ * Uma empresa que falhe derruba o cartão inteiro, e não uma linha: um
+ * consolidado a que falta uma empresa soma menos que o total logo acima, sem
+ * nada na tela dizendo qual sumiu.
+ */
+export async function loadCompanyRollup(
+  filters: PanelFilters,
+  companies: CompanyChoice[],
+): Promise<CompanyRollupResult> {
+  const results = await Promise.all(
+    companies.map(async (company) => ({
+      company,
+      result: await loadDpPanel({ ...filters, companyId: company.id }),
+    })),
+  );
+
+  const rows: CompanyPayrollRow[] = [];
+
+  for (const { company, result } of results) {
+    if (result.status !== "ok") {
+      return { status: "unavailable" };
+    }
+
+    rows.push({
+      companyId: company.id,
+      companyName: company.name,
+      activeHeadcount: result.kpis.active_headcount,
+      basePayroll: result.kpis.base_payroll,
+    });
+  }
+
+  return { status: "ok", rows };
+}
+
+/**
+ * Os oito contadores do painel de alertas — **caminho 1**.
+ *
+ * `public.fn_dp_alerts()` é `security definer` com o recorte de tenant e escopo
+ * dentro dela, e devolve `(code, total)` e nada mais. O cliente não manda
+ * `tenant_id`: a policy não confiaria nele. Cinco dos oito leem domínio
+ * sensível e mesmo assim a função responde a `authenticated`, porque contar não
+ * é ler — nenhum nome, nenhuma data de nascimento, nenhuma pessoa sai daqui.
+ */
+export type AlertCounts = Record<string, number>;
+
+export type AlertsResult =
+  { status: "ok"; counts: AlertCounts } | { status: "unavailable" };
+
+export async function loadDpAlerts(
+  supabase: SupabaseClient<Database>,
+): Promise<AlertsResult> {
+  const { data, error } = await supabase.rpc("fn_dp_alerts");
+
+  if (error || !data) {
+    return { status: "unavailable" };
+  }
+
+  const counts: AlertCounts = {};
+
+  for (const row of data) {
+    counts[row.code] = row.total;
+  }
+
+  return { status: "ok", counts };
 }

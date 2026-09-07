@@ -5,7 +5,10 @@ import {
   catalogQuery,
   cycleHref,
   parseCatalogFilters,
+  panelHref,
+  panelQuery,
   parseCycleFilters,
+  parsePanelFilters,
   parsePostosFilters,
   postosHref,
   postosQuery,
@@ -105,5 +108,53 @@ describe("competência do ciclo", () => {
     expect(cycleHref(filters, { kind: "transport_voucher", month: 8 })).toBe(
       "/dashboard/dp/ciclos?tipo=transport_voucher&ano=2026&mes=8",
     );
+  });
+});
+
+describe("recorte do painel de DP", () => {
+  const EMPRESA = "22222222-2222-4222-8222-222222222222";
+
+  it("leva empresa e unidade para a query da API e para o link", () => {
+    const filters = parsePanelFilters({ un: UNIT, emp: EMPRESA });
+
+    expect(filters).toEqual({ unitId: UNIT, companyId: EMPRESA });
+    expect(panelQuery(filters)).toBe(`empresa=${EMPRESA}&unidade=${UNIT}`);
+    expect(panelHref(filters)).toBe(
+      `/dashboard/dp/painel?emp=${EMPRESA}&un=${UNIT}`,
+    );
+  });
+
+  it("abre no tenant inteiro quando o link traz lixo", () => {
+    const filters = parsePanelFilters({ un: "a-unidade-do-joao", emp: "x" });
+
+    expect(filters).toEqual({ unitId: null, companyId: null });
+    expect(panelQuery(filters)).toBe("");
+    expect(panelHref(filters)).toBe("/dashboard/dp/painel");
+  });
+
+  it("trocar de empresa larga a unidade da empresa anterior", () => {
+    const filters = parsePanelFilters({ un: UNIT, emp: EMPRESA });
+    const outra = "33333333-3333-4333-8333-333333333333";
+
+    expect(panelHref(filters, { companyId: outra, unitId: null })).toBe(
+      `/dashboard/dp/painel?emp=${outra}`,
+    );
+  });
+
+  it("só a unidade também é recorte, e a empresa não é obrigatória", () => {
+    const filters = parsePanelFilters({ un: UNIT });
+
+    expect(panelQuery(filters)).toBe(`unidade=${UNIT}`);
+    expect(panelHref(filters)).toBe(`/dashboard/dp/painel?un=${UNIT}`);
+  });
+
+  // A data existe no backend (`em`) e de propósito não existe aqui: os oito
+  // contadores de alerta comparam com `current_date` dentro do SQL e não a
+  // aceitam. Um `em` na URL que movesse metade da tela seria pior que nenhum.
+  it("ignora uma data na URL em vez de mover metade do painel", () => {
+    const filters = parsePanelFilters({ em: "2026-08-31", un: UNIT });
+
+    expect(panelQuery(filters)).toBe(`unidade=${UNIT}`);
+    expect(panelHref(filters)).not.toContain("em=");
   });
 });

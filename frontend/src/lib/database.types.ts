@@ -261,6 +261,13 @@ export type Database = {
           tenant_id: string;
         }[];
       };
+      fn_dp_alerts: {
+        Args: never;
+        Returns: {
+          code: string;
+          total: number;
+        }[];
+      };
       fn_kpi_period: {
         Args: {
           p_ate: string;

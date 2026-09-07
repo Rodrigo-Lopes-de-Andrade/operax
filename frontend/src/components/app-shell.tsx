@@ -11,7 +11,12 @@ import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
 import { MAPEAMENTO_PATH, ROTACOES_PATH } from "@/lib/curadoria/url";
-import { BENEFICIOS_PATH, CICLO_PATH, POSTOS_PATH } from "@/lib/dp/url";
+import {
+  BENEFICIOS_PATH,
+  CICLO_PATH,
+  PAINEL_PATH,
+  POSTOS_PATH,
+} from "@/lib/dp/url";
 import { FOLHA_PATH } from "@/lib/folha/url";
 import { COLABORADORES_PATH, IMPORTACAO_PATH } from "@/lib/rh/url";
 import { TV_PATH } from "@/lib/tv/url";
@@ -75,6 +80,12 @@ export function AppShell({
             <p className="text-2xs px-3 py-2 font-bold tracking-[0.08em] text-white/80 uppercase">
               Administração
             </p>
+            {/* Leitura, e por isso fora de `showAdminWrites`: `executive` não
+                escreve nada e é justamente quem o painel de DP serve. Ele abre
+                para todo mundo desta lista — quem não alcança o domínio de
+                remuneração recebe a metade de cadastro, que é a tela inteira de
+                quem cuida de documento e ASO, e não um 404. */}
+            <NavLink href={PAINEL_PATH} label="Painel de DP" />
             <NavLink href={COLABORADORES_PATH} label="Colaboradores" />
             <NavLink href={IMPORTACAO_PATH} label="Importação" />
             <NavLink href={POSTOS_PATH} label="Quadro de Postos" />

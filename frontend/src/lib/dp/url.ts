@@ -14,6 +14,7 @@ import { ADMIN_PATH } from "@/lib/rh/url";
 export const POSTOS_PATH = `${ADMIN_PATH}/postos`;
 export const BENEFICIOS_PATH = `${ADMIN_PATH}/beneficios`;
 export const CICLO_PATH = "/dashboard/dp/ciclos";
+export const PAINEL_PATH = "/dashboard/dp/painel";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -136,4 +137,56 @@ export function cycleHref(
   // A competência viaja inteira, sempre: um link sem mês abriria no mês de quem
   // clicou, e não no de quem mandou.
   return `${CICLO_PATH}?${query}`;
+}
+
+/**
+ * Recorte do painel de DP: empresa e unidade, pelos ids que a API espera em
+ * `empresa` e `unidade`. As mesmas chaves de query do resto do produto (`emp`,
+ * `un`), para que um link colado entre telas continue querendo dizer a mesma
+ * coisa.
+ *
+ * ⛔ A DATA NÃO ENTRA, E A AUSÊNCIA É DECISÃO
+ * `GET /dp/painel` aceita `em` e responderia o painel de outro dia. Os oito
+ * contadores de alerta **não** aceitam data: `public.fn_dp_alerts()` compara com
+ * `current_date` dentro do SQL e não tem parâmetro. Um seletor de data moveria
+ * a metade de cima da tela e deixaria a de baixo parada em hoje, sem nada na
+ * tela dizendo isso — que é pior do que uma tela que só sabe falar do presente.
+ * A data lida volta no payload (`on`) e a tela a mostra.
+ */
+export type PanelFilters = { unitId: string | null; companyId: string | null };
+
+export function parsePanelFilters(params: RawSearchParams): PanelFilters {
+  const unit = first(params.un);
+  const company = first(params.emp);
+
+  // Id que não é uuid vira "todas", como no Quadro de Postos: o link velho de
+  // uma unidade que saiu do cadastro tem de abrir o painel, não uma exceção.
+  return {
+    unitId: unit && UUID.test(unit) ? unit : null,
+    companyId: company && UUID.test(company) ? company : null,
+  };
+}
+
+export function panelHref(
+  filters: PanelFilters,
+  overrides: Partial<PanelFilters> = {},
+): string {
+  const next = { ...filters, ...overrides };
+  const query = new URLSearchParams();
+
+  if (next.companyId) query.set("emp", next.companyId);
+  if (next.unitId) query.set("un", next.unitId);
+
+  const search = query.toString();
+  return search ? `${PAINEL_PATH}?${search}` : PAINEL_PATH;
+}
+
+/** A query que `GET /dp/painel` espera, montada do mesmo recorte. */
+export function panelQuery(filters: PanelFilters): string {
+  const query = new URLSearchParams();
+
+  if (filters.companyId) query.set("empresa", filters.companyId);
+  if (filters.unitId) query.set("unidade", filters.unitId);
+
+  return query.toString();
 }
