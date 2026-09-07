@@ -157,7 +157,13 @@ as $$
   select 'vacation_limit', count(distinct l.employee_id)::int
     from app.leave_period l
     join visible v on v.id = l.employee_id
-   where l.limit_date is not null
+   -- ⛔ `category = 'vacation'` NÃO é redundante. `limit_date` é data limite de
+   -- FÉRIAS, mas mora em `app.leave_period`, que guarda as cinco categorias — e
+   -- nada no schema impede um atestado ou uma suspensão de ter a coluna
+   -- preenchida. Sem este predicado o contador soma afastamento que não é
+   -- férias, e o painel manda o DP correr atrás de um prazo que não existe.
+   where l.category = 'vacation'
+     and l.limit_date is not null
      and l.limit_date >= current_date
      and l.limit_date <= current_date + 90;
 $$;

@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito public.fn_dp_panel public.fn_dp_alerts app.work_schedule_day app.messaging_identity -->
+<!-- verificar-docs: inexistentes-de-proposito public.fn_dp_panel public.vw_unit_compliance app.unit_compliance_report app.work_schedule_day app.messaging_identity -->
 <!-- `app.work_schedule_day` continua aqui porque o Quadro REPORTA que ela não
      existe — e agora a SPEC diz o mesmo, então a contradição entre os dois
      documentos acabou. `app.schedule_rotation_map` SAIU desta lista: ela existe
@@ -7,7 +7,13 @@
      ⚠️ `app.benefit_type` e `app.work_post` SAÍRAM em 06/09 pelo mesmo motivo:
      `dp_work_post` e `dp_benefit_catalog` as criaram, e a suíte confirmou. Uma
      exceção que sobrevive ao objeto que ela desculpava é a forma silenciosa
-     deste verificador ficar cego — ele suprime e nunca reclama de sobra. -->
+     deste verificador ficar cego — ele suprime e nunca reclama de sobra.
+     ⚠️ `public.fn_dp_alerts` SAIU em 07/09 pelo mesmo motivo: o S4 a criou.
+     ENTRARAM `public.vw_unit_compliance` e `app.unit_compliance_report`, que
+     descem para o S5 — o S4 as cita para dizer que NÃO as constrói, e a tabela
+     é do sprint seguinte. `public.fn_dp_panel` fica: ela deixou de ser planejada
+     em 06/09 (o painel vai pelo Caminho 2) e o documento a nomeia justamente
+     para registrar que ela não existe. -->
 
 # OperaX — sprints da etapa DP
 
@@ -208,7 +214,7 @@ andaime que a orquestração exige e que o documento não tinha.
 | S1 — Fundação | ✅ **aprovada** (06/09) — **backend e banco; a metade de frontend não foi despachada** | `dp_work_post`, `dp_benefit_catalog` | guardião ✅ · revisor ✅ | 2 |
 | S2 — Domínio `banking` | ✅ **aprovada** (05/09) | `dp_banking_domain`, `dp_banking_account` | guardião ✅ · revisor ✅ | 1 |
 | S3 — Ciclo mensal | ✅ **aprovada** (06/09) — **backend e banco; frontend não despachado; reconciliação com o legado ABERTA** | `dp_benefit_cycle`, `dp_leave_category`, `dp_absence_map` | guardião ✅ · revisor ✅ | 2 |
-| S4 — Painel e alertas | 🔵 **em execução** (06/09) — templates fora, `fn_dp_panel` fora, painel pelo Caminho 2 | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | — | 0 |
+| S4 — Painel e alertas | 🔵 **em execução** (06/09) — templates fora, `public.fn_dp_panel` fora, painel pelo Caminho 2 | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | — | 0 |
 | S5 — Laudos e rubricas | pendente | `dp_unit_compliance`, `dp_payroll_code_map` | — | 0 |
 
 Onze slots, um arquivo por slot. ⛔ `dp_banking_domain` e `dp_banking_account`
