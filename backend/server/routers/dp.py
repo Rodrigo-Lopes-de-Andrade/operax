@@ -508,6 +508,12 @@ async def apurar_ciclo(payload: CycleRequest, tenant: CurrentTenant) -> CycleVie
             period_month=payload.period_month,
         )
         gravado = await ciclo.save_draft(tenant, apurado)
+    except ciclo.CycleAlreadyGeneratedError as choque:
+        # ⛔ ANTES do `except CycleError`, que é a base dela: apanhada lá, esta
+        # recusa viraria 422 ("falta dado"), e o que falta não é dado — a
+        # competência está congelada. 409 é o mesmo que `POST /gerar` já responde
+        # para a mesma situação, e a tela não precisa aprender uma segunda frase.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(choque)) from choque
     except ciclo.CycleError as recusa:
         raise _recusa_de_apuracao(recusa) from recusa
     return _ciclo(gravado, can_export_remittance=await pode_exportar_remessa(tenant))

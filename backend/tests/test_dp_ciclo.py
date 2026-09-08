@@ -1028,14 +1028,20 @@ class FakeDB:
         do_tenant = self._do_tenant(self.ciclos, params)
         if "c.id = %(cycle_id)s" in sql:
             return [dict(c) for c in do_tenant if c["id"] == params["cycle_id"]]
-        return [
+        da_competencia = [
             dict(c)
             for c in do_tenant
             if c["kind"] == params["kind"]
             and c["period_year"] == params["period_year"]
             and c["period_month"] == params["period_month"]
-            and c["status"] == params["draft"]
         ]
+        # ⛔ O RECORTE POR STATUS SÓ ACONTECE SE A CONSULTA PEDIR. Ele estava
+        #    embutido aqui, e por isso a reserva de `save_draft` era, para o
+        #    dublê, sempre "só o rascunho" — a competência congelada voltava
+        #    vazia e o segundo rascunho nascia sem nenhum teste vermelho.
+        if "c.status = %(draft)s" in sql:
+            da_competencia = [c for c in da_competencia if c["status"] == params["draft"]]
+        return da_competencia
 
     def _listar_ciclos(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         """A lista com os agregados.
@@ -1265,6 +1271,63 @@ def test_gerar_congela_e_nao_reapura(client: TestClient, issue_token: Any, fake_
     assert corpo["status"] == "generated"
     assert corpo["rows"][0]["net_days"] == 19
     assert Decimal(str(corpo["total_amount"])) == Decimal("161.50")
+
+
+def test_reapurar_depois_de_gerar_nao_cria_um_segundo_rascunho(
+    client: TestClient, issue_token: Any, fake_db: FakeDB
+) -> None:
+    """⛔ DOIS OPERADORES, UMA COMPETÊNCIA: A apura, B gera, A reapura da aba velha.
+
+    Nascia um segundo ciclo em `draft` AO LADO do `generated`, e as quatro peças
+    que deixavam: a reserva filtrava `status = 'draft'` e não achava nada; o
+    `else` caía no `insert`; a unique é `(tenant, kind, ano, mês, STATUS)`, então
+    a linha nova não colidia; e `trg_benefit_cycle_immutable` é
+    `before update or delete`, então não via INSERT. O operador passava a ver
+    "Rascunho" para uma competência congelada, e a remessa que ele conferiu
+    ficava inalcançável.
+
+    A CONDIÇÃO QUE SOZINHA JÁ DARIA VERDE — e por que não é ela: um `save_draft`
+    que recusasse SEMPRE também devolveria 409 aqui. Quem exclui isso é
+    `test_reapurar_a_mesma_competencia_nao_duplica_ninguem`, logo acima: reapurar
+    RASCUNHO continua devolvendo 201 e o mesmo `id`. As duas leem o mesmo cenário
+    e só divergem no congelamento no meio.
+    """
+    cenario_vt(fake_db)
+    ciclo_id = apurar(client, issue_token).json()["id"]
+    gerado = client.post(f"/dp/ciclos/{ciclo_id}/gerar", headers=cabecalho(issue_token))
+    assert gerado.status_code == 200
+    assert gerado.json()["status"] == "generated"
+
+    reapuracao = apurar(client, issue_token)
+
+    assert reapuracao.status_code == 409
+    assert "rascunho" in reapuracao.json()["detail"]
+    # E o congelado continua sendo o único ciclo da competência: nada nasceu ao lado.
+    assert [c["status"] for c in fake_db.ciclos] == ["generated"]
+    assert len(fake_db.linhas) == 1
+
+
+def test_reapurar_competencia_cancelada_continua_valendo(
+    client: TestClient, issue_token: Any, fake_db: FakeDB
+) -> None:
+    """A guarda não pode fechar o caminho de CORREÇÃO, que é cancelar e apurar de novo.
+
+    `cancelled` fora de `FROZEN` é o que separa "congelado" de "aposentado". Se a
+    recusa fosse "existe qualquer ciclo", a correção que a própria trava de
+    imutabilidade manda fazer (`Cancele o ciclo e apure um ciclo novo`) seria
+    impossível — e aí a saída seria mexer no gerado, que é o que ninguém pode.
+    """
+    cenario_vt(fake_db)
+    ciclo_id = apurar(client, issue_token).json()["id"]
+    client.post(f"/dp/ciclos/{ciclo_id}/gerar", headers=cabecalho(issue_token))
+    for linha in fake_db.ciclos:
+        linha["status"] = "cancelled"
+
+    novo = apurar(client, issue_token)
+
+    assert novo.status_code == 201, novo.text
+    assert novo.json()["id"] != ciclo_id
+    assert sorted(c["status"] for c in fake_db.ciclos) == ["cancelled", "draft"]
 
 
 def test_gerar_duas_vezes_devolve_409(

@@ -77,6 +77,12 @@ KINDS = (FOOD_BASKET, TRANSPORT_VOUCHER)
 
 DRAFT = "draft"
 GENERATED = "generated"
+EXPORTED = "exported"
+
+#: A competência já fechada. `cancelled` fica FORA de propósito: cancelar e
+#: apurar de novo é o caminho de correção que a própria trava de imutabilidade
+#: desenha, e incluí-lo aqui tornaria a correção impossível.
+FROZEN = (GENERATED, EXPORTED)
 
 #: A categoria que a `dp_leave_category` acrescentou. É a única que vale dinheiro.
 UNJUSTIFIED_ABSENCE = "unjustified_absence"
@@ -707,14 +713,50 @@ async def compute_cycle(
 # dois pedidos simultâneos da mesma competência estoura no commit, com a mesma
 # violação de unicidade, que a rota traduz em 409. Ciclo mensal é ação humana:
 # a corrida é possível e rara, e ela falha alto em vez de duplicar.
-_OPEN_DRAFT_SQL = """
-    select c.id
+#
+# ⛔ A RESERVA LÊ A COMPETÊNCIA INTEIRA, E NÃO SÓ O RASCUNHO — É O QUE FECHA A
+# CORRIDA, E FOI MEDIDO
+# Com `and c.status = %(draft)s` aqui, contra competência congelada a consulta
+# achava ZERO linha, `save_draft` caía no `insert` e nascia um segundo rascunho
+# ao lado do gerado — a unique é `(tenant, kind, ano, mês, STATUS)`, então ele
+# não colide, e `trg_benefit_cycle_immutable` é `before update or delete` e não
+# vê INSERT. O operador passava a ver "Rascunho" para uma competência congelada e
+# a remessa que ele conferiu ficava inalcançável.
+#
+# E o `status` sair do `where` não é só para a leitura sequencial enxergar o
+# congelado: é o que dá o LOCK certo. Medido em 08/09/2026 com duas sessões:
+#   · com `status = draft` no `where`: B congela e commita enquanto A espera; sob
+#     READ COMMITTED o `for update` reavalia a qualificação contra a versão nova,
+#     a linha deixa de casar, A recebe ZERO linha e insere o segundo rascunho.
+#   · sem ele: A espera na MESMA linha, reavalia, ela ainda casa, e volta com
+#     `status = generated` — a guarda recusa.
+# ⚠️ POR QUE A GUARDA NÃO VIROU GATILHO `before insert`, E NÃO É PORQUE ELE FALHE
+# ⛔ CORRIGIDO EM 08/09/2026: este bloco afirmava, como fato medido, que um
+# gatilho `before insert` NÃO fecharia esta corrida. **Ele fecha.** Medido com
+# duas sessões e um gatilho que faz `exists (... status in ('generated',
+# 'exported'))`: o insert de A é RECUSADO e a competência termina com uma linha
+# só. A razão é que `gerar` congela com UPDATE, não com insert — o escritor toma
+# lock de linha, A sempre bloqueia no `for update` acima, e quando A chega ao
+# insert o B já commitou; sob READ COMMITTED o `exists` do gatilho pega snapshot
+# novo e enxerga o congelamento. Não há, neste código, interleaving em que ele
+# falhe.
+#
+# O raciocínio errado veio importado da `20260907182520_dp_unit_compliance.sql`,
+# onde ele é CORRETO e é outra coisa: lá a concorrência é entre dois INSERTs de
+# renovação, que genuinamente não se enxergam, e por isso a garantia é
+# declarativa. Aqui há um UPDATE no meio, e é ele que serializa. Argumento não
+# atravessa de um caso para o outro só porque as duas frases falam de gatilho.
+#
+# O motivo real de preferir Python continua de pé, e não precisava da invenção:
+# não custa migration, e devolve 409 limpo em vez de abortar a transação. O que
+# fecha a corrida é o LOCK acima, nos dois desenhos.
+_PERIOD_CYCLES_SQL = """
+    select c.id, c.status
     from app.benefit_cycle c
     where c.tenant_id = %(tenant_id)s
       and c.kind = %(kind)s
       and c.period_year = %(period_year)s
       and c.period_month = %(period_month)s
-      and c.status = %(draft)s
     for update
 """
 
@@ -823,6 +865,15 @@ async def save_draft(tenant: TenantContext, cycle: Cycle) -> Cycle:
     que faz o reprocessamento não duplicar ninguém. O que `POST /dp/ciclos/{id}/gerar`
     congela é exatamente o que o gestor viu — ele não reapura, e por isso o número
     da tela e o número da remessa não podem divergir.
+
+    ⛔ E REAPURAR PARA DEPOIS DO CONGELAMENTO É RECUSA, NÃO RASCUNHO NOVO
+    Dois operadores na mesma competência: A apura, B gera, A reapura da aba
+    velha. Sem esta guarda nascia um segundo ciclo em `draft` ao lado do
+    `generated` — a unique tem `status` dentro, então ele não colide, e a trava
+    de imutabilidade é `before update or delete`, então ela não vê o INSERT. O
+    operador via "Rascunho" para uma competência congelada e a remessa conferida
+    ficava inalcançável. Cancelada não entra na guarda: cancelar e apurar de novo
+    é o caminho de correção, e fechá-lo aqui apagaria a saída.
     """
     chave = {
         "kind": cycle.kind,
@@ -830,8 +881,15 @@ async def save_draft(tenant: TenantContext, cycle: Cycle) -> Cycle:
         "period_month": cycle.period_month,
     }
     async with tenant_scope(tenant) as scope:
-        await scope.execute(_OPEN_DRAFT_SQL, {**chave, "draft": DRAFT})
-        aberto = await scope.fetchone()
+        await scope.execute(_PERIOD_CYCLES_SQL, chave)
+        da_competencia = [dict(linha) for linha in await scope.fetchall()]
+        congelado = next((c for c in da_competencia if c["status"] in FROZEN), None)
+        if congelado is not None:
+            raise CycleAlreadyGeneratedError(
+                "esta competência não está mais em rascunho; "
+                "correção é ciclo novo com motivo, nunca update"
+            )
+        aberto = next((c for c in da_competencia if c["status"] == DRAFT), None)
 
         cabecalho = {
             "window_start": cycle.window_start,
