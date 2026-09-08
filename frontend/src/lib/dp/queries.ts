@@ -6,9 +6,11 @@ import { ApiError, requestApi } from "@/lib/api";
 import type { Database } from "@/lib/database.types";
 import {
   catalogQuery,
+  cyclesQuery,
   panelQuery,
   postosQuery,
   type CatalogFilters,
+  type CycleFilters,
   type CycleKind,
   type PanelFilters,
   type PostosFilters,
@@ -122,22 +124,54 @@ export type CycleView = {
   total_amount: string;
   rows: CycleEntitlementRow[];
   /**
-   * ⚠️ CAMPO AINDA NÃO ENVIADO PELO BACKEND, E A AUSÊNCIA FECHA O BOTÃO.
+   * O eixo do botão de remessa, respondido pelo backend a cada chamada.
    *
-   * O domínio `banking` decide se o arquivo de remessa aparece (SPEC-DP §3), e
-   * hoje nenhuma rota conta ao painel se quem perguntou o tem: `CycleView` não
-   * traz o eixo e `/me` devolve só o papel. Deduzi-lo aqui de uma lista de
-   * papéis seria a matriz `app.role_domain` escrita uma segunda vez, longe do
-   * banco que a muda por `update` — exatamente o que `operax/dp/banking.py`
-   * recusa fazer no backend.
+   * ⛔ OBRIGATÓRIO, e o tipo diz isso porque o contrato diz: `can_export_remittance`
+   * está em `CycleView.required` e em `CycleList.required`. Declará-lo opcional
+   * transformaria uma renomeação no backend em `undefined` silencioso — o botão
+   * sumiria para sempre, sem um erro de tipo em lugar nenhum.
    *
-   * Então o painel lê o que o backend mandar e, sem campo, não mostra botão: a
-   * falta de resposta vira "não pode", nunca "pode". O contrato pedido é um
-   * booleano nesta resposta, no mesmo formato do `can_write` que as outras duas
-   * rotas já devolvem.
+   * A regra que sobrevive a qualquer mudança é a da leitura, não a do tipo:
+   * **ausência vale "não pode"**, nunca "pode". Deduzir o domínio `banking` de
+   * uma lista de papéis aqui seria a matriz de sensibilidade escrita uma segunda
+   * vez, longe do banco que a altera por `update`.
    */
-  can_export_remittance?: boolean;
+  can_export_remittance: boolean;
 };
+
+/**
+ * Uma competência na lista — sem as linhas por pessoa, de propósito.
+ *
+ * ⛔ ELA NÃO TEM `rows`, E NÃO EXISTE ROTA QUE AS DEVOLVA
+ * As linhas nascem na resposta de `POST /dp/ciclos` e não há
+ * `GET /dp/ciclos/{id}`. Para uma competência congelada, a conferência pessoa a
+ * pessoa sai pelo Excel e pelo PDF, que a tela oferece — a tabela na tela é do
+ * preview. Reportado como lacuna de contrato.
+ */
+export type CycleSummary = {
+  id: string;
+  kind: CycleKind;
+  period_year: number;
+  period_month: number;
+  window_start: string;
+  window_end: string;
+  business_days: number | null;
+  status: string;
+  entitled_count: number;
+  denied_count: number;
+  total_amount: string;
+};
+
+export type CycleList = {
+  rows: CycleSummary[];
+  /** Propriedade de **quem perguntou**, não da competência — por isso no container. */
+  can_export_remittance: boolean;
+};
+
+export type CycleListResult =
+  | { status: "ok"; list: CycleList }
+  | { status: "forbidden" }
+  | { status: "unavailable" };
 
 async function accessToken(): Promise<string | null> {
   const supabase = await getServerSupabase();
@@ -200,6 +234,63 @@ export async function loadBenefitCatalog(
     }
 
     throw error;
+  }
+}
+
+/**
+ * As competências já apuradas desta rotina e deste mês — **e é ela que decide
+ * quem entra na tela de ciclo**.
+ *
+ * ⛔ O EIXO É `compensation`, E NÃO "SER ADMINISTRADOR"
+ * `GET /dp/ciclos` responde 403 exatamente a quem não alcança o domínio de
+ * remuneração, e nada além disso: `accounting` e `executive` entram sem serem
+ * admin, e `hr` — que é admin e não tem o domínio — não entra. Perguntar à rota
+ * é o que faz a tela concordar com o backend em vez de reergueur a parede uma
+ * porta adiante.
+ *
+ * ⚠️ E É ELA QUE REDUZ O SEGUNDO RASCUNHO — REDUZ, E NÃO IMPEDE
+ * Sem esta leitura a competência vivia só em `useState`: depois de um F5 a tela
+ * dizia "nada apurado" para um mês já gerado, e a única ação era apurar de novo
+ * — o que **insere uma segunda linha**, porque `save_draft` procura rascunho
+ * ABERTO e o `unique` da competência inclui o `status`. A remessa congelada
+ * ficava inalcançável atrás de um rascunho novo.
+ *
+ * O que esta leitura fecha é esse caminho, que era determinístico e de um
+ * operador só. O INSERT continua possível: nada no banco o barra hoje —
+ * `trg_benefit_cycle_immutable` é `before update or delete` e não cobre INSERT,
+ * e a `unique` inclui o `status`, então a linha nova não colide com a gerada.
+ * Duas abas abertas, ou dois operadores no mesmo minuto, e o segundo rascunho
+ * nasce assim mesmo. A guarda tem de ser do backend, e não desta função.
+ *
+ * ✅ E ela passou a existir: desde `6c61592` (08/09/2026) a reserva de
+ * `save_draft` perdeu o `status` do `where` e trava a competência inteira com
+ * `for update`, e reapurar sobre `generated`/`exported` volta 409. O papel desta
+ * leitura não mudou — ela é o que faz a tela não oferecer o clique.
+ */
+export async function loadCycles(
+  filters: CycleFilters,
+): Promise<CycleListResult> {
+  const token = await accessToken();
+
+  if (!token) {
+    return { status: "forbidden" };
+  }
+
+  try {
+    const list = await requestApi<CycleList>(
+      `/dp/ciclos?${cyclesQuery(filters)}`,
+      { accessToken: token },
+    );
+
+    return { status: "ok", list };
+  } catch (error) {
+    if (error instanceof ApiError && [401, 403].includes(error.status)) {
+      return { status: "forbidden" };
+    }
+
+    // A API fora do ar não é falta de permissão: fechar a porta aqui diria
+    // "esta tela não existe" sobre uma falha que passa sozinha.
+    return { status: "unavailable" };
   }
 }
 

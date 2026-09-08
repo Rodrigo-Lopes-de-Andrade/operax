@@ -190,6 +190,31 @@ describe("painel de DP — o que cada um vê", () => {
     expect(screen.queryByRole("link", { name: /limpar recorte/i })).toBeNull();
   });
 
+  it("a porta do ciclo mensal aparece para quem o painel abriu", () => {
+    // As duas telas exigem `permissoes.compensation`, no mesmo
+    // `check_permissions`: um painel `ok` é a prova de que o ciclo abre.
+    screenWith({ status: "ok", kpis: KPIS }, ROLLUP);
+
+    expect(screen.getByRole("link", { name: /ciclo mensal/i })).toHaveAttribute(
+      "href",
+      "/dashboard/dp/ciclos",
+    );
+  });
+
+  it("e não aparece para quem não tem o domínio — link que leva a 404 é pior que link nenhum", () => {
+    screenWith({ status: "forbidden" }, null);
+
+    expect(screen.queryByRole("link", { name: /ciclo mensal/i })).toBeNull();
+    // O positivo ao lado: a tela dele continua existindo inteira.
+    expect(screen.getByText(/painel de alertas/i)).toBeVisible();
+  });
+
+  it("API fora do ar também não oferece a porta: ninguém sabe se ela abre", () => {
+    screenWith({ status: "unavailable" }, null);
+
+    expect(screen.queryByRole("link", { name: /ciclo mensal/i })).toBeNull();
+  });
+
   it("nenhum nome de colaborador chega à tela, em nenhum dos dois caminhos", () => {
     const { container } = screenWith({ status: "ok", kpis: KPIS }, ROLLUP);
 

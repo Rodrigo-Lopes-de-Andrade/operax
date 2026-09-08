@@ -82,12 +82,20 @@ describe("painel de alertas", () => {
     // `app.document_type` não tem código: a identidade do tipo é o nome, texto
     // livre por tenant. Rotular o cartão de CNH poria regra de negócio numa
     // string e erraria calado no tenant que escrevesse "Carteira de Habilitação".
-    expect(screen.getByText(/documentos vencidos/i).textContent).not.toMatch(
-      /CNH/,
-    );
-    expect(screen.getByText(/documentos a vencer/i).textContent).not.toMatch(
-      /CNH/,
-    );
+    //
+    // A asserção é sobre o CARTÃO inteiro, e não só sobre o rótulo: uma nota
+    // que voltasse a estreitar o sentido — "CNH e demais documentos" — passaria
+    // por uma verificação que olhasse apenas o eyebrow.
+    for (const eyebrow of [/documentos vencidos/i, /documentos a vencer/i]) {
+      const cartao = card(eyebrow);
+      expect(cartao.textContent).toMatch(/\bdocumentos\b/);
+      // A única menção tolerada é a que NEGA o recorte por tipo.
+      const mencoes = cartao.textContent?.match(/CNH/g) ?? [];
+      expect(mencoes.length).toBeLessThanOrEqual(1);
+      if (mencoes.length === 1) {
+        expect(cartao).toHaveTextContent(/não só CNH/i);
+      }
+    }
   });
 
   it("o prazo de férias diz que o vencido está dentro do número", () => {

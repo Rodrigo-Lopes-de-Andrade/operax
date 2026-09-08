@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   loadCompanyRollup,
+  loadCycles,
   loadDpAlerts,
   loadDpPanel,
   type CompanyChoice,
@@ -222,5 +223,77 @@ describe("os oito contadores — caminho 1", () => {
     );
 
     expect(result).toEqual({ status: "unavailable" });
+  });
+});
+
+describe("as competências já apuradas — o portão da tela de ciclo", () => {
+  const SETEMBRO = {
+    kind: "transport_voucher" as const,
+    year: 2026,
+    month: 9,
+  };
+
+  const LISTA = {
+    rows: [
+      {
+        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        kind: "transport_voucher",
+        period_year: 2026,
+        period_month: 9,
+        window_start: "2026-08-21",
+        window_end: "2026-09-20",
+        business_days: 21,
+        status: "generated",
+        entitled_count: 1,
+        denied_count: 0,
+        total_amount: "201.60",
+      },
+    ],
+    can_export_remittance: true,
+  };
+
+  it("pergunta pela competência da URL, e não pelo histórico inteiro", async () => {
+    fetchMock.mockImplementation(async () => answer(200, LISTA));
+
+    const result = await loadCycles(SETEMBRO);
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toContain("/dp/ciclos?kind=transport_voucher");
+    expect(url).toContain("ano=2026");
+    expect(url).toContain("mes=9");
+    expect(result).toEqual({ status: "ok", list: LISTA });
+  });
+
+  it("403 fecha a tela: o eixo é `compensation`, e a rota é quem responde", async () => {
+    fetchMock.mockResolvedValue(
+      answer(403, {
+        detail: "Seu papel não alcança o domínio de remuneração.",
+      }),
+    );
+
+    expect(await loadCycles(SETEMBRO)).toEqual({ status: "forbidden" });
+  });
+
+  it("401 fecha também — a sessão que venceu não é a API fora do ar", async () => {
+    // O par de baixo do 403: os dois fecham a tela, e o 500 abaixo não. Sem
+    // este caso, tirar o 401 da lista deixaria a sessão vencida cair no
+    // `unavailable`, e a tela abriria pedindo para recarregar em vez de mandar
+    // a pessoa para o login.
+    fetchMock.mockResolvedValue(answer(401, { detail: "…" }));
+
+    expect(await loadCycles(SETEMBRO)).toEqual({ status: "forbidden" });
+  });
+
+  it("500 NÃO fecha a tela — API fora do ar não é falta de permissão", async () => {
+    fetchMock.mockResolvedValue(answer(500, { detail: "boom" }));
+
+    expect(await loadCycles(SETEMBRO)).toEqual({ status: "unavailable" });
+  });
+
+  it("sem sessão não chega a perguntar", async () => {
+    getSession.mockResolvedValueOnce({ data: { session: null } });
+
+    expect(await loadCycles(SETEMBRO)).toEqual({ status: "forbidden" });
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

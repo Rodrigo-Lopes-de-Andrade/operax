@@ -140,6 +140,22 @@ export function cycleHref(
 }
 
 /**
+ * A query de `GET /dp/ciclos` — a mesma competência, com os nomes que a rota usa.
+ *
+ * Os três parâmetros vão juntos e sem exceção: a rota sem filtro devolve o
+ * histórico inteiro do tenant, e a tela precisa exatamente da competência que
+ * está na URL. Uma lista maior aqui só daria trabalho de escolher a linha certa
+ * no cliente — que é onde escolher errado não aparece.
+ */
+export function cyclesQuery(filters: CycleFilters): string {
+  return new URLSearchParams({
+    kind: filters.kind,
+    ano: String(filters.year),
+    mes: String(filters.month),
+  }).toString();
+}
+
+/**
  * Recorte do painel de DP: empresa e unidade, pelos ids que a API espera em
  * `empresa` e `unidade`. As mesmas chaves de query do resto do produto (`emp`,
  * `un`), para que um link colado entre telas continue querendo dizer a mesma

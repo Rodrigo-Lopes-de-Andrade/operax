@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 
 import { MonthlyCycle } from "@/components/dp/monthly-cycle";
 import { pageTitle } from "@/lib/brand";
+import { loadCycles } from "@/lib/dp/queries";
 import { parseCycleFilters } from "@/lib/dp/url";
 import { isAdmin, loadIdentity } from "@/lib/identity";
 import { todayInTenantZone, type RawSearchParams } from "@/lib/ponto/filters";
@@ -14,10 +15,21 @@ export const metadata: Metadata = {
 /**
  * Ciclo mensal de cesta e de vale transporte.
  *
- * `isAdmin` como na tela de folha: apurar uma competência é escrita, e o
- * backend pergunta `util.is_admin` e o domínio de remuneração ao banco a cada
- * chamada. Quem não escreve receberia 403 em todos os botões, e uma tela cujos
- * botões todos recusam é pior que porta nenhuma.
+ * ⛔ QUEM ENTRA É QUEM TEM `compensation`, E NÃO QUEM É ADMINISTRADOR
+ * O portão é a resposta de `GET /dp/ciclos`: 403 vira ausência de tela. Uma
+ * lista de papéis aqui erraria nos dois sentidos, e erra hoje —
+ * `app.domain_permission` dá `compensation` a `accounting` e a `executive`, que
+ * **não** são admin, e não o dá a `hr`, que é. A migration do S2 nomeia
+ * `accounting` como quem confere a remessa, e o backend tirou a exigência de
+ * admin desta leitura exatamente por isso: *"exigir admin aqui devolveria a
+ * mesma parede uma porta adiante"* (`routers/dp.py`). Era essa parede.
+ *
+ * ⚠️ ESCREVER É OUTRO EIXO, E ELE CONTINUA SENDO `util.is_admin`
+ * Apurar e gerar exigem `compensation` **e** admin (`_pode_escrever_catalogo`).
+ * `isAdmin` é a cópia de `util.is_admin`, que é lista de papéis fixa nos dois
+ * lados e já vivia em `lib/identity.ts` — não é a matriz de domínios, que é
+ * dado que o cliente edita. Nenhuma rota de ciclo devolve `can_write`; quando
+ * devolver, esta linha sai. Reportado.
  *
  * A competência mora na query string: o link que alguém manda pedindo "confere
  * o vale transporte de setembro" precisa abrir setembro, e não o mês de quem
@@ -30,11 +42,16 @@ export default async function CiclosPage({
 }) {
   const identity = await loadIdentity();
 
-  if (!isAdmin(identity?.role)) {
+  if (!identity) {
     notFound();
   }
 
   const filters = parseCycleFilters(await searchParams, todayInTenantZone());
+  const history = await loadCycles(filters);
+
+  if (history.status === "forbidden") {
+    notFound();
+  }
 
   return (
     <div className="flex flex-col gap-4">
@@ -51,7 +68,11 @@ export default async function CiclosPage({
         </p>
       </header>
 
-      <MonthlyCycle filters={filters} />
+      <MonthlyCycle
+        filters={filters}
+        history={history}
+        canWrite={isAdmin(identity.role)}
+      />
     </div>
   );
 }

@@ -1,4 +1,5 @@
-import { CircleAlert } from "lucide-react";
+import { CalendarRange, CircleAlert } from "lucide-react";
+import Link from "next/link";
 
 import { CompanyRollup } from "@/components/dp/company-rollup";
 import { PanelAlerts } from "@/components/dp/panel-alerts";
@@ -13,7 +14,7 @@ import type {
   CompanyRollupResult,
   PanelResult,
 } from "@/lib/dp/queries";
-import type { PanelFilters } from "@/lib/dp/url";
+import { CICLO_PATH, type PanelFilters } from "@/lib/dp/url";
 import type { UnitOption } from "@/lib/ponto/queries";
 
 /**
@@ -51,16 +52,37 @@ export function PanelScreen({
 }) {
   return (
     <div className="flex flex-col gap-4">
-      <header>
-        <p className="text-2xs text-ink-faint font-bold tracking-[0.08em] uppercase">
-          Departamento pessoal
-        </p>
-        <h1 className="text-ink text-2xl font-extrabold">Painel de DP</h1>
-        <p className="text-ink-muted mt-1 max-w-3xl text-sm text-pretty">
-          {panel.status === "ok"
-            ? `Posição de ${formatDate(panel.kpis.on)}. Os números mudam quando a sincronização roda, não enquanto esta tela está aberta.`
-            : "Os contadores do cadastro são de hoje e mudam quando a sincronização roda, não enquanto esta tela está aberta."}
-        </p>
+      <header className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <p className="text-2xs text-ink-faint font-bold tracking-[0.08em] uppercase">
+            Departamento pessoal
+          </p>
+          <h1 className="text-ink text-2xl font-extrabold">Painel de DP</h1>
+          <p className="text-ink-muted mt-1 max-w-3xl text-sm text-pretty">
+            {panel.status === "ok"
+              ? `Posição de ${formatDate(panel.kpis.on)}. Os números mudam quando a sincronização roda, não enquanto esta tela está aberta.`
+              : "Os contadores do cadastro são de hoje e mudam quando a sincronização roda, não enquanto esta tela está aberta."}
+          </p>
+        </div>
+
+        {/*
+          ⛔ A PORTA DO CICLO MENSAL, E ELA SÓ APARECE PARA QUEM ELA ABRE
+          As duas telas exigem a mesma coisa — `permissoes.compensation`, no
+          mesmo `check_permissions` —, então um painel que respondeu `ok` é a
+          prova de que a tela de ciclo abre para quem está lendo esta. Na barra
+          lateral não havia como saber: `/me` devolve o papel e não o domínio, e
+          qualquer lista de papéis erraria nos dois sentidos (trancava
+          `accounting` fora, levava `hr` a um 404).
+        */}
+        {panel.status === "ok" ? (
+          <Link
+            href={CICLO_PATH}
+            className="border-line-strong text-ink inline-flex h-10 items-center gap-2 rounded-[10px] border px-3 text-sm font-bold"
+          >
+            <CalendarRange size={15} aria-hidden />
+            Ciclo mensal
+          </Link>
+        ) : null}
       </header>
 
       <PanelFilter filters={filters} companies={companies} units={units} />

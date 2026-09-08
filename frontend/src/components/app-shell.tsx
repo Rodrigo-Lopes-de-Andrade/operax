@@ -11,12 +11,7 @@ import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
 import { MAPEAMENTO_PATH, ROTACOES_PATH } from "@/lib/curadoria/url";
-import {
-  BENEFICIOS_PATH,
-  CICLO_PATH,
-  PAINEL_PATH,
-  POSTOS_PATH,
-} from "@/lib/dp/url";
+import { BENEFICIOS_PATH, PAINEL_PATH, POSTOS_PATH } from "@/lib/dp/url";
 import { FOLHA_PATH } from "@/lib/folha/url";
 import { COLABORADORES_PATH, IMPORTACAO_PATH } from "@/lib/rh/url";
 import { TV_PATH } from "@/lib/tv/url";
@@ -49,6 +44,14 @@ export function AppShell({
    * não inclui `executive`: ele alcança a área de RH para ler, não cura nada e
    * não publica folha. Então o item não aparece para ele: a página responde 404,
    * e um link que leva a 404 é pior do que link nenhum.
+   *
+   * ⛔ O CICLO MENSAL SAIU DAQUI, e o motivo é que o eixo dele não é este.
+   * Entrar na tela de ciclo exige o domínio `compensation` — que `hr` é admin e
+   * **não** tem, e que `accounting` tem **sem** ser admin. Nenhuma lista de
+   * papéis deste arquivo acerta os dois, e a matriz de domínios não chega ao
+   * frontend (`/me` devolve só o papel). O link passou a viver dentro do Painel
+   * de DP, que já perguntou o domínio ao backend e só o oferece quando a
+   * resposta foi sim.
    */
   showAdminWrites?: boolean;
 }) {
@@ -72,6 +75,33 @@ export function AppShell({
           <NavLink href={ASSISTENTE_PATH} label="Assistente" />
         </nav>
 
+        {/*
+          ⛔ SEM PAPEL NENHUM DECIDINDO, E É A ÚNICA FORMA HONESTA
+          O painel de DP abre para qualquer membro do tenant: quem alcança o
+          domínio de remuneração recebe os nove KPIs, e quem não alcança recebe
+          os oito contadores do cadastro recortados pela RLS — que é a tela
+          inteira de quem cuida de documento, ASO e férias.
+
+          ⚠️ Isso não é o mesmo que "nenhum papel vê nada": medido, `viewer`
+          recebe 403 nos KPIs e oito contadores em zero. O zero não é desta
+          tela — ele não tem linha em `app.user_scope` e fica vazio em todas as
+          telas do produto. Esconder o item resolveria a aparência de uma conta
+          por configurar, e não a conta.
+
+          A alternativa seria uma lista de papéis, e ela erraria: `accounting`
+          tem `compensation` e não está em `HR_ROLES`, então não veria o bloco
+          Administração inteiro — e era assim que ele ficava sem porta.
+        */}
+        <nav
+          aria-label="Departamento pessoal"
+          className="flex flex-col gap-1 px-4 py-2"
+        >
+          <p className="text-2xs px-3 py-2 font-bold tracking-[0.08em] text-white/80 uppercase">
+            Departamento pessoal
+          </p>
+          <NavLink href={PAINEL_PATH} label="Painel de DP" />
+        </nav>
+
         {showAdmin ? (
           <nav
             aria-label="Administração"
@@ -80,12 +110,6 @@ export function AppShell({
             <p className="text-2xs px-3 py-2 font-bold tracking-[0.08em] text-white/80 uppercase">
               Administração
             </p>
-            {/* Leitura, e por isso fora de `showAdminWrites`: `executive` não
-                escreve nada e é justamente quem o painel de DP serve. Ele abre
-                para todo mundo desta lista — quem não alcança o domínio de
-                remuneração recebe a metade de cadastro, que é a tela inteira de
-                quem cuida de documento e ASO, e não um 404. */}
-            <NavLink href={PAINEL_PATH} label="Painel de DP" />
             <NavLink href={COLABORADORES_PATH} label="Colaboradores" />
             <NavLink href={IMPORTACAO_PATH} label="Importação" />
             <NavLink href={POSTOS_PATH} label="Quadro de Postos" />
@@ -93,7 +117,6 @@ export function AppShell({
             {showAdminWrites ? (
               <>
                 <NavLink href={FOLHA_PATH} label="Folha" />
-                <NavLink href={CICLO_PATH} label="Ciclo mensal" />
                 <NavLink href={MAPEAMENTO_PATH} label="Mapeamento" />
                 <NavLink href={ROTACOES_PATH} label="Escalas" />
               </>

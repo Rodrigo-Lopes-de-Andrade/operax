@@ -18,7 +18,12 @@ import { SegmentedControl } from "@/components/ui/segmented-control";
 import { Table, type Column } from "@/components/ui/table";
 import { ApiError, downloadApiAsUser, requestApiAsUser } from "@/lib/api";
 import { formatCompetencia, formatCurrency, formatDate } from "@/lib/dp/format";
-import type { CycleEntitlementRow, CycleView } from "@/lib/dp/queries";
+import type {
+  CycleEntitlementRow,
+  CycleListResult,
+  CycleSummary,
+  CycleView,
+} from "@/lib/dp/queries";
 import {
   CYCLE_KINDS,
   CYCLE_KIND_LABEL,
@@ -53,6 +58,48 @@ const STATUS_LABEL: Record<string, string> = {
  */
 type Failure = { kind: "refusal" | "error"; message: string };
 
+/**
+ * A competência na tela, venha ela da apuração ou do histórico.
+ *
+ * `rows` é `null`, e não vazio, quando ela veio do histórico: `GET /dp/ciclos`
+ * devolve o resumo sem as linhas, e não existe rota que as recupere. Vazio
+ * diria "ninguém tem direito" sobre uma competência que pode ter duzentas
+ * linhas — a diferença entre não ter e não ter sido carregado.
+ */
+type Displayed = {
+  id: string | null;
+  kind: CycleKind;
+  period_year: number;
+  period_month: number;
+  window_start: string;
+  window_end: string;
+  business_days: number | null;
+  status: string;
+  entitled_count: number;
+  denied_count: number;
+  total_amount: string;
+  can_export_remittance: boolean;
+  rows: CycleEntitlementRow[] | null;
+};
+
+/**
+ * Qual competência mostrar quando o histórico traz mais de uma linha.
+ *
+ * A congelada ganha da rascunho, sempre. O `unique` da competência inclui o
+ * `status`, então um banco que já passou pelo bug do segundo rascunho tem as
+ * duas — e mostrar o rascunho esconderia justamente a que virou remessa.
+ */
+function pickCycle(rows: CycleSummary[]): CycleSummary | null {
+  return rows.find((row) => PAYABLE.includes(row.status)) ?? rows[0] ?? null;
+}
+
+function fromSummary(
+  summary: CycleSummary,
+  canExportRemittance: boolean,
+): Displayed {
+  return { ...summary, can_export_remittance: canExportRemittance, rows: null };
+}
+
 const CESTA_COLUMNS: Column[] = [
   { key: "pessoa", label: "Colaborador" },
   { key: "direito", label: "Direito", width: "12%" },
@@ -86,8 +133,38 @@ const VT_COLUMNS: Column[] = [
  * da resposta vale como "não pode". Deduzir o domínio de uma lista de papéis
  * aqui seria a matriz de sensibilidade escrita uma segunda vez, longe do banco
  * que a altera por `update`.
+ *
+ * ⛔ A COMPETÊNCIA VEM DO SERVIDOR, E "APURAR" SOME QUANDO ELA ESTÁ CONGELADA
+ * Enquanto o ciclo vivia só em `useState`, um F5 dizia "nada apurado" para um
+ * mês já gerado — e a única ação oferecida, apurar, **criava uma segunda linha**
+ * ao lado da gerada, porque `save_draft` procura rascunho ABERTO e o `unique` da
+ * competência inclui o `status`. O operador passava a ver "Rascunho" para uma
+ * competência congelada, e a remessa que ele conferiu ficava inalcançável.
+ *
+ * ⚠️ ISSO FECHA O CAMINHO DE UM OPERADOR SÓ. NÃO FECHA O INSERT.
+ * O banco continua aceitando a segunda linha: a `unique` de `app.benefit_cycle`
+ * inclui o `status`, então o rascunho novo não colide com a gerada, e
+ * `trg_benefit_cycle_immutable` é `before update or delete` — não cobre INSERT.
+ * Duas abas, ou dois operadores no mesmo minuto, e ela nasce assim mesmo. A
+ * guarda de verdade é do backend; o que esta camada faz é não **oferecer** o
+ * clique, e é por isso que ela também se fecha quando não sabe (`podeApurar`).
+ *
+ * ✅ Desde `6c61592` (08/09/2026) o backend também recusa: a reserva de
+ * `save_draft` perdeu o `status` do `where` e trava a competência inteira com
+ * `for update`, e reapurar sobre `generated`/`exported` volta 409. O que esta
+ * camada faz não mudou — ela continua não oferecendo o clique.
  */
-export function MonthlyCycle({ filters }: { filters: CycleFilters }) {
+export function MonthlyCycle({
+  filters,
+  history,
+  canWrite,
+}: {
+  filters: CycleFilters;
+  /** O que `GET /dp/ciclos` respondeu para esta competência. */
+  history: CycleListResult;
+  /** `util.is_admin` — apurar e gerar. Ler e exportar é outro eixo. */
+  canWrite: boolean;
+}) {
   const router = useRouter();
   const [result, setResult] = useState<{
     key: string;
@@ -99,7 +176,27 @@ export function MonthlyCycle({ filters }: { filters: CycleFilters }) {
   // O preview pertence à competência em que foi apurado. Trocar de mês na URL
   // não pode deixar os números de agosto embaixo do título de setembro.
   const chave = `${filters.kind}-${filters.year}-${filters.month}`;
-  const cycle = result?.key === chave ? result.cycle : null;
+  const apurado = result?.key === chave ? result.cycle : null;
+
+  const gravada = history.status === "ok" ? pickCycle(history.list.rows) : null;
+  const cycle: Displayed | null =
+    apurado ??
+    (gravada
+      ? fromSummary(
+          gravada,
+          history.status === "ok" && history.list.can_export_remittance,
+        )
+      : null);
+
+  const congelada = cycle !== null && PAYABLE.includes(cycle.status);
+  // Sem a lista do servidor a tela não sabe se este mês já foi gerado, e o
+  // INSERT que o clique dispara não colide com a linha congelada. Não saber vale
+  // como congelada: o alerta pede o F5, e o F5 é o que devolve o botão. O custo
+  // de fechar é uma recarga; o de abrir é um rascunho que esconde a remessa.
+  const historicoLegivel = history.status === "ok";
+  // Reapurar rascunho é seguro e é para isso que o rascunho existe; reapurar
+  // competência congelada é o que duplica a linha. O botão segue o estado.
+  const podeApurar = canWrite && !congelada && historicoLegivel;
 
   function navegar(overrides: Partial<CycleFilters>) {
     setFailure(null);
@@ -120,6 +217,9 @@ export function MonthlyCycle({ filters }: { filters: CycleFilters }) {
         },
       });
       setResult({ key: chave, cycle: apurado });
+      // O rascunho recém-gravado passa a existir no histórico: sem isto, a
+      // próxima leitura do servidor ainda diria que não há competência.
+      router.refresh();
     } catch (caught) {
       setResult(null);
       setFailure(recusa(caught, [422], "Não consegui apurar a competência."));
@@ -172,9 +272,11 @@ export function MonthlyCycle({ filters }: { filters: CycleFilters }) {
           title="Competência"
           note="A janela é derivada do mês pela regra da rotina — o vale transporte conta de 21 a 20, e ela não é um campo do formulário."
           action={
-            <Button onClick={apurar} disabled={busy === "apurar"}>
-              {busy === "apurar" ? "Apurando…" : "Apurar competência"}
-            </Button>
+            podeApurar ? (
+              <Button onClick={apurar} disabled={busy === "apurar"}>
+                {busy === "apurar" ? "Apurando…" : "Apurar competência"}
+              </Button>
+            ) : null
           }
         />
         <div className="flex flex-wrap items-end gap-4 px-5 py-5">
@@ -235,6 +337,16 @@ export function MonthlyCycle({ filters }: { filters: CycleFilters }) {
         </div>
       </Card>
 
+      {history.status === "unavailable" ? (
+        <Alert>
+          Não consegui ler as competências já apuradas. O que estiver na tela
+          veio desta sessão, e apurar fica indisponível até a leitura voltar:
+          sem ela não dá para saber se este mês já foi gerado, e apurar de novo
+          abriria uma segunda apuração ao lado da que virou remessa. Recarregue
+          a página.
+        </Alert>
+      ) : null}
+
       {failure ? <FailureBanner failure={failure} /> : null}
 
       {cycle ? (
@@ -243,10 +355,23 @@ export function MonthlyCycle({ filters }: { filters: CycleFilters }) {
           <Exports
             cycle={cycle}
             busy={busy}
+            canWrite={canWrite}
             onGerar={gerar}
             onExportar={exportar}
           />
-          <People cycle={cycle} />
+          {cycle.rows === null ? (
+            <Card className="p-6">
+              <EmptyState
+                icon={CalendarRange}
+                tone="neutral"
+                compact
+                title="A conferência pessoa a pessoa sai nos arquivos"
+                description="Esta competência foi lida do histórico, e a lista por pessoa não volta por ali — ela nasce na apuração. O Excel e o PDF acima trazem as mesmas linhas, com o motivo de quem ficou de fora."
+              />
+            </Card>
+          ) : (
+            <People kind={cycle.kind} rows={cycle.rows} />
+          )}
         </>
       ) : (
         <Card className="p-6">
@@ -254,7 +379,11 @@ export function MonthlyCycle({ filters }: { filters: CycleFilters }) {
             icon={CalendarRange}
             tone="neutral"
             title={`Nada apurado em ${formatCompetencia(filters.year, filters.month)}`}
-            description="Apurar não grava nada definitivo: o resultado é um preview, feito para ser conferido e reapurado. O que congela a competência é gerar o ciclo, depois."
+            description={
+              podeApurar
+                ? "Apurar não grava nada definitivo: o resultado é um preview, feito para ser conferido e reapurado. O que congela a competência é gerar o ciclo, depois."
+                : "Quando alguém apurar esta competência, ela aparece aqui com os arquivos para conferência."
+            }
           />
         </Card>
       )}
@@ -287,7 +416,7 @@ function FailureBanner({ failure }: { failure: Failure }) {
   );
 }
 
-function Summary({ cycle }: { cycle: CycleView }) {
+function Summary({ cycle }: { cycle: Displayed }) {
   return (
     <Card>
       <CardHeader
@@ -332,11 +461,13 @@ function Figure({ label, value }: { label: string; value: string }) {
 function Exports({
   cycle,
   busy,
+  canWrite,
   onGerar,
   onExportar,
 }: {
-  cycle: CycleView;
+  cycle: Displayed;
   busy: string | null;
+  canWrite: boolean;
   onGerar: () => void;
   onExportar: (formato: "xlsx" | "pdf" | "banco") => void;
 }) {
@@ -348,7 +479,9 @@ function Exports({
         title="Arquivos da competência"
         note="Excel e PDF saem do rascunho: eles são o preview, e conferir é para o que o rascunho existe."
         action={
-          congelado ? null : (
+          // Congelar é escrita, e `accounting` confere a remessa sem apurar
+          // nada — o botão não fica cinza para ele, fica fora do DOM.
+          congelado || !canWrite ? null : (
             <Button onClick={onGerar} disabled={busy === "gerar"}>
               {busy === "gerar" ? "Gerando…" : "Gerar ciclo"}
             </Button>
@@ -402,7 +535,7 @@ function Remittance({
   busy,
   onExportar,
 }: {
-  cycle: CycleView;
+  cycle: Displayed;
   busy: string | null;
   onExportar: () => void;
 }) {
@@ -443,11 +576,17 @@ function Remittance({
  * direito vai perguntar por quê, e a resposta é do apurador — a tela não a
  * reescreve.
  */
-function People({ cycle }: { cycle: CycleView }) {
-  const grupos = groupByUnit(cycle.rows);
-  const vt = cycle.kind === TRANSPORT_VOUCHER;
+function People({
+  kind,
+  rows,
+}: {
+  kind: CycleKind;
+  rows: CycleEntitlementRow[];
+}) {
+  const grupos = groupByUnit(rows);
+  const vt = kind === TRANSPORT_VOUCHER;
 
-  if (cycle.rows.length === 0) {
+  if (rows.length === 0) {
     return (
       <Card className="p-6">
         <EmptyState
