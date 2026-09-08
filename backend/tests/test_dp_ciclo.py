@@ -661,8 +661,14 @@ def _no_mesmo_nivel(trecho: str) -> str:
     return "".join(saida)
 
 
-def _grupo_do_predicado_de_tenant(sql: str) -> str:
-    alvo = sql.index(_PREDICADO_TENANT)
+def _grupo_do_predicado(sql: str, predicado: str) -> str:
+    """O trecho do `where` que envolve `predicado`, até o parêntese que o contém.
+
+    O alvo virou parâmetro em 07/09/2026: o mesmo recorte vale para o predicado de
+    UNIDADE de `laudos._LIST_SQL`, e duplicar estas linhas seria provar uma cópia
+    da guarda — que fica verde exatamente quando a original quebra.
+    """
+    alvo = sql.index(predicado)
     relativa, inicio = 0, 0
     for i in range(alvo - 1, -1, -1):
         if sql[i] == ")":
@@ -673,7 +679,7 @@ def _grupo_do_predicado_de_tenant(sql: str) -> str:
                 break
             relativa -= 1
     relativa, fim = 0, len(sql)
-    for i in range(alvo + len(_PREDICADO_TENANT), len(sql)):
+    for i in range(alvo + len(predicado), len(sql)):
         if sql[i] == "(":
             relativa += 1
         elif sql[i] == ")":
@@ -682,6 +688,10 @@ def _grupo_do_predicado_de_tenant(sql: str) -> str:
                 break
             relativa -= 1
     return sql[inicio:fim]
+
+
+def _grupo_do_predicado_de_tenant(sql: str) -> str:
+    return _grupo_do_predicado(sql, _PREDICADO_TENANT)
 
 
 class FakeCursor:

@@ -15,6 +15,10 @@ Writes go through `tenant_scope` (`service_role`), because `app.audit_log` grant
 insert to nobody else and the rows plus the trail that describes them have to
 commit together.
 
+A exceção é `fetch_mapped_codes`, e ela está declarada lá: a curadoria de rubrica
+é metadado do tenant, não dado de pessoa, e a pergunta "este código está curado?"
+tem UM dono — `operax/dp/rubricas.py`.
+
 WHAT IS AUDITED IS THE FILE, NOT THE LINE
 The HR import audits every line, because each one is a fact a person edited about
 another person. A payroll line is not that: it is one of a thousand rows of a
@@ -42,6 +46,7 @@ from typing import Any
 from uuid import UUID
 
 from operax.core.tenant import TenantContext, tenant_scope, user_scope
+from operax.dp import rubricas
 from operax.imports.payroll import LineOutcome
 from operax.rh.repository import SAVE_REPORT_SQL, audit, jsonb
 
@@ -105,10 +110,6 @@ _EMPLOYEES_SQL = """
            e.unit_id
     from app.employee e
     where e.registration_number is not null
-"""
-
-_MAPPED_CODES_SQL = """
-    select code from app.payroll_event_map
 """
 
 _PERIOD_SQL = """
@@ -193,14 +194,31 @@ async def fetch_employees(tenant: TenantContext) -> dict[str, EmployeeRef]:
 
 
 async def fetch_mapped_codes(tenant: TenantContext) -> frozenset[str]:
-    """Os códigos de evento já curados com a contabilidade.
+    """Os códigos de evento já curados com a contabilidade: classificados E conferidos.
+
+    ⛔ QUEM RESPONDE "ESTÁ CURADO?" É `rubricas.read_curation`, E SÓ ELE
+    Esta função já perguntou `select code from app.payroll_event_map`, e a
+    resposta era exata enquanto `category` fosse `not null`: existir linha no
+    mapa equivalia a ter categoria. `dp_payroll_code_map` semeia uma linha por
+    código da folha com `category` NULO, e o mesmo predicado passou a responder
+    outra pergunta — "o código é conhecido", que é verdade para TODOS eles. O
+    sintoma seria a tela de import dizendo "nenhuma pendência" com a curadoria
+    inteira por fazer, enquanto `PayrollCodeList.pending` dizia o contrário.
+    Duas definições de "curado" discordando é exatamente o silêncio que a
+    curadoria existe para eliminar.
+
+    ⚠️ E A IDENTIDADE MUDA AQUI, DE PROPÓSITO. `read_curation` lê sob
+    `tenant_scope`, não sob o `user_scope` das outras leituras deste módulo. As
+    outras leem dado de PESSOA, e ver menos é a resposta certa para quem alcança
+    menos; o catálogo de rubrica é metadado do tenant, sem pessoa e sem valor, e
+    os dois lados do `union` carregam o próprio `tenant_id`. A rota já revalidou
+    `is_admin` e o domínio `compensation` antes de chegar aqui.
 
     O que falta aqui não recusa linha nenhuma: vira o aviso `codigo_sem_categoria`
     e a lista que a curadoria recebe.
     """
-    async with user_scope(tenant) as scope:
-        await scope.execute(_MAPPED_CODES_SQL)
-        return frozenset(str(linha["code"]) for linha in await scope.fetchall())
+    curadoria = await rubricas.read_curation(tenant)
+    return frozenset(curadoria.categories)
 
 
 async def fetch_period(tenant: TenantContext, *, year: int, month: int) -> PeriodState:

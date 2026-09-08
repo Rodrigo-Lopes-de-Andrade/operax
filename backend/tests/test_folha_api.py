@@ -14,6 +14,7 @@ import de RH, e a única que muda um número que alguém vai comparar com holeri
 
 from __future__ import annotations
 
+from datetime import datetime
 from decimal import Decimal
 from io import BytesIO
 from typing import Any
@@ -24,6 +25,7 @@ from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 
 from operax.core.tenant import bind_tenant
+from operax.dp import rubricas as dp_rubricas
 from operax.imports import payroll
 from operax.imports import repository as folha_repository
 from operax.rh import repository as rh_repository
@@ -47,7 +49,13 @@ PESSOAS = [
 
 #: Só um dos códigos usados está curado. O outro é o caso que interessa: entra,
 #: conta no total, e volta na lista da curadoria.
-CODIGOS_MAPEADOS = ["0050"]
+#:
+#: ⛔ "CURADO" É CLASSIFICADO **E** CONFERIDO, e é por isso que isto é uma linha
+#: com colunas em vez de uma lista de códigos. `dp_payroll_code_map` semeia uma
+#: linha por código da FOLHA com `category` nula: depois dela, "existe linha no
+#: mapa" deixou de significar "tem categoria", e um dublê que guardasse só o
+#: código não teria como distinguir os dois estados — que é exatamente o defeito.
+CURADORIA = [{"code": "0050", "category": "overtime", "validated": True}]
 
 
 class FakeCursor:
@@ -89,7 +97,9 @@ class FakeDB:
 
     def __init__(self, *, admin: bool = True, dominios: bool = True) -> None:
         self.pessoas = [dict(p) for p in PESSOAS]
-        self.codigos = list(CODIGOS_MAPEADOS)
+        self.curadoria: list[dict[str, Any]] = []
+        for linha in CURADORIA:
+            self.semear_curadoria(**linha)
         self.periods: dict[tuple[int, int], dict[str, Any]] = {}
         self.entries: list[dict[str, Any]] = []
         self.imports: dict[UUID, dict[str, Any]] = {}
@@ -97,6 +107,35 @@ class FakeDB:
         self.statements: list[tuple[str, dict[str, Any]]] = []
         self.admin = admin
         self.dominios = dominios
+
+    def semear_curadoria(
+        self,
+        code: str,
+        *,
+        category: str | None,
+        validated: bool,
+        description: str | None = None,
+        nature: str | None = None,
+    ) -> None:
+        """Uma linha de `app.payroll_event_map`, no estado em que ela de fato existe.
+
+        `category=None, validated=False` é o estado em que a SEMENTE entrega todo
+        código da folha — e o banco proíbe o inverso
+        (`payroll_event_map_validated_has_category`), então validar sem
+        classificar não é semeável aqui de propósito.
+        """
+        assert not validated or category is not None, (
+            "o banco recusa validated_at sem category (payroll_event_map_validated_has_category)"
+        )
+        self.curadoria.append(
+            {
+                "code": code,
+                "description": description,
+                "nature": nature,
+                "category": category,
+                "validated_at": datetime(2026, 9, 1, 12, 0) if validated else None,
+            }
+        )
 
     def abrir_competencia(self, year: int, month: int, status: str) -> UUID:
         period_id = uuid4()
@@ -120,7 +159,7 @@ class FakeDB:
         if "from app.employee e" in sql:
             return [dict(p) for p in self.pessoas]
         if "from app.payroll_event_map" in sql:
-            return [{"code": codigo} for codigo in self.codigos]
+            return self._lista_de_rubricas(params)
         if "from app.payroll_period p" in sql:
             return self._estado_da_competencia(params["year"], params["month"])
         if "insert into app.payroll_period" in sql:
@@ -166,6 +205,36 @@ class FakeDB:
             self.audit.append(dict(params))
             return []
         return []
+
+    # -- curadoria de rubrica -------------------------------------------------
+    def _lista_de_rubricas(self, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """As duas fontes de `rubricas._LIST_SQL`: a folha importada e o mapa curado.
+
+        ⛔ O DUBLÊ NÃO SEPARA O CURADO DO NÃO CURADO. Ele devolve as duas metades
+        como a consulta as devolve, com `category` e `validated_at` do jeito que
+        estão; quem separa é `rubricas.read_curation`, que é o código sob teste.
+        Um fake que filtrasse por `category is not null` aqui daria verde à
+        pergunta errada e esconderia o defeito.
+        """
+        curados = {linha["code"]: linha for linha in self.curadoria}
+        da_folha = {linha["code"]: linha for linha in self.entries}
+        linhas = []
+        for code in sorted(set(curados) | set(da_folha)):
+            curado = curados.get(code, {})
+            entrada = da_folha.get(code, {})
+            linhas.append(
+                {
+                    "code": code,
+                    "description": curado.get("description") or entrada.get("description"),
+                    "nature": curado.get("nature") or entrada.get("nature"),
+                    "category": curado.get("category"),
+                    "validated_at": curado.get("validated_at"),
+                    "in_payroll": code in da_folha,
+                }
+            )
+        if params.get("code") is not None:
+            linhas = [linha for linha in linhas if linha["code"] == params["code"]]
+        return linhas
 
     # -- competência ---------------------------------------------------------
     def _estado_da_competencia(self, year: int, month: int) -> list[dict[str, Any]]:
@@ -232,12 +301,16 @@ class FakeStore:
 def db(monkeypatch: pytest.MonkeyPatch):
     def instalar(**kwargs: Any) -> FakeDB:
         estado = FakeDB(**kwargs)
-        for modulo in (folha_repository, rh_repository):
+        # `dp_rubricas` entra porque `fetch_mapped_codes` pergunta a ele quem está
+        # curado — a porta única de categoria é dele, não do import. Ele só lê sob
+        # `tenant_scope`, e por isso não aparece na segunda lista.
+        for modulo in (folha_repository, rh_repository, dp_rubricas):
             monkeypatch.setattr(
                 modulo,
                 "tenant_scope",
                 lambda context, schema="app": FakeScope(FakeCursor(estado, context, True)),
             )
+        for modulo in (folha_repository, rh_repository):
             monkeypatch.setattr(
                 modulo,
                 "user_scope",
@@ -403,6 +476,45 @@ def test_do_modelo_ate_a_substituicao_da_competencia(client: TestClient, issue_t
     ]
     assert [a["action"] for a in estado.audit[-2:]] == ["delete", "insert"]
     assert estado.audit[-2]["antes"].obj == {"period": "2026-08", "rows": 3}
+
+
+def test_codigo_semeado_no_mapa_e_sem_categoria_continua_pendente(
+    client: TestClient, issue_token, db, store
+):
+    """⛔ "EXISTE LINHA NO MAPA" NÃO É "TEM CATEGORIA" — e o import perguntava a errada.
+
+    `20260907182521_dp_payroll_code_map.sql` semeia UMA LINHA POR CÓDIGO DA FOLHA
+    com `category` nula: é assim que a lista chega pronta para a contabilidade
+    conferir. Enquanto `fetch_mapped_codes` perguntava
+    `select code from app.payroll_event_map`, todo código semeado passava por
+    curado — `unmapped_codes` voltava VAZIO com a curadoria inteira por fazer, e a
+    tela de import dizia "nenhuma pendência" enquanto a de rubricas listava N.
+
+    AS DUAS CONDIÇÕES QUE SOZINHAS JÁ DARIAM VERDE, E POR QUE NÃO SÃO ELAS:
+      · o dublê não devolver a linha semeada — excluída pela asserção sobre
+        `estado.curadoria`, que é o estado inteiro que o responder devolve;
+      · o import chamar TODO código de não curado — excluída pela lista exata,
+        que traz `H_EXTRA_60` e **não** traz `0050`, curado no mesmo cenário.
+    """
+    estado = db()
+    # O estado exato em que a semente entrega: a linha existe e não tem categoria.
+    estado.semear_curadoria("H_EXTRA_60", category=None, validated=False)
+    assert [(linha_["code"], linha_["category"]) for linha_ in estado.curadoria] == [
+        ("0050", "overtime"),
+        ("H_EXTRA_60", None),
+    ]
+
+    preenchido = preencher(
+        baixar(client, issue_token).content,
+        [linha("1001", "0050", "2.500,00"), linha("1001", "H_EXTRA_60", "312,45")],
+    )
+    corpo = enviar(client, issue_token, preenchido).json()
+
+    assert corpo["counts"] == {"total": 2, "ok": 2, "error": 0}
+    assert corpo["unmapped_codes"] == ["H_EXTRA_60"]
+    assert [(linha_["line"], linha_["warnings"][0]["code"]) for linha_ in corpo["lines"]] == [
+        (3, "codigo_sem_categoria")
+    ]
 
 
 # ---------------------------------------------------------------------------

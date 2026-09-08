@@ -45,7 +45,7 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from operax.core.tenant import tenant_scope
-from operax.dp import banking, beneficios, ciclo, export, painel, postos
+from operax.dp import banking, beneficios, ciclo, export, laudos, painel, postos, rubricas
 from operax.rh.repository import audit, check_permissions
 from server.deps import CurrentTenant
 from server.models import (
@@ -57,6 +57,10 @@ from server.models import (
     BenefitPlanCreate,
     BenefitPlanRow,
     BenefitTypeRow,
+    ComplianceReportCreate,
+    ComplianceReportList,
+    ComplianceReportRenewal,
+    ComplianceReportRow,
     CycleEntitlementRow,
     CycleList,
     CycleRequest,
@@ -64,6 +68,9 @@ from server.models import (
     CycleView,
     DpPanel,
     NewBandRow,
+    PayrollCodeList,
+    PayrollCodePatch,
+    PayrollCodeRow,
     TransportFareCreate,
     TransportFareRow,
     WorkPostCreate,
@@ -715,3 +722,181 @@ async def painel_de_dp(
         without_salary=kpis.without_salary,
         units_with_open_installment=kpis.units_with_open_installment,
     )
+
+
+# ---------------------------------------------------------------------------
+# Laudos por unidade
+# ---------------------------------------------------------------------------
+_LAUDO_NAO_ENCONTRADO = "Laudo não encontrado."
+
+
+def _laudo(report: laudos.ComplianceReport) -> ComplianceReportRow:
+    return ComplianceReportRow(
+        id=report.id,
+        unit_id=report.unit_id,
+        unit_name=report.unit_name,
+        type=report.type,
+        valid_until=report.valid_until,
+        days_to_expiry=report.days_to_expiry,
+        renewal_count=report.renewal_count,
+        notes=report.notes,
+        created_at=report.created_at,
+    )
+
+
+async def _pode_escrever_laudo(tenant: CurrentTenant) -> None:
+    permissoes = await check_permissions(tenant)
+    if not permissoes.admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_SEM_ADMIN)
+
+
+@router.get("/laudos")
+async def listar_laudos(
+    tenant: CurrentTenant,
+    unidade: Annotated[UUID | None, Query(description="Filtra por unidade")] = None,
+) -> ComplianceReportList:
+    """Os laudos VIGENTES das unidades que quem pergunta enxerga.
+
+    Sem checagem de domínio: laudo é conformidade do local, não dado de pessoa —
+    o mesmo argumento de `GET /dp/postos`, e o motivo de a tabela ter dois eixos
+    de RLS em vez de três. O recorte vem de `util.can_see_unit`, pela policy de
+    `app.unit`.
+
+    ⛔ Sem filtro por situação, e a ausência é o desenho: "a vencer" precisa de
+    uma janela que o schema não tem para laudo. A UI classifica com o limiar
+    declarado nela, a partir de `days_to_expiry`.
+    """
+    permissoes = await check_permissions(tenant)
+    lista = await laudos.list_reports(tenant, unit_id=unidade)
+    return ComplianceReportList(
+        rows=[_laudo(report) for report in lista], can_write=permissoes.admin
+    )
+
+
+@router.post("/laudos", status_code=status.HTTP_201_CREATED)
+async def cadastrar_laudo(
+    payload: ComplianceReportCreate, tenant: CurrentTenant
+) -> ComplianceReportRow:
+    """Cadastra o primeiro laudo daquele tipo na unidade. Administração, e só na unidade dela."""
+    await _pode_escrever_laudo(tenant)
+
+    # O papel vem antes da unidade, como no Quadro de Postos: quem não pode
+    # escrever não descobre aqui se a unidade existe.
+    if not await laudos.can_see_unit(tenant, payload.unit_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unidade não encontrada.")
+
+    try:
+        criado = await laudos.create_report(
+            tenant,
+            unit_id=payload.unit_id,
+            type=payload.type,
+            valid_until=payload.valid_until,
+            notes=payload.notes,
+        )
+    except laudos.DuplicateComplianceReportError as choque:
+        # 409 e não 422: o pedido está bem formado, o estado é que não permite —
+        # e o caminho certo é renovar o que já existe.
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(choque)) from choque
+    return _laudo(criado)
+
+
+@router.post("/laudos/{report_id}/renovar", status_code=status.HTTP_201_CREATED)
+async def renovar_laudo(
+    report_id: UUID, payload: ComplianceReportRenewal, tenant: CurrentTenant
+) -> ComplianceReportRow:
+    """Renova: **linha nova** apontando para a que sai, com o histórico intacto.
+
+    ⛔ Não existe rota que altere a data do laudo vigente, e não existe rota que
+    apague laudo — regra 6. O vencimento anterior é o que valeu na fiscalização
+    da unidade, e reescrevê-lo mudaria o passado sem deixar rastro.
+    """
+    await _pode_escrever_laudo(tenant)
+
+    anterior = await laudos.load_report(tenant, report_id)
+    # As duas recusas são o mesmo 404: um 403 aqui confirmaria que o laudo
+    # existe em outra unidade.
+    if anterior is None or not await laudos.can_see_unit(tenant, anterior.unit_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_LAUDO_NAO_ENCONTRADO)
+
+    try:
+        renovado = await laudos.renew_report(
+            tenant, anterior=anterior, valid_until=payload.valid_until, notes=payload.notes
+        )
+    except laudos.AlreadyRenewedError as choque:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(choque)) from choque
+    return _laudo(renovado)
+
+
+# ---------------------------------------------------------------------------
+# Curadoria de rubrica
+# ---------------------------------------------------------------------------
+def _rubrica(linha: rubricas.PayrollCode) -> PayrollCodeRow:
+    return PayrollCodeRow(
+        code=linha.code,
+        description=linha.description,
+        nature=linha.nature,
+        category=linha.category,
+        validated=linha.validated,
+        validated_at=linha.validated_at,
+        in_payroll=linha.in_payroll,
+    )
+
+
+async def _pode_curar_rubrica(tenant: CurrentTenant) -> None:
+    """⛔ `compensation` **e** administração — e a exclusão que isso causa é declarada.
+
+    A policy `payroll_event_map_admin` (migration 30) é `util.is_admin`, então
+    uma rota que aceitasse menos que isso seria **mais frouxa que a policy** —
+    o defeito que as duas revisões do S1 acharam sozinhas no catálogo de verbas.
+    E o mapa decide como o dinheiro é somado, então `compensation` também entra,
+    como em `POST /dp/beneficios/reajuste`.
+
+    ⚠️ Consequência, escrita: `accounting` tem `compensation` e **não** é admin
+    — é a mesma exclusão que o S3 declarou para `app.leave_justification_map` e
+    que fica revisável quando a contabilidade precisar curar sozinha. `hr` é
+    admin e não tem `compensation`, então também fica de fora. Sobram `owner` e
+    `personnel`.
+    """
+    permissoes = await check_permissions(tenant)
+    if not permissoes.compensation:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_SEM_COMPENSATION)
+    if not permissoes.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Classificar rubrica exige papel administrativo. "
+            "Seu papel consulta a folha, mas não define como ela é somada.",
+        )
+
+
+@router.get("/rubricas")
+async def listar_rubricas(tenant: CurrentTenant) -> PayrollCodeList:
+    """O plano de contas do cliente com o que a curadoria já disse de cada código.
+
+    `pending` conta o que a **folha usa** e ninguém classificou — o número que
+    diz se algum indicador financeiro sairia incompleto. Ele vem de
+    `rubricas.read_curation`, a mesma função que entrega categoria a quem soma:
+    a lista e a soma não podem discordar sobre o que está pendente.
+    """
+    await _pode_curar_rubrica(tenant)
+    lista = await rubricas.list_codes(tenant)
+    curadoria = await rubricas.read_curation(tenant)
+    return PayrollCodeList(
+        rows=[_rubrica(linha) for linha in lista],
+        pending=len(curadoria.pending),
+        can_write=True,
+    )
+
+
+@router.patch("/rubricas/{code}")
+async def curar_rubrica(
+    code: str, payload: PayrollCodePatch, tenant: CurrentTenant
+) -> PayrollCodeRow:
+    """Classifica o código e registra quem conferiu. Não existe rota que apague a linha."""
+    await _pode_curar_rubrica(tenant)
+    try:
+        curado = await rubricas.set_category(
+            tenant, code=code, category=payload.category, validated=payload.validated
+        )
+    except rubricas.UnknownPayrollCodeError as ausente:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ausente)) from ausente
+    return _rubrica(curado)

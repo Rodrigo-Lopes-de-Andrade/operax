@@ -1287,6 +1287,138 @@ class DpPanel(BaseModel):
     units_with_open_installment: int
 
 
+class ComplianceReportRow(BaseModel):
+    """Um laudo VIGENTE da unidade, do jeito que a tela de Unidades o mostra.
+
+    ⛔ **Não há campo de situação.** `EM DIA` / `A VENCER` / `VENCIDO` se derivam
+    de `days_to_expiry`, e o limiar de "a vencer" é declarado na UI: a única
+    janela configurável do schema é `app.document_type.expiry_alert_days`, que
+    laudo não alcança. Uma constante aqui mentiria com cara de configuração — a
+    frase é do S4 e continua valendo.
+
+    `days_to_expiry` é negativo quando o laudo venceu, e `renewal_count` é o
+    contador de histórico do legado: quantas vezes este laudo já foi renovado.
+    """
+
+    id: UUID
+    unit_id: UUID
+    unit_name: str
+    type: str
+    valid_until: date
+    days_to_expiry: int
+    renewal_count: int
+    notes: str | None = None
+    created_at: datetime
+
+
+class ComplianceReportList(BaseModel):
+    """Os laudos vigentes das unidades que quem pergunta enxerga.
+
+    `can_write` é cortesia para esconder o botão **Renovar**, não segurança: as
+    rotas de escrita recusam por conta própria.
+    """
+
+    rows: list[ComplianceReportRow]
+    can_write: bool
+
+
+class ComplianceReportCreate(BaseModel):
+    """O primeiro laudo daquele tipo na unidade.
+
+    O segundo do mesmo tipo não é cadastro: é renovação, e a rota devolve 409
+    dizendo isso. Quem garante é o índice `single_root_idx`, não esta validação.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    unit_id: UUID
+    #: "PCMSO", "PGR", "LTCAT+LTIP". O banco canonicaliza em `upper(btrim(...))`
+    #: — o tipo é metade da identidade do laudo, e `pcmso` viraria uma segunda
+    #: cadeia vigente para o que a tela mostra como um laudo só.
+    type: str = Field(min_length=1, max_length=60)
+    valid_until: date
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class ComplianceReportRenewal(BaseModel):
+    """A renovação: só a data nova e a observação.
+
+    ⛔ **Unidade e tipo não estão aqui, e a ausência é o desenho.** Renovação que
+    troca de unidade ou de tipo não é renovação — é outro laudo. O FK composto
+    `replaces_same_scope` recusaria de qualquer jeito; não aceitar os campos faz
+    a recusa acontecer antes de o pedido sair da tela.
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    valid_until: date
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class PayrollCodeRow(BaseModel):
+    """Um código do plano de contas do cliente e o que a curadoria já disse dele.
+
+    `category` nulo = código conhecido e ainda **não classificado** — o estado em
+    que a semente entrega a lista. `validated` é `validated_at is not null`, e
+    não uma coluna: duas verdades sobre o mesmo fato divergem no primeiro update
+    que atualiza uma e esquece a outra.
+
+    `in_payroll` distingue o código que a folha usa daquele que alguém curou e a
+    folha não usa mais — o segundo não entra em soma nenhuma, e por isso também
+    não conta como pendência.
+    """
+
+    code: str
+    description: str | None = None
+    nature: str | None = None
+    category: str | None = None
+    validated: bool
+    validated_at: datetime | None = None
+    in_payroll: bool
+
+
+class PayrollCodeList(BaseModel):
+    """A lista que a contabilidade confere, com o total do que falta conferir.
+
+    `pending` conta **códigos que a folha usa e ninguém classificou** — é o
+    número que diz se algum indicador financeiro está incompleto, e ele existe
+    para que "sem pendência" seja uma afirmação e não a ausência de aviso.
+    """
+
+    rows: list[PayrollCodeRow]
+    pending: int
+    can_write: bool
+
+
+class PayrollCodePatch(BaseModel):
+    """A curadoria de um código: a categoria contábil e o aval de quem conferiu.
+
+    As nove categorias são as do `check` da migration 30 — o mesmo conjunto que
+    os indicadores financeiros do escopo nomeiam. Recusar aqui é cortesia; quem
+    recusa por último é o banco.
+
+    `validated=false` existe para desfazer um aval dado por engano sem apagar a
+    linha (regra 6 estendida à curadoria). Categoria continua obrigatória: o
+    banco não aceita validar sem classificar, e classificar sem validar é
+    exatamente o estado "proposto, ainda não conferido".
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    category: Literal[
+        "base_salary",
+        "overtime",
+        "vacation",
+        "thirteenth",
+        "termination",
+        "benefit",
+        "charge",
+        "deduction",
+        "other",
+    ]
+    validated: bool = True
+
+
 class AssistantQuestion(BaseModel):
     """A pergunta que entra no assistente.
 
