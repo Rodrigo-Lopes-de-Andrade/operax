@@ -345,6 +345,40 @@ describe("a recusa do apurador é resposta, não erro do sistema", () => {
     ).toBeInTheDocument();
   });
 
+  it("competência congelada é recusa de estado, e a tarja não diz 'falta dado'", async () => {
+    const { ApiError } = await import("@/lib/api");
+    // O 409 de `POST /dp/ciclos`: reapurar competência congelada deixou de
+    // abrir um segundo rascunho ao lado do gerado e passou a ser recusa.
+    request.mockRejectedValue(
+      new ApiError(
+        409,
+        "esta competência não está mais em rascunho; correção é ciclo novo com motivo, nunca update",
+      ),
+    );
+    const user = userEvent.setup();
+    // ⛔ A LISTA NÃO CONHECE O CONGELADO, e é por isso que o botão está lá:
+    // `podeApurar` fecha o caso que a tela sabe. Este é o que ela não sabe —
+    // alguém gerou entre esta carga e o clique —, e quem responde é o backend.
+    render(<MonthlyCycle filters={SETEMBRO} history={historico()} canWrite />);
+
+    await user.click(
+      screen.getByRole("button", { name: "Apurar competência" }),
+    );
+
+    // O motivo do backend chega inteiro, e chega DENTRO da tarja de recusa:
+    // fora dela ele apareceria em vermelho de falha do sistema, que é a cena
+    // que a tarja veio resolver.
+    const tarja = await screen.findByRole("status");
+    expect(tarja).toHaveTextContent(/não está mais em rascunho/);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // ⛔ E A FRASE É A DO 409, NÃO A DO 422. Sem estas duas linhas a tarja
+    // pode dizer "falta dado" sobre uma competência que tem todo o dado —
+    // mentira na cor certa, que é pior que a verdade na cor errada.
+    expect(tarja).toHaveTextContent(/Competência já gerada/);
+    expect(tarja).not.toHaveTextContent(/falta dado/);
+  });
+
   it("falha sem mensagem continua sendo erro vermelho, e não recusa", async () => {
     const { ApiError } = await import("@/lib/api");
     request.mockRejectedValue(new ApiError(500, null));
@@ -361,6 +395,64 @@ describe("a recusa do apurador é resposta, não erro do sistema", () => {
     expect(
       screen.queryByText(/falta dado, não é falha do sistema/),
     ).not.toBeInTheDocument();
+  });
+});
+
+describe("o 409 é recusa de estado, e cada rota tem o estado dela", () => {
+  it("gerar sobre ciclo já congelado usa a MESMA frase do apurar, porque é o mesmo estado", async () => {
+    const { ApiError } = await import("@/lib/api");
+    const user = await apurar(ciclo());
+    // A mesma corrida do apurar, um botão adiante: o rascunho que está na tela
+    // virou gerado no servidor entre a apuração e o clique.
+    request.mockRejectedValue(
+      new ApiError(
+        409,
+        "este ciclo não está mais em rascunho; correção é ciclo novo com motivo, nunca update",
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Gerar ciclo" }));
+
+    const tarja = await screen.findByRole("status");
+    expect(tarja).toHaveTextContent(/não está mais em rascunho/);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+
+    // ⛔ E A FRASE É A DE ESTADO, NÃO A DE FALTA DE DADO. Uma competência
+    // congelada tem todo o dado; o que não permite é o estado.
+    expect(tarja).toHaveTextContent(/Competência já gerada/);
+    expect(tarja).not.toHaveTextContent(/falta dado/);
+  });
+
+  it("⛔ a remessa recusa pelo estado OPOSTO, e a frase dela não pode ser a do apurar", async () => {
+    const { ApiError } = await import("@/lib/api");
+    const user = await apurar(
+      ciclo({ status: "generated", can_export_remittance: true }),
+    );
+    // `DraftRemittanceError`: aqui o ciclo é rascunho DEMAIS, não gerado demais.
+    download.mockRejectedValue(
+      new ApiError(
+        409,
+        "este ciclo está em «draft» e a remessa só sai de ciclo congelado; gere o ciclo antes de exportar para o banco",
+      ),
+    );
+
+    await user.click(screen.getByRole("button", { name: "Arquivo do banco" }));
+
+    const tarja = await screen.findByRole("status");
+    expect(tarja).toHaveTextContent(/a remessa só sai de ciclo congelado/);
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    expect(tarja).toHaveTextContent(/não está congelado/);
+
+    // ⛔ AS DUAS NEGATIVAS NÃO PESAM IGUAL, e medir isso desmentiu o comentário
+    // que estava aqui. Contra as dez mutações da revisão, `/já gerada/` é
+    // REDUNDANTE com o positivo acima — nenhuma mutação exige só ela. Quem
+    // carrega peso é `/falta dado/`: é a única asserção do arquivo inteiro que
+    // mata a tarja renderizando título E copy fixa concatenada, que é o falso
+    // verde que um "melhoramento" de UI produz e um mapa global não.
+    // `/já gerada/` fica: ela é barata e prende o conserto POR SIMETRIA, que é
+    // o erro natural de quem lê as três rotas de uma vez.
+    expect(tarja).not.toHaveTextContent(/falta dado/);
+    expect(tarja).not.toHaveTextContent(/já gerada/);
   });
 });
 

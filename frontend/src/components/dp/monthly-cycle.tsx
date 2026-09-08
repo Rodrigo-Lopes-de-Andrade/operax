@@ -56,7 +56,36 @@ const STATUS_LABEL: Record<string, string> = {
  * "erro inesperado" aqui esconderia a única informação acionável que existe, e
  * quem opera não tem outro lugar para descobrir qual string não foi curada.
  */
-type Failure = { kind: "refusal" | "error"; message: string };
+type Failure =
+  | { kind: "error"; message: string }
+  | { kind: "refusal"; title: string; message: string };
+
+/**
+ * As tarjas de recusa. A frase é escolhida pelo chamador, e não pelo status: o
+ * mesmo 409 quer dizer coisas opostas em rotas diferentes — apurar e gerar
+ * recusam competência JÁ congelada; a remessa recusa ciclo AINDA em rascunho.
+ * Um mapa global por status diria uma das duas frases no lugar errado, e diria
+ * em cima do `detail` do backend, que é quem tem razão.
+ *
+ * O 422 é o único que fala de dado faltando, e ele é sempre do apurador —
+ * jornada, curadoria, tarifa. `gerar` e `exportar` mantêm o 422 listado porque
+ * um 422 deles seria recusa do mesmo jeito, mas nenhuma cena desta tela chega
+ * lá: `gerar` só responde 403/404/409, e o único 422 da remessa é a cesta, para
+ * a qual esta tela não oferece botão de banco.
+ */
+const MISSING_DATA_REFUSAL =
+  "Apuração recusada — falta dado, não é falha do sistema";
+const ALREADY_GENERATED_REFUSAL =
+  "Competência já gerada — o estado não permite, não é falha do sistema";
+//: ⛔ A FRASE DESCREVE A CONDIÇÃO, NÃO UM STATUS. O 409 de `?formato=banco`
+//: dispara para todo status fora de `_PAGAVEL = {generated, exported}`
+//: (`export.py:314`), o que inclui `cancelled` — que a migration do ciclo já
+//: autoriza (`generated -> cancelled`) e `GET /dp/ciclos` já filtra. "Ainda em
+//: rascunho" nasceria falsa nesse dia, e o `detail` embaixo, dizendo
+//: «cancelled», desmentiria a tarja: a cor certa com o fato errado, que é a
+//: classe de defeito que este conserto veio matar, um estado adiante.
+const NOT_FROZEN_REFUSAL =
+  "Ciclo não está congelado — o estado não permite, não é falha do sistema";
 
 /**
  * A competência na tela, venha ela da apuração ou do histórico.
@@ -222,7 +251,18 @@ export function MonthlyCycle({
       router.refresh();
     } catch (caught) {
       setResult(null);
-      setFailure(recusa(caught, [422], "Não consegui apurar a competência."));
+      setFailure(
+        recusa(
+          caught,
+          {
+            // 409: a competência já foi gerada. O dado está todo lá — o que
+            // não permite é o estado, e "falta dado" aqui seria falso.
+            409: ALREADY_GENERATED_REFUSAL,
+            422: MISSING_DATA_REFUSAL,
+          },
+          "Não consegui apurar a competência.",
+        ),
+      );
     } finally {
       setBusy(null);
     }
@@ -241,7 +281,19 @@ export function MonthlyCycle({
       setResult({ key: chave, cycle: congelado });
       router.refresh();
     } catch (caught) {
-      setFailure(recusa(caught, [409, 422], "Não consegui gerar o ciclo."));
+      setFailure(
+        recusa(
+          caught,
+          {
+            // O mesmo estado do 409 do apurar — "este ciclo não está mais em
+            // rascunho" —, então a mesma frase. A tela não precisa de uma
+            // segunda para o mesmo fato.
+            409: ALREADY_GENERATED_REFUSAL,
+            422: MISSING_DATA_REFUSAL,
+          },
+          "Não consegui gerar o ciclo.",
+        ),
+      );
     } finally {
       setBusy(null);
     }
@@ -259,7 +311,19 @@ export function MonthlyCycle({
       );
       salvar(blob, filename);
     } catch (caught) {
-      setFailure(recusa(caught, [409, 422], "Não consegui gerar o arquivo."));
+      setFailure(
+        recusa(
+          caught,
+          {
+            // ⛔ O ESTADO OPOSTO: aqui o ciclo é rascunho de menos, não gerado
+            // demais. Reaproveitar a frase do apurar diria o inverso do que
+            // aconteceu, e a tarja estaria certa de cor e errada de fato.
+            409: NOT_FROZEN_REFUSAL,
+            422: MISSING_DATA_REFUSAL,
+          },
+          "Não consegui gerar o arquivo.",
+        ),
+      );
     } finally {
       setBusy(null);
     }
@@ -409,7 +473,7 @@ function FailureBanner({ failure }: { failure: Failure }) {
       className="bg-alert-bg text-alert flex flex-col gap-1 rounded-[10px] px-4 py-3"
     >
       <p className="text-2xs font-bold tracking-[0.08em] uppercase">
-        Apuração recusada — falta dado, não é falha do sistema
+        {failure.title}
       </p>
       <p className="text-sm text-pretty">{failure.message}</p>
     </div>
@@ -689,14 +753,20 @@ function anos(atual: number): number[] {
 /**
  * Traduz a falha da API. Os status listados são os que o backend usa para dizer
  * "falta dado" ou "o estado não permite" — os dois são recusa, e a mensagem
- * deles é a resposta, não um detalhe técnico a esconder.
+ * deles é a resposta, não um detalhe técnico a esconder. O valor de cada um é a
+ * tarja que a recusa recebe: um status listado com a frase do outro é a cor
+ * certa com o motivo errado.
  */
-function recusa(caught: unknown, refusals: number[], padrao: string): Failure {
+function recusa(
+  caught: unknown,
+  refusals: Record<number, string>,
+  padrao: string,
+): Failure {
   if (caught instanceof ApiError && caught.detail) {
-    return {
-      kind: refusals.includes(caught.status) ? "refusal" : "error",
-      message: caught.detail,
-    };
+    const tarja = refusals[caught.status];
+    return tarja
+      ? { kind: "refusal", title: tarja, message: caught.detail }
+      : { kind: "error", message: caught.detail };
   }
 
   return { kind: "error", message: padrao };
