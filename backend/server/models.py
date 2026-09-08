@@ -1366,10 +1366,15 @@ class PayrollCodeRow(BaseModel):
     `in_payroll` distingue o código que a folha usa daquele que alguém curou e a
     folha não usa mais — o segundo não entra em soma nenhuma, e por isso também
     não conta como pendência.
+
+    `label` é `app.payroll_event_map.label` (migration 30), com a descrição da
+    folha como origem quando ninguém a editou. É **uma** coluna: o S5 chegou a
+    criar uma `description` ao lado dela dizendo a mesma coisa, e o nome que a
+    contabilidade lê para classificar não pode ter dois lugares.
     """
 
     code: str
-    description: str | None = None
+    label: str | None = None
     nature: str | None = None
     category: str | None = None
     validated: bool

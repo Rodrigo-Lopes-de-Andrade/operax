@@ -6,8 +6,18 @@ construir". Ela já existia: `app.payroll_event_map`, migration 30, aplicada em
 produção desde 28/08/2026, com a mesma chave `(tenant_id, code)` e o mesmo
 `validated_at`. Duas curadorias com a mesma chave classificando a mesma coisa
 seriam a regra escrita duas vezes — e a metade que divergisse decidiria como o
-dinheiro é somado. Decisão do dono, 07/09/2026: as colunas que faltavam
-(`description`, `nature`) foram acrescentadas à que existe.
+dinheiro é somado. Decisão do dono, 07/09/2026: a coluna que faltava (`nature`)
+foi acrescentada à que existe.
+
+⛔ E O RÓTULO DA VERBA É `label`, DA MIGRATION 30 — UMA COLUNA, NÃO DUAS
+A primeira versão do S5 acrescentou uma `description` ao lado da `label`, com a
+mesma justificativa da 30 reescrita com outras palavras. Recusar a segunda
+*tabela* e criar a segunda *coluna* dentro dela é o mesmo defeito um nível
+abaixo: dois lugares para o nome que a folha dá à verba, um preenchido pela
+semente e outro pela tela, divergindo no primeiro que for editado sozinho — e é
+esse nome que a contabilidade lê para decidir a categoria. Consertado em
+08/09/2026, antes de a migration ser aplicada em lugar nenhum. Por isso o campo
+se chama `label` daqui até a resposta HTTP: um nome, uma coluna, um conceito.
 
 ⛔ LINHA NÃO VALIDADA NÃO ENTRA EM INDICADOR FINANCEIRO
 É a metade do gate do S5, e ela mora em `read_curation` — a única função que
@@ -95,7 +105,7 @@ class PayrollCode:
     """
 
     code: str
-    description: str | None
+    label: str | None
     nature: str | None
     category: str | None
     validated_at: datetime | None
@@ -123,9 +133,21 @@ class Curation:
 # Leitura
 # ---------------------------------------------------------------------------
 # `distinct on (e.code)` com desempate estável: o mesmo código aparece em várias
-# competências, e a descrição que vale é a mais recente. É o mesmo desempate da
+# competências, e o rótulo que vale é o mais recente. É o mesmo desempate da
 # semente da migration — se um dia divergirem, a tela mostra um rótulo e a
 # curadoria guarda outro.
+#
+# `coalesce(c.label, e.description)`: a origem chama o campo de `description` e a
+# curadoria o chama de `label`. A tradução acontece aqui, uma vez.
+#
+# ⚠️ O MAPA VENCE A FOLHA, E NINGUÉM ESCOLHEU ISSO — `PayrollCodePatch` aceita
+# `category` e `validated`, e nada mais, então a `label` só é escrita pela semente
+# da migration. Quando o mapa tem rótulo, ele é uma CÓPIA congelada no dia da
+# semente e vence a folha viva para sempre, sem caminho de correção pelo produto.
+# Hoje isso é dormente: `app.payroll_event_map` está vazia em produção, a semente
+# insere zero linha, e o `coalesce` cai sempre na folha. Deixa de ser dormente no
+# dia em que alguém semear com folha importada — e aí o conserto é dar escritor à
+# `label`, não reescrever este `coalesce`.
 _LIST_SQL = """
     with entry as (
         select distinct on (e.code) e.code, e.description, e.nature
@@ -134,7 +156,7 @@ _LIST_SQL = """
         order by e.code, e.created_at desc, e.id
     ),
     curated as (
-        select m.code, m.description, m.nature, m.category, m.validated_at
+        select m.code, m.label, m.nature, m.category, m.validated_at
         from app.payroll_event_map m
         where m.tenant_id = %(tenant_id)s
     ),
@@ -144,7 +166,7 @@ _LIST_SQL = """
         select code from curated
     )
     select k.code,
-           coalesce(c.description, e.description) as description,
+           coalesce(c.label, e.description)       as label,
            coalesce(c.nature, e.nature)           as nature,
            c.category,
            c.validated_at,
@@ -171,7 +193,7 @@ _UPSERT_SQL = """
 def _row_to_code(row: dict[str, Any]) -> PayrollCode:
     return PayrollCode(
         code=row["code"],
-        description=row["description"],
+        label=row["label"],
         nature=row["nature"],
         category=row["category"],
         validated_at=row["validated_at"],

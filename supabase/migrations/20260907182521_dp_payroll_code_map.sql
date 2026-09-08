@@ -11,8 +11,26 @@
 -- escrito. Criar a segunda seria a curadoria escrita duas vezes, com a mesma
 -- chave e dois vocabulários — o defeito que esta etapa já recusou três vezes.
 --
--- Então esta migration é **aditiva**: as duas colunas que a §1i queria e que a
--- 30 não tem (`description` e `nature`), mais a semente e o que ela exige.
+-- Então esta migration é **aditiva**, e de UMA coluna: `nature`. Mais a semente
+-- e o que ela exige.
+--
+-- ⛔ A OUTRA COLUNA DA §1i TAMBÉM JÁ EXISTIA, E CRIÁ-LA ERA O MESMO DEFEITO UM
+--    NÍVEL ABAIXO. Achado em 08/09/2026, antes de aplicar em produção.
+-- A §1i pedia duas colunas novas. A segunda — o nome que a folha do cliente dá à
+-- verba — é a `label` da migration 30, palavra por palavra: "o rótulo do plano
+-- de contas do cliente, como ele o chama (…) quem confirma o mapeamento
+-- reconhece o nome, não o número". A primeira versão desta migration criou uma
+-- `description` ao lado dela, com a mesma justificativa reescrita com outras
+-- palavras — e a frase repetida é a prova de que a `label` nunca foi lida.
+-- Recusar a segunda TABELA e criar a segunda COLUNA dentro da primeira é a
+-- mesma curadoria escrita duas vezes: dois lugares para o nome da verba, um
+-- preenchido pela semente e outro pela tela, divergindo no primeiro que for
+-- editado sozinho — e o que diverge aqui é o rótulo que a contabilidade lê para
+-- decidir a categoria.
+-- Medido antes de consertar: produção tem 0 linha na tabela, `count(label) = 0`,
+-- e nenhum chamador de `label` no repositório. Então a semente grava na `label`,
+-- que é onde esse dado sempre teve casa, e o `do $$` do fim recusa alto uma
+-- `description` que volte a nascer ao lado dela.
 --
 -- ⛔ SEM `validated boolean`. A §1i propunha um; a 30 tem `validated_at`. Dois
 -- jeitos de dizer a mesma coisa divergem no primeiro `update` que atualiza um e
@@ -20,10 +38,10 @@
 -- `validated_at is not null`, e ponto.
 --
 -- ⚠️ PRIMEIRA MIGRATION DESTA ETAPA A ALTERAR TABELA JÁ APLICADA EM PRODUÇÃO
--- As duas colunas são aditivas e **anuláveis** — linha existente continua legal
--- sem precisar de valor. O `do $$` no fim confere a anulabilidade das duas, e
--- não só a existência: uma coluna `not null` aqui recusaria toda linha que a
--- contabilidade já tivesse curado.
+-- `nature` é aditiva e **anulável** — linha existente continua legal sem
+-- precisar de valor. O `do $$` no fim confere a anulabilidade dela e a da
+-- `label` que a semente passa a preencher, e não só a existência: uma coluna
+-- `not null` aqui recusaria toda linha que a contabilidade já tivesse curado.
 --
 -- ⛔ `category` PASSA A SER ANULÁVEL, E É O QUE PERMITE A SEMENTE EXISTIR
 -- A 30 a criou `not null`. A semente traz código do cliente que **ninguém
@@ -63,9 +81,19 @@
 -- ⛔ A SEMENTE NASCE VAZIA, E ISSO NÃO É DEFEITO DELA
 -- `app.payroll_entry` tem **0 linhas** (medido em 07/09/2026 no banco de dev):
 -- nenhuma folha foi importada ainda. A §1i promete que "a lista chega pronta
--- para a contabilidade conferir, não para levantar" — e ela chega pronta no dia
--- em que houver folha, com o mesmo `select`. Nenhum código de exemplo é semeado
--- para a lista não parecer vazia: seria inventar o plano de contas do cliente.
+-- para a contabilidade conferir, não para levantar" — e é `rubricas.read_curation`
+-- que a entrega pronta, pelo `union` de folha e mapa, não esta semente.
+--
+-- ⚠️ ESTA SEMENTE RODA UMA VEZ, AGORA, e nada a reexecuta quando a folha chegar.
+-- Contra origem vazia ela insere zero linha, e a consequência é concreta: a
+-- `nature` que esta migration acrescenta nasce NULL em toda linha de produção,
+-- porque o único escritor dela é este `insert`. Não é perigoso — a coluna é
+-- aditiva e anulável, e a leitura cai em `coalesce(c.nature, e.nature)`, que
+-- pega a natureza viva da folha. Mas quem esperar a `nature` preenchida no mapa
+-- vai encontrá-la vazia, e o motivo é este.
+--
+-- Nenhum código de exemplo é semeado para a lista não parecer vazia: seria
+-- inventar o plano de contas do cliente.
 --
 -- 📌 "LINHA NÃO VALIDADA NÃO ENTRA EM INDICADOR FINANCEIRO" — ONDE ISSO MORA
 -- Não aqui. A leitura literal do gate não é enunciável hoje, e isso foi medido:
@@ -80,11 +108,9 @@
 -- Idempotente. Seguro rodar repetidamente.
 -- ============================================================================
 
+-- ⛔ SÓ `nature`. O nome que a folha dá à verba é a `label` da migration 30 —
+--    ver o cabeçalho. A semente abaixo grava nela.
 alter table app.payroll_event_map
-  --: O que a folha do cliente chama a verba — "H.EXTRA 60%", "FERIAS GOZO". Vem
-  --: de `app.payroll_entry.description`, e é o que a contabilidade reconhece na
-  --: tela: quem confirma o mapeamento reconhece o nome, não o número.
-  add column if not exists description text,
   --: `earning | deduction | base | payroll_charge | informational` — o "P / D / I"
   --: do legado, espelhado de `app.payroll_entry.nature`. NÃO é a classificação
   --: contábil: essa é a `category`, e é ela que a reunião preenche.
@@ -110,9 +136,16 @@ alter table app.payroll_event_map
   add constraint payroll_event_map_validated_has_category
   check (validated_at is null or category is not null);
 
-comment on column app.payroll_event_map.description is
-  'A rubrica como a folha do cliente a escreve, semeada de app.payroll_entry.description. '
-  'É o que a contabilidade reconhece na tela — quem confirma reconhece o nome, não o número.';
+-- A `label` é da migration 30 e o conceito não mudou: o rótulo do plano de
+-- contas do cliente, para quem confirma reconhecer o nome e não o número. O que
+-- mudou é a procedência — ela deixa de nascer só da tela e passa a ser semeada
+-- de `app.payroll_entry.description`. Sem esta linha, a segunda procedência
+-- ficaria só no corpo da semente, e é dela que nasceu a coluna duplicada.
+comment on column app.payroll_event_map.label is
+  'O rótulo do plano de contas do cliente, como ele o chama — semeado de '
+  'app.payroll_entry.description. SEM ESCRITOR NA API hoje: PayrollCodePatch aceita '
+  'category e validated, e nada mais. Quem confirma o mapeamento reconhece o nome, '
+  'não o número. NÃO criar uma segunda coluna para isto.';
 comment on column app.payroll_event_map.nature is
   'Espelha app.payroll_entry.nature (o P/D/I do legado). Não é a classificação contábil: '
   'essa é category, e linha sem validated_at não entra em indicador nenhum.';
@@ -130,7 +163,7 @@ comment on column app.payroll_event_map.category is
 do $$
 declare
   v_semente constant text := $seed$
-    insert into app.payroll_event_map (tenant_id, code, description, nature)
+    insert into app.payroll_event_map (tenant_id, code, label, nature)
     select distinct on (e.tenant_id, e.code)
            e.tenant_id, e.code, e.description, e.nature
       from app.payroll_entry e
@@ -185,18 +218,18 @@ begin
 
   -- ⛔ `is distinct from` NAS COMPARAÇÕES, E `into strict` NA LEITURA — as duas,
   --    porque elas pegam coisas diferentes e isso foi MEDIDO em 08/09/2026:
-  --      · a semente sem `description` (ou sem `nature`) grava a linha com a
-  --        COLUNA nula. `strict` acha a linha e não reclama; `NULL <> 'H.EXTRA
-  --        60%'` é NULL, que não é `true`, e o `if` não dispara. As duas mutações
+  --      · a semente sem `label` (ou sem `nature`) grava a linha com a COLUNA
+  --        nula. `strict` acha a linha e não reclama; `NULL <> 'H.EXTRA 60%'` é
+  --        NULL, que não é `true`, e o `if` não dispara. As duas mutações
   --        fechavam VERDES com `<>` — só `is distinct from` as mata.
   --      · uma semente que não gravasse NADA deixaria o record inteiro NULL. Aí
   --        as duas formas pegam; `strict` pega mais cedo e nomeia a causa.
   select * into strict v_linha from app.payroll_event_map
    where tenant_id = v_tenant and code = '0050';
-  if v_linha.description is distinct from 'H.EXTRA 60%' then
+  if v_linha.label is distinct from 'H.EXTRA 60%' then
     raise exception
-      'a semente escolheu a descrição "%" — o desempate tem de ser a linha mais recente, e estável',
-      v_linha.description;
+      'a semente escolheu o rótulo "%" — o desempate tem de ser a linha mais recente, e estável',
+      v_linha.label;
   end if;
   if v_linha.nature is distinct from 'earning' then
     raise exception 'a semente não trouxe a natureza da origem (veio "%")', v_linha.nature;
@@ -259,9 +292,9 @@ begin
   end if;
   select * into strict v_linha from app.payroll_event_map
    where tenant_id = v_tenant_b and code = '0050';
-  if v_linha.description is distinct from 'HORA EXTRA DO B' then
+  if v_linha.label is distinct from 'HORA EXTRA DO B' then
     raise exception
-      'a linha do segundo tenant veio com a descrição "%" — a semente atravessou tenant', v_linha.description;
+      'a linha do segundo tenant veio com o rótulo "%" — a semente atravessou tenant', v_linha.label;
   end if;
   if v_linha.category is not null then
     raise exception
@@ -291,19 +324,21 @@ begin
     raise exception 'app.payroll_event_map não existe — a migration 30 não rodou antes desta';
   end if;
 
-  -- 1. As duas colunas novas existem E são anuláveis. `not null` em qualquer
-  --    uma recusaria toda linha que a contabilidade já tivesse curado em
+  -- 1. As duas colunas que a semente escreve existem E são anuláveis: a `nature`
+  --    que esta migration traz e a `label` que a 30 já tinha. `not null` em
+  --    qualquer uma recusaria toda linha que a contabilidade já tivesse curado em
   --    produção — e esta é a primeira migration da etapa a mexer em tabela com
   --    dado vivo.
   select count(*) into v_nullable from information_schema.columns
    where table_schema = 'app' and table_name = 'payroll_event_map'
-     and column_name in ('description','nature');
+     and column_name in ('label','nature');
   if v_nullable <> 2 then
-    raise exception 'app.payroll_event_map não ganhou description e nature (achei % de 2)', v_nullable;
+    raise exception
+      'app.payroll_event_map não tem label (migration 30) e nature (esta) — achei % de 2', v_nullable;
   end if;
   select count(*) into v_nullable from information_schema.columns
    where table_schema = 'app' and table_name = 'payroll_event_map'
-     and column_name in ('description','nature','category') and is_nullable = 'NO';
+     and column_name in ('label','nature','category') and is_nullable = 'NO';
   if v_nullable <> 0 then
     raise exception
       '% coluna(s) de payroll_event_map são not null — o desenho é aditivo, e category precisa representar "ainda não classificado"',
@@ -317,6 +352,19 @@ begin
      where table_schema = 'app' and table_name = 'payroll_event_map' and column_name = 'validated'
   ) then
     raise exception 'apareceu uma coluna `validated` ao lado de `validated_at` — a verdade tem de ter um lugar só';
+  end if;
+
+  -- 2b. ⛔ E SEM `description` AO LADO DE `label`. Esta migration nasceu com uma,
+  --     e ela dizia o que a `label` da 30 já dizia — a mesma frase, com outras
+  --     palavras. É a irmã da guarda de `app.payroll_code_map` no item 4: lá a
+  --     curadoria duplicada seria uma tabela, aqui é uma coluna, e as duas fazem
+  --     o rótulo da verba ter dois lugares que divergem no primeiro update.
+  if exists (
+    select 1 from information_schema.columns
+     where table_schema = 'app' and table_name = 'payroll_event_map' and column_name = 'description'
+  ) then
+    raise exception
+      'apareceu uma coluna `description` ao lado de `label` — o nome que a folha dá à verba tem UM lugar, e ele é app.payroll_event_map.label';
   end if;
 
   -- 3. ⛔ O VOCABULÁRIO DE `nature`, COMPARADO CONJUNTO A CONJUNTO COM A ORIGEM.
@@ -390,7 +438,7 @@ begin
   end if;
 
   --: não classificada e não validada: o estado em que a semente entrega
-  insert into app.payroll_event_map (tenant_id, code, description, nature)
+  insert into app.payroll_event_map (tenant_id, code, label, nature)
        values (v_tenant, '9998', 'H.EXTRA 60%', 'earning');
   --: classificada e validada: o estado em que a contabilidade a deixa
   insert into app.payroll_event_map (tenant_id, code, category, validated_at)
@@ -399,6 +447,7 @@ begin
   delete from app.tenant where id = v_tenant;
 
   raise notice
-    'OK: app.payroll_event_map ganhou description e nature anuláveis, category representa "não classificado", '
-    'validar exige classificar, e nenhuma tabela nem policy nova nasceu.';
+    'OK: app.payroll_event_map ganhou nature anulável, a label da 30 é onde o rótulo mora (e não há '
+    'description ao lado dela), category representa "não classificado", validar exige classificar, '
+    'e nenhuma tabela nem policy nova nasceu.';
 end $$;

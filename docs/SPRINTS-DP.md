@@ -1535,7 +1535,7 @@ que faltava:
 | view devolve zero linhas | 🔴 `query returned no rows` | ✅ **verde** |
 | view sem o `not exists` | 🔴 `more than one row` | 🔴 |
 | **cadeia com a vigente vindo 1ª** | 🔴 `more than one row` | ✅ **verde** |
-| semente sem `description` | 🔴 `veio "<NULL>"` | ✅ **verde** |
+| semente sem `label` | 🔴 `veio "<NULL>"` | ✅ **verde** |
 | semente sem `nature` | 🔴 `veio "<NULL>"` | ✅ **verde** |
 
 Sem a terceira linha, *"cada forma mata o que a outra não mata"* seria afirmação

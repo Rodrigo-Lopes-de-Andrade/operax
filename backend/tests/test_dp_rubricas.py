@@ -110,7 +110,7 @@ class FakeDB:
         category: str | None,
         *,
         validated: bool = False,
-        description: str | None = None,
+        label: str | None = None,
         nature: str | None = None,
         tenant_id: UUID = TENANT_ID,
     ) -> None:
@@ -118,7 +118,7 @@ class FakeDB:
             {
                 "tenant_id": tenant_id,
                 "code": code,
-                "description": description,
+                "label": label,
                 "nature": nature,
                 "category": category,
                 "validated_by": USER_ID if validated else None,
@@ -158,7 +158,7 @@ class FakeDB:
             curadas = [linha for linha in curadas if linha["tenant_id"] == params["tenant_id"]]
 
         if "distinct on (e.code)" in sql:
-            # A descrição que vale é a mais recente, com desempate estável.
+            # O rótulo que vale é o mais recente, com desempate estável.
             escolhidas: dict[str, dict[str, Any]] = {}
             for linha in sorted(entradas, key=lambda x: (x["created_at"], x["id"])):
                 escolhidas[linha["code"]] = linha
@@ -182,7 +182,7 @@ class FakeDB:
     ) -> dict[str, Any]:
         return {
             "code": code,
-            "description": (curada or {}).get("description") or (entrada or {}).get("description"),
+            "label": (curada or {}).get("label") or (entrada or {}).get("description"),
             "nature": (curada or {}).get("nature") or (entrada or {}).get("nature"),
             "category": (curada or {}).get("category"),
             "validated_at": (curada or {}).get("validated_at"),
@@ -200,7 +200,7 @@ class FakeDB:
             {
                 "tenant_id": params["tenant_id"],
                 "code": params["code"],
-                "description": None,
+                "label": None,
                 "nature": None,
                 "category": params["category"],
                 "validated_by": params["validated_by"],
@@ -263,7 +263,7 @@ def test_o_mesmo_codigo_com_duas_descricoes_da_uma_linha_a_mais_recente(
     linhas = client.get("/dp/rubricas", headers=cabecalho(issue_token)).json()["rows"]
 
     assert len(linhas) == 1
-    assert linhas[0]["description"] == "H.EXTRA 60%"
+    assert linhas[0]["label"] == "H.EXTRA 60%"
 
 
 def test_a_lista_nao_atravessa_tenant_por_nenhuma_das_duas_fontes(
@@ -349,8 +349,8 @@ def test_curar_classifica_e_registra_quem_conferiu(
     assert corpo["category"] == "overtime"
     assert corpo["validated"] is True
     assert corpo["validated_at"] is not None
-    # A descrição continua vindo da folha: a curadoria não a reescreve.
-    assert corpo["description"] == "H.EXTRA 60%"
+    # O rótulo continua vindo da folha: a curadoria não o reescreve.
+    assert corpo["label"] == "H.EXTRA 60%"
     gravado = fake_db.mapa[0]
     assert gravado["validated_by"] == USER_ID
 

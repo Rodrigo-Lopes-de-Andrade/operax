@@ -1924,11 +1924,10 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `tenant_id` 🔑 | uuid | não |  | `app.tenant` |  |
 | `code` 🔑 | text | não |  |  |  |
 | `category` | text | sim |  |  | Nulo = código conhecido e AINDA NÃO classificado — o estado em que a semente entrega a lista. Validar exige classificar (payroll_event_map_validated_has_category). |
-| `label` | text | sim |  |  |  |
+| `label` | text | sim |  |  | O rótulo do plano de contas do cliente, como ele o chama — semeado de app.payroll_entry.description. SEM ESCRITOR NA API hoje: PayrollCodePatch aceita category e validated, e nada mais. Quem confirma o mapeamento reconhece o nome, não o número. NÃO criar uma segunda coluna para isto. |
 | `validated_by` | uuid | sim |  | `auth.users` |  |
 | `validated_at` | timestamp with time zone | sim |  |  |  |
 | `notes` | text | sim |  |  |  |
-| `description` | text | sim |  |  | A rubrica como a folha do cliente a escreve, semeada de app.payroll_entry.description. É o que a contabilidade reconhece na tela — quem confirma reconhece o nome, não o número. |
 | `nature` | text | sim |  |  | Espelha app.payroll_entry.nature (o P/D/I do legado). Não é a classificação contábil: essa é category, e linha sem validated_at não entra em indicador nenhum. |
 
 **Restrições**

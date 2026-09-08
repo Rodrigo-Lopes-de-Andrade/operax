@@ -114,7 +114,7 @@ class FakeDB:
         *,
         category: str | None,
         validated: bool,
-        description: str | None = None,
+        label: str | None = None,
         nature: str | None = None,
     ) -> None:
         """Uma linha de `app.payroll_event_map`, no estado em que ela de fato existe.
@@ -130,7 +130,7 @@ class FakeDB:
         self.curadoria.append(
             {
                 "code": code,
-                "description": description,
+                "label": label,
                 "nature": nature,
                 "category": category,
                 "validated_at": datetime(2026, 9, 1, 12, 0) if validated else None,
@@ -225,7 +225,7 @@ class FakeDB:
             linhas.append(
                 {
                     "code": code,
-                    "description": curado.get("description") or entrada.get("description"),
+                    "label": curado.get("label") or entrada.get("description"),
                     "nature": curado.get("nature") or entrada.get("nature"),
                     "category": curado.get("category"),
                     "validated_at": curado.get("validated_at"),

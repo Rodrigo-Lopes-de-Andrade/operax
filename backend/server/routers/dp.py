@@ -839,7 +839,7 @@ async def renovar_laudo(
 def _rubrica(linha: rubricas.PayrollCode) -> PayrollCodeRow:
     return PayrollCodeRow(
         code=linha.code,
-        description=linha.description,
+        label=linha.label,
         nature=linha.nature,
         category=linha.category,
         validated=linha.validated,

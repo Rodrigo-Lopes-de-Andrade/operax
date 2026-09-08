@@ -458,8 +458,9 @@ camadas.
 
 ### 1i. `dp_payroll_code_map` — a curadoria que o P3 ia construir
 
-⚠️ **Esta seção foi reescrita em 07/09/2026. O que ela pedia já existia com outro
-nome, e a semente que ela propunha aborta na primeira folha real.**
+⚠️ **Esta seção foi reescrita em 07/09/2026 e corrigida em 08/09/2026. O que ela
+pedia já existia com outro nome — as DUAS colunas, não só a tabela —, e a semente
+que ela propunha aborta na primeira folha real.**
 
 ⛔ **`app.payroll_code_map` NÃO foi criada, por decisão do dono.** A curadoria de
 rubrica nasceu na **migration 30**, em 28/08/2026, como `app.payroll_event_map` —
@@ -468,10 +469,22 @@ mesma chave `(tenant_id, code)`, mesma `category`, mesmo `validated_by`/
 curadoria escrita duas vezes, com dois vocabulários. O `ANEXO` §4.5 ("falta só a
 tabela de mapeamento") ficou velho no dia seguinte ao que foi escrito.
 
-**O que o S5 fez, então, é aditivo:** as duas colunas que a proposta queria e que
-a 30 não tinha — `description` (o nome que a folha do cliente dá à verba, e que a
-contabilidade reconhece na tela) e `nature` (o P/D/I do legado, espelhado de
-`app.payroll_entry.nature`), ambas anuláveis.
+**O que o S5 fez, então, é aditivo e de uma coluna só:** `nature` — o P/D/I do
+legado, espelhado de `app.payroll_entry.nature` —, anulável.
+
+⛔ **A outra coluna da proposta também já existia, e criá-la era o mesmo defeito
+um nível abaixo.** O nome que a folha do cliente dá à verba é a `label` da
+migration 30: *"o rótulo do plano de contas do cliente, como ele o chama (…) quem
+confirma o mapeamento reconhece o nome, não o número"*. O S5 criou uma
+`description` ao lado dela com essa mesma justificativa reescrita com outras
+palavras. Recusar a segunda **tabela** e criar a segunda **coluna** dentro dela
+deixa o rótulo da verba com dois lugares — um preenchido pela semente, outro pela
+tela — que divergem no primeiro que for editado sozinho, e é esse rótulo que a
+contabilidade lê para decidir a categoria. Achado em 08/09/2026, antes de a
+migration ser aplicada em lugar nenhum; produção tem 0 linha na tabela e
+`count(label) = 0`, e ninguém no repositório lia a `label`. A semente grava **na
+`label`**, e o `do $$` da migration recusa alto uma `description` que volte a
+nascer — a irmã da guarda que já recusa `app.payroll_code_map`.
 
 **Três coisas da proposta original não sobreviveram à medição:**
 
