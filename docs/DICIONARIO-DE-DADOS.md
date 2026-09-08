@@ -1923,14 +1923,18 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 |---|---|---|---|---|---|
 | `tenant_id` 🔑 | uuid | não |  | `app.tenant` |  |
 | `code` 🔑 | text | não |  |  |  |
-| `category` | text | não |  |  |  |
+| `category` | text | sim |  |  | Nulo = código conhecido e AINDA NÃO classificado — o estado em que a semente entrega a lista. Validar exige classificar (payroll_event_map_validated_has_category). |
 | `label` | text | sim |  |  |  |
 | `validated_by` | uuid | sim |  | `auth.users` |  |
 | `validated_at` | timestamp with time zone | sim |  |  |  |
 | `notes` | text | sim |  |  |  |
+| `description` | text | sim |  |  | A rubrica como a folha do cliente a escreve, semeada de app.payroll_entry.description. É o que a contabilidade reconhece na tela — quem confirma reconhece o nome, não o número. |
+| `nature` | text | sim |  |  | Espelha app.payroll_entry.nature (o P/D/I do legado). Não é a classificação contábil: essa é category, e linha sem validated_at não entra em indicador nenhum. |
 
 **Restrições**
 
+- `CHECK (((nature IS NULL) OR (nature = ANY (ARRAY['earning'::text, 'deduction'::text, 'base'::text, 'payroll_charge'::text, 'informational'::text]))))`
+- `CHECK (((validated_at IS NULL) OR (category IS NOT NULL)))`
 - `CHECK ((category = ANY (ARRAY['base_salary'::text, 'overtime'::text, 'vacation'::text, 'thirteenth'::text, 'termination'::text, 'benefit'::text, 'charge'::text, 'deduction'::text, 'other'::text])))`
 
 **Policies**
@@ -2220,6 +2224,46 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 - `unit_company_id_fkidx` — `app.unit USING btree (company_id)`
 - `unit_tenant_empresa_idx` — `app.unit USING btree (tenant_id, company_id) WHERE active`
 - `UNIQUE unit_tenant_id_code_key` — `app.unit USING btree (tenant_id, code)`
+
+</details>
+
+
+## `app.unit_compliance_report`
+
+> Laudos por unidade (PCMSO, PGR, LTCAT+LTIP). Renovar é INSERIR apontando replaces_id para a vigente — nunca update na linha vigente, nunca delete. Vigente = a linha que ninguém substituiu; a garantia é o trio de constraints single_root + single_successor + replaces_same_scope. Situação é derivada de valid_until, jamais coluna.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `unit_id` | uuid | não |  | `app.unit` |  |
+| `type` | text | não |  |  | Tipo do laudo, canonicalizado em upper(btrim(...)). Metade da identidade do laudo: PCMSO e pcmso seriam duas cadeias vigentes para o que a tela mostra como uma. |
+| `valid_until` | date | não |  |  | Único insumo da situação. EM DIA / A VENCER / VENCIDO se derivam daqui, na leitura. |
+| `notes` | text | sim |  |  |  |
+| `replaces_id` | uuid | sim |  |  | A linha que esta renovação substitui. Preso ao mesmo (tenant, unidade, tipo) por FK composto. |
+| `created_by` | uuid | sim |  | `auth.users` |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Restrições**
+
+- `CHECK ((btrim(type) <> ''::text))`
+- `CHECK ((type = upper(btrim(type))))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `unit_compliance_report_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+| `unit_compliance_report_read` | SELECT | `util.can_see_unit(unit_id)` | `-` |
+
+<details><summary>Índices</summary>
+
+- `unit_compliance_report_unit_idx` — `app.unit_compliance_report USING btree (tenant_id, unit_id)`
+- `UNIQUE unit_compliance_report_scope_key` — `app.unit_compliance_report USING btree (id, tenant_id, unit_id, type)`
+- `UNIQUE unit_compliance_report_single_root_idx` — `app.unit_compliance_report USING btree (tenant_id, unit_id, type) WHERE (replaces_id IS NULL)`
+- `UNIQUE unit_compliance_report_single_successor_idx` — `app.unit_compliance_report USING btree (replaces_id) WHERE (replaces_id IS NOT NULL)`
 
 </details>
 
@@ -3366,6 +3410,24 @@ que consulta continua valendo. `anon` não lê nada — o painel autentica antes
 | `name` | text |
 | `timezone` | text |
 | `active` | boolean |
+
+
+## `public.vw_unit_compliance`  ✅ `security_invoker`
+
+> Laudos VIGENTES por unidade (Caminho 1). Sem coluna de situação: days_to_expiry é o insumo e a janela mora na UI — janela em constante no SQL mentiria com cara de configuração.
+
+| Coluna | Tipo |
+|---|---|
+| `report_id` | uuid |
+| `tenant_id` | uuid |
+| `unit_id` | uuid |
+| `unit_name` | text |
+| `type` | text |
+| `valid_until` | date |
+| `days_to_expiry` | integer |
+| `renewal_count` | integer |
+| `notes` | text |
+| `created_at` | timestamp with time zone |
 
 
 ## RPCs

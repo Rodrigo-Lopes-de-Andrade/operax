@@ -1172,6 +1172,119 @@ do $$ begin
 end $$;
 
 -- ---------------------------------------------------------------------------
+\echo '--- Laudo de unidade (S5) — a primeira tabela do DP que chega ao navegador'
+-- ---------------------------------------------------------------------------
+-- ⛔ POR QUE ESTA SEÇÃO É DIFERENTE DAS OUTRAS DESTE ARQUIVO
+-- `app.unit_compliance_report` é a primeira tabela da etapa DP com `grant
+-- select` para `authenticated`, porque `public.vw_unit_compliance` é
+-- `security_invoker` e uma view invoker sobre tabela sem grant devolve
+-- `permission denied for table`, não linha filtrada. Consequência: a policy
+-- `unit_compliance_report_read` deixou de ser defesa em profundidade e passou a
+-- ser A fronteira — é ela, e mais nada, que decide o que a tela mostra.
+--
+-- ⛔ E POR QUE A FORMA "SUPERVISOR VÊ 1 E NÃO VÊ 0" NÃO BASTA SOZINHA
+-- "supervisor não vê o laudo de A Norte = 0" fica verde de três jeitos errados:
+--   (a) não existe laudo em A Norte para ver;
+--   (b) a policy recusa todo mundo, e ninguém vê nada;
+--   (c) a view filtra por vigência e o zero veio dali, não da policy.
+-- É o mesmo falso verde que deixou `mode = 'producao'` entrar em
+-- `deviation_read` — um supervisor que não vê NADA passa em todo teste que só
+-- verifica o que ele não deve ver.
+-- Então cada zero aqui tem uma TESTEMUNHA ao lado: o DP do mesmo tenant lê os
+-- laudos de A Norte (2), o que prova que existe linha lá para vazar; e as
+-- contagens de A Centro são DIFERENTES na view (1, vigente) e na tabela (2, a
+-- cadeia inteira), o que separa o recorte da policy do filtro de vigência.
+
+reset role;
+-- A Centro: um laudo e a renovação dele — 2 linhas na tabela, 1 vigente na view.
+insert into app.unit_compliance_report (id, tenant_id, unit_id, type, valid_until) values
+  ('cc000000-0000-0000-0000-0000000000c1', 'aaaaaaaa-0000-0000-0000-000000000001',
+   'a0000000-0000-0000-0000-0000000000a1', 'PCMSO', date '2027-01-31');
+insert into app.unit_compliance_report (tenant_id, unit_id, type, valid_until, replaces_id) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000000a1',
+   'PCMSO', date '2028-01-31', 'cc000000-0000-0000-0000-0000000000c1');
+-- A Norte: DOIS laudos vigentes, de tipos diferentes. São a testemunha dos zeros
+-- do supervisor: contagem 2 num lugar e 0 no outro não se confunde com tabela
+-- vazia nem com policy que recusa todo mundo.
+insert into app.unit_compliance_report (tenant_id, unit_id, type, valid_until) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000000a2', 'PCMSO', date '2027-03-31'),
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000000a2', 'PGR',   date '2027-04-30');
+-- Tenant B, para o eixo que este arquivo existe para guardar.
+insert into app.unit_compliance_report (tenant_id, unit_id, type, valid_until) values
+  ('bbbbbbbb-0000-0000-0000-000000000002', 'b0000000-0000-0000-0000-0000000000a1', 'PCMSO', date '2027-05-31');
+
+set local role authenticated;
+
+-- --- o supervisor de A Centro: o positivo primeiro, depois os zeros ---------
+set local request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+
+do $$ begin
+  -- O POSITIVO. Sem ele os três zeros abaixo não valem nada.
+  perform pg_temp.assert_eq('supervisor VÊ o laudo vigente da unidade dele (view)',
+    (select count(*) from public.vw_unit_compliance where unit_name = 'A Centro'), 1);
+  perform pg_temp.assert_eq('supervisor NÃO vê o laudo de A Norte (view)',
+    (select count(*) from public.vw_unit_compliance where unit_name = 'A Norte'), 0);
+  perform pg_temp.assert_eq('supervisor não vê laudo de OUTRO TENANT (view)',
+    (select count(*) from public.vw_unit_compliance where unit_name = 'B Sul'), 0);
+  perform pg_temp.assert_eq('e a view inteira, para ele, é só o laudo dele',
+    (select count(*) from public.vw_unit_compliance), 1);
+
+  -- A MESMA pergunta na TABELA, que é onde a policy mora. A view poderia perder
+  -- o `security_invoker` amanhã e passar a rodar como dona: a asserção de view
+  -- pegaria isso, e esta pega o contrário — uma policy afrouxada por baixo de
+  -- uma view que continua correta.
+  -- ⚠️ 2, e não 1: na tabela ele alcança a CADEIA de A Centro (original +
+  -- renovação). O número ser diferente do da view é de propósito — é o que
+  -- prova que o 1 de lá veio do filtro de vigência e o recorte veio daqui.
+  perform pg_temp.assert_eq('supervisor ALCANÇA a tabela e lê a cadeia de A Centro',
+    (select count(*) from app.unit_compliance_report
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a1'), 2);
+  perform pg_temp.assert_eq('supervisor NÃO lê laudo de A Norte na tabela',
+    (select count(*) from app.unit_compliance_report
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a2'), 0);
+  perform pg_temp.assert_eq('supervisor NÃO lê laudo do tenant B na tabela',
+    (select count(*) from app.unit_compliance_report
+      where tenant_id = 'bbbbbbbb-0000-0000-0000-000000000002'), 0);
+
+  -- A escrita continua no Caminho 2: o navegador lê e só. Conceder `select` para
+  -- a view funcionar não pode ter trazido verbo junto.
+  perform pg_temp.assert_eq('authenticated LÊ a tabela (é o que faz a view invoker funcionar)',
+    has_table_privilege('authenticated', 'app.unit_compliance_report', 'SELECT')::int::bigint, 1);
+  perform pg_temp.assert_eq('e NÃO insere',
+    has_table_privilege('authenticated', 'app.unit_compliance_report', 'INSERT')::int::bigint, 0);
+  perform pg_temp.assert_eq('e NÃO atualiza',
+    has_table_privilege('authenticated', 'app.unit_compliance_report', 'UPDATE')::int::bigint, 0);
+  perform pg_temp.assert_eq('e NÃO apaga (laudo não se apaga, renova-se — regra 6)',
+    has_table_privilege('authenticated', 'app.unit_compliance_report', 'DELETE')::int::bigint, 0);
+end $$;
+
+-- --- a TESTEMUNHA: o DP do mesmo tenant lê o que o supervisor não lê ---------
+-- Sem este bloco, todo zero acima é compatível com "não há laudo em A Norte" e
+-- com "a policy recusa todo mundo".
+set local request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+
+do $$ begin
+  perform pg_temp.assert_eq('o DP VÊ os dois laudos de A Norte — os zeros do supervisor são recorte, não vazio',
+    (select count(*) from public.vw_unit_compliance where unit_name = 'A Norte'), 2);
+  perform pg_temp.assert_eq('e também o de A Centro',
+    (select count(*) from public.vw_unit_compliance where unit_name = 'A Centro'), 1);
+  perform pg_temp.assert_eq('o DP vê o tenant A inteiro, e só ele',
+    (select count(*) from public.vw_unit_compliance), 3);
+  perform pg_temp.assert_eq('o DP NÃO vê o laudo do tenant B',
+    (select count(*) from public.vw_unit_compliance where unit_name = 'B Sul'), 0);
+end $$;
+
+-- --- e o outro tenant enxerga o dele, que é o par positivo do eixo de tenant --
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+
+do $$ begin
+  perform pg_temp.assert_eq('o owner do tenant B VÊ o laudo dele',
+    (select count(*) from public.vw_unit_compliance where unit_name = 'B Sul'), 1);
+  perform pg_temp.assert_eq('e nenhum do tenant A',
+    (select count(*) from public.vw_unit_compliance where unit_name like 'A %'), 0);
+end $$;
+
+-- ---------------------------------------------------------------------------
 \echo '--- Usuário autenticado sem vínculo com nenhum tenant'
 -- ---------------------------------------------------------------------------
 set local request.jwt.claim.sub = '99999999-9999-9999-9999-999999999999';

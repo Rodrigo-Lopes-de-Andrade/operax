@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito public.fn_dp_panel public.vw_unit_compliance app.unit_compliance_report app.work_schedule_day app.messaging_identity -->
+<!-- verificar-docs: inexistentes-de-proposito public.fn_dp_panel app.work_schedule_day app.messaging_identity -->
 <!-- `app.work_schedule_day` continua aqui porque o Quadro REPORTA que ela não
      existe — e agora a SPEC diz o mesmo, então a contradição entre os dois
      documentos acabou. `app.schedule_rotation_map` SAIU desta lista: ela existe
@@ -215,7 +215,7 @@ andaime que a orquestração exige e que o documento não tinha.
 | S2 — Domínio `banking` | ✅ **aprovada** (05/09) | `dp_banking_domain`, `dp_banking_account` | guardião ✅ · revisor ✅ | 1 |
 | S3 — Ciclo mensal | ✅ **aprovada** (06/09) — **backend e banco; frontend não despachado; reconciliação com o legado ABERTA** | `dp_benefit_cycle`, `dp_leave_category`, `dp_absence_map` | guardião ✅ · revisor ✅ | 2 |
 | S4 — Painel e alertas | ✅ **aprovada** (07/09) — **backend e banco; frontend não despachado; reconciliação dos 9 KPIs ABERTA** | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | guardião ✅ · revisor ✅ | 2 |
-| S5 — Laudos e rubricas | pendente | `dp_unit_compliance`, `dp_payroll_code_map` | — | 0 |
+| S5 — Laudos e rubricas | ✅ **aprovada** (08/09) — **backend e banco; frontend não despachado** | `dp_unit_compliance`, `dp_payroll_code_map` | guardião ✅ · revisor ✅ | 2 |
 
 Onze slots, um arquivo por slot. ⛔ `dp_banking_domain` e `dp_banking_account`
 são **arquivos separados**: o Postgres proíbe usar o valor novo do enum na mesma
@@ -1382,7 +1382,237 @@ mérito**. E o limite que a varredura **não** alcança ficou declarado no arqui
   tenant. Um `ilike 'cnh%'` poria regra de negócio numa string e erraria
   **calado** no tenant que chamasse o tipo de "Carteira de Habilitação".
 - ⏳ **Retenção** segue transcrita do legado e não consertada — canetada do dono.
-- A metade de frontend do S4 não foi despachada, como em S1 e S3.
+- A metade de frontend do S4 foi despachada depois, junto com as de S1 e S3,
+  e revisada em bloco — ver a seção seguinte.
+
+## O frontend do DP — a primeira revisão que um frontend desta etapa recebeu
+
+S1, S3 e S4 nasceram só com a metade de backend. As telas das três foram escritas
+depois e revisadas de uma vez. **Ciclo 1: REPROVADO**, seis achados — 2 ALTO,
+3 MÉDIO, 1 BAIXO.
+
+### 🔴 Os dois ALTO são a mesma história: a tela ignora o que o backend construiu para ela
+
+Os dois caem em cima do commit `831cb52`, cuja mensagem é literalmente *"a remessa
+passa a ser alcançável, e o ciclo congelado deixa de sumir no F5"*. O frontend
+escrito em cima dele não chamava nem uma coisa nem outra.
+
+**ALTO 1 — a parede reerguida uma porta adiante.** `dashboard/dp/ciclos/page.tsx`
+exigia papel administrativo (`isAdmin`). Mas quem confere a remessa é
+`accounting`, que tem `compensation` e **não** é admin; e `hr` é admin e **não**
+tem `compensation`. A lista de papéis errava nos dois sentidos. O backend tinha
+tirado a exigência de admin de `GET /dp/ciclos` de propósito, e escreveu o motivo
+na própria docstring: *"exigir admin aqui devolveria a mesma parede uma porta
+adiante"*. A tela devolveu.
+
+⚠️ **E o seed de dev não tem `accounting` nem `hr`** — teste manual nenhum
+encontraria isso. Ou o teste automatizado prova o par, ou nada prova.
+
+**ALTO 2 — o caminho que duplicava a competência.** `GET /dp/ciclos` não era
+consumida em lugar nenhum: o ciclo vivia só em `useState`. Depois de um F5 a tela
+dizia "Nada apurado" para um mês já gerado, e a única ação oferecida era apurar —
+que **insere uma segunda linha**, porque `save_draft` procura rascunho *aberto*,
+acha só o `generated`, e o `unique` da competência inclui o `status`. O operador
+passava a ver "Rascunho" e a frase "o arquivo do banco exige o ciclo gerado" para
+uma competência que já estava gerada, **e a remessa que ele congelou ficava
+inalcançável**.
+
+### O terceiro achado é um comentário que se tornou falso e levou o tipo junto
+
+`queries.ts` carregava quinze linhas explicando que `can_export_remittance`
+*"ainda não é enviado pelo backend"*. Ele estava no contrato desde o mesmo commit,
+obrigatório e não-nulo, nos dois schemas. Por causa da crença, o campo tinha sido
+declarado opcional — e um campo opcional contra um contrato obrigatório transforma
+uma renomeação no backend em `undefined` silencioso: o botão de remessa sumiria
+para sempre, **sem um erro de tipo em lugar nenhum**.
+
+📌 A regra que sobreviveu à correção não é a do tipo, é a da leitura: **ausência
+vale "não pode", nunca "pode"** — e ela continua exercida por teste que apaga a
+chave em runtime, porque o que chega é JSON, não tipo.
+
+### O que o revisor mediu e NÃO achou defeito
+
+Vale tanto quanto o que ele achou. Ele foi ao ambiente vivo conferir o Caminho 1:
+
+- `fn_dp_alerts` como `anon` → **401**; autenticada → só `(code, total)`, 8 linhas,
+  zero PII.
+- **Como supervisor → 4/5/3, contra 26/25/18 do DP.** O recorte está na função; o
+  cliente não envia nada. É a prova de que a RLS responde, não a tela.
+- O botão de remessa é **ausência do DOM**, não `disabled`.
+- 11 mutações, 11 mortas, nenhum falso verde.
+
+### Ciclo 2 — e a confissão que vale mais que o resultado
+
+Portões conferidos por mim, não só relatados: **32 arquivos / 522 testes**
+(era 31/494), `prettier --check` limpo, `tsc --noEmit` exit 0. Mutação: **34
+aplicadas, 34 mortas**.
+
+📌 **Duas sobreviveram na primeira passada (M29 e M34), e a causa é uma armadilha
+de método que não é sobre benefício nenhum:** o não-escritor só tinha sido testado
+**contra competência congelada** — onde o próprio congelamento já esconde os
+botões. O teste era **verde sem provar nada** sobre `canWrite`. É falso verde da
+terceira família: *a asserção passa por causa de outra condição, não da que ela diz
+medir*. Corrigido isolando `canWrite = false` **sobre um rascunho**, nas duas
+camadas.
+
+### A correção do ALTO 1 mudou a navegação, e isso não foi pedido
+
+"Painel de DP" saiu do bloco Administração para uma seção sempre visível — e ela
+pode ser sempre visível porque a página abre para qualquer membro do tenant: quem
+alcança `compensation` recebe os nove KPIs, quem não alcança recebe os oito
+contadores do cadastro recortados pela RLS. **Ninguém vê "nada", então ninguém
+precisa ser excluído** — e `accounting`, que não está em `HR_ROLES`, deixa de ficar
+sem porta.
+
+"Ciclo mensal" saiu da barra lateral e virou link **dentro** do painel, renderizado
+só quando `panel.status === "ok"`: as duas rotas avaliam `permissoes.compensation`
+no mesmo `check_permissions`, então um painel `ok` é **prova** de que a tela de
+ciclo abre. Nenhuma lista de papéis deste frontend acertava os dois lados —
+trancava `accounting` fora e levava `hr` a um 404.
+
+⏳ **O que desfaz isso:** `/me` devolvendo os domínios resolvidos, e não só o papel.
+Aí o item volta para a barra lateral com o eixo certo.
+
+### O que o frontend NÃO fechou, e está declarado
+
+- ⏳ **Lacuna de contrato: não existe `GET /dp/ciclos/{id}`.** `CycleSummary` não
+  traz `rows`, então uma competência lida do histórico não tem como recuperar a
+  lista por pessoa. A tela modela `rows` como `null` — **e não `[]`**, que diria
+  "ninguém tem direito" sobre uma competência que pode ter duzentas linhas — e
+  manda conferir pelo Excel e pelo PDF. É honesto, e é provisório.
+- ⏳ **A escrita continua deduzida de `isAdmin`** porque nenhuma rota de ciclo
+  devolve `can_write`. `util.is_admin` é lista fixa de papéis nos dois lados, e não
+  a matriz de domínios, que é dado que o cliente edita por `update` — por isso a
+  cópia é tolerável aqui e não seria lá. Quando a rota devolver o campo, a linha
+  sai.
+- ⏳ **N+1 declarado no rollup por empresa** (~20 ms por chamada, em `Promise.all`)
+  — **decisão de não corrigir**, com o contrato que o resolveria escrito no lugar:
+  a quebra por empresa dentro da resposta do painel.
+
+## S5 — aprovada, e os dois ALTO do ciclo 1 são de famílias diferentes
+
+**Ciclo 1: REPROVADO** (2 ALTO, 4 MÉDIO/BAIXO). **Ciclo 2: APROVADO** pelo revisor e
+pelo guardião. Portões medidos por mim, não relatados: `pytest` **621** (baseline
+618), `ruff` limpo, `testar_migrations.sh` **SUÍTE COMPLETA OK**, 51 migrations.
+
+### 🔴 ALTO 1 — afrouxar uma coluna quebrou o consumidor do próprio silêncio
+
+A decisão de tornar `app.payroll_event_map.category` anulável está **certa**, e os
+dois revisores a confirmaram: semear `'other'` seria o produto decidindo como o
+dinheiro é somado, e como `'other'` é categoria legítima, a linha semeada ficaria
+indistinguível de uma curada. A promessa não sumiu — virou
+`check (validated_at is null or category is not null)`, que é **mais forte**:
+validar exige classificar.
+
+O defeito foi o fio velho ligado. `imports.fetch_mapped_codes` perguntava
+`select code from app.payroll_event_map`, e a resposta era exata **enquanto**
+`category` fosse `not null`: existir linha equivalia a ter categoria. A semente
+insere uma linha por código com `category` nula, e o mesmo predicado passou a
+responder *"o código é conhecido"* — verdade para todos. `Report.unmapped_codes`
+vinha vazio e a tela de import diria **"nenhuma pendência" com a curadoria inteira
+por fazer**, enquanto o contador da outra rota dizia N.
+
+📌 **A forma do erro, e ela é maior que este caso:** mudar a semântica de uma coluna
+não quebra só quem a lê — quebra **quem infere dela**. Eu procurei o consumidor e
+não achei, porque olhei *o que o SQL seleciona* (só `code`) em vez de *o que o
+conjunto de linhas passou a significar*.
+
+### 🔴 ALTO 2 — falso verde dentro da prova do próprio gate, e nem eu nem o revisor acertamos o conserto
+
+`select ... into` sem `strict` deixa o record NULL quando a consulta não devolve
+linha, e `NULL <> valor` é **NULL**, que não é `true`: o `if` não dispara. Mutar a
+view para devolver **zero linhas** fazia a migration passar verde, com três
+asserções passando em branco.
+
+Eu ofereci três formas de conserto. O implementador mediu que **`into strict`
+sozinho não basta**, e estava certo: na semente a linha **existe** e quem é nula é
+a *coluna*, então `NULL <> 'H.EXTRA 60%'` continua não sendo `true`. Usou as duas
+formas. O revisor então fechou a prova nos dois sentidos, acrescentando a mutação
+que faltava:
+
+| mutante | `strict` + `is distinct from` | `into` + `<>` |
+|---|---|---|
+| view devolve zero linhas | 🔴 `query returned no rows` | ✅ **verde** |
+| view sem o `not exists` | 🔴 `more than one row` | 🔴 |
+| **cadeia com a vigente vindo 1ª** | 🔴 `more than one row` | ✅ **verde** |
+| semente sem `description` | 🔴 `veio "<NULL>"` | ✅ **verde** |
+| semente sem `nature` | 🔴 `veio "<NULL>"` | ✅ **verde** |
+
+Sem a terceira linha, *"cada forma mata o que a outra não mata"* seria afirmação
+sem prova. Com ela, é medição nas duas direções.
+
+### O achado técnico da sprint: era o predicado que dava o lock errado
+
+O `save_draft` inseria um **segundo rascunho ao lado do ciclo gerado** — defeito de
+código do S3, já aprovado, achado por uma revisão de **frontend**. As quatro peças
+são todas de desenho: a reserva filtrava `status = 'draft'` e contra competência
+congelada achava zero; a unique inclui `status`, então a linha nova não colide; e
+`trg_benefit_cycle_immutable` é `before update or delete`, então não vê INSERT.
+
+⛔ **O que fecha a corrida é o `status` SAIR do `where` da reserva.** Sob READ
+COMMITTED, `select ... for update` reavalia a qualificação contra a versão nova da
+linha: com o predicado de status, o congelamento concorrente faz a linha deixar de
+casar e ela **some** — quem esperava recebe zero e insere. Sem ele, a linha volta
+já congelada e a guarda recusa. Medido com duas sessões e banco novo por variante.
+
+### ⛔ E o registro desse achado estava errado — corrigido em 08/09
+
+O comentário e a mensagem do commit afirmavam, **como fato medido**, que um gatilho
+`before insert` não fecharia a corrida. O revisor mediu a terceira variante: **ele
+fecha.** `gerar` congela com **UPDATE**, então o escritor toma lock de linha, quem
+apura sempre bloqueia no `for update`, e ao chegar no insert já enxerga o
+congelamento commitado.
+
+O raciocínio veio **importado da `dp_unit_compliance`**, onde é correto e é outro
+caso: lá a concorrência é entre dois INSERTs de renovação, que genuinamente não se
+enxergam. **Argumento não atravessa de um caso para o outro só porque as duas
+frases falam de gatilho.** O comportamento entregue está certo; era o registro que
+estava errado, e registro errado é o que faz a próxima pessoa desenhar em cima de
+uma medição que nunca existiu. Comentário e mensagem de commit corrigidos.
+
+### O guardião: mudou quem GARANTE, não quem alcança
+
+A leitura da curadoria trocou `user_scope` (RLS) por `tenant_scope`
+(`service_role`). Medido nas **duas** tabelas que ela lê — eu só tinha olhado uma:
+para `{owner, personnel}` as policies avaliam `true` em toda linha do tenant de
+qualquer forma, então o conjunto é **idêntico**. Zero alcance novo.
+
+⏳ **A ressalva, que vale mais que o veredito:** a policy era trava de banco,
+inescapável. Agora o único portão daquele caminho é um `if` em Python. Um chamador
+futuro que esqueça a guarda lê o catálogo do tenant sem o banco reclamar. Está
+registrado na SPEC §4 como obrigação de quem escrever o próximo chamador.
+
+### 📌 As três lições de método, e as três são de quem despacha
+
+1. **Espaço de trabalho compartilhado.** Todos os subagentes recebem o mesmo
+   scratchpad, e dois escolheram `bin/psql` para o shim — um sobrescreveu o do
+   outro **no meio de uma medição**, apontando para o container errado, e o gate
+   leu uma cópia do repo 113 linhas atrasada. Quem despacha dá o subdiretório.
+2. **Caminho relativo num despacho.** Corrigi a primeira lição escrevendo
+   `scratchpad/rev-s5c2/` **sem o caminho absoluto** — e o agente resolveu a
+   partir da raiz do repositório, criando 9,3 MB dentro da árvore do projeto.
+3. **Ferramenta que redireciona em silêncio.** O wrapper de `psql` desta máquina
+   fixa `PGHOST`/`PGPORT` e ignora os exportados. Rodei a suíte três vezes achando
+   que era num container meu; era no de dev o tempo todo. Não é destrutivo, mas
+   **"rodei isolado" era falso por construção** — e eu havia dito isso ao dono.
+
+As três têm a mesma forma: **o agente faz exatamente o que foi dito, e o que foi
+dito não era o que se queria.** Nenhuma foi erro de quem implementa ou mede.
+
+### O que o S5 NÃO fechou, e está declarado
+
+- **Frontend do S5 não despachado** (tela de Unidades e a de rubricas), como em
+  S1, S3 e S4.
+- ⏳ **`accounting` não cura rubrica.** A §1i nomeia a contabilidade como quem
+  confere, e a interseção `admin ∧ compensation` é `{owner, personnel}`. Mudar
+  isso é mexer na policy da migration 30 — **item de parada** do `CLAUDE.md`.
+  Declarado no docstring e travado por teste.
+- ⏳ **`app.payroll_event_map` concede `delete` a `authenticated`** desde a
+  migration 30. Inalcançável hoje (o schema `app` está fora dos exposed schemas),
+  mas contraria o "não há delete" escrito no módulo. Superfície de outra sprint.
+- ⏳ Três `delete` de limpeza **inicial** nas provas vivas não sustentam nada — o
+  `raise` já reverte o bloco. Ficam por consistência do argumento que removeu os
+  outros 17.
 
 ## Itens próprios abertos pelo S1 — fora do escopo de qualquer sprint desta etapa
 

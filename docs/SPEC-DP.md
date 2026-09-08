@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.unit_compliance_report app.payroll_code_map public.fn_dp_panel public.vw_unit_compliance app.work_schedule_day -->
+<!-- verificar-docs: inexistentes-de-proposito app.payroll_code_map public.fn_dp_panel app.work_schedule_day -->
 <!-- ⚠️ NOVE exceções saíram em 07/09/2026, medidas UMA A UMA contra o catálogo e
      não deduzidas: `app.work_post`, `app.benefit_type`, `app.benefit_plan`,
      `app.transport_fare`, `app.employee_benefit` (S1), `app.benefit_cycle`,
@@ -458,24 +458,55 @@ camadas.
 
 ### 1i. `dp_payroll_code_map` — a curadoria que o P3 ia construir
 
-```sql
-create table if not exists app.payroll_code_map (
-  id uuid primary key default gen_random_uuid(),
-  tenant_id uuid not null references app.tenant(id) on delete cascade,
-  code text not null,
-  description text,
-  nature text not null,          -- espelha app.payroll_entry.nature
-  category text,                 -- a classificação contábil que falta
-  validated boolean not null default false,
-  validated_by uuid, validated_at timestamptz,
-  unique (tenant_id, code)
-);
-```
+⚠️ **Esta seção foi reescrita em 07/09/2026. O que ela pedia já existia com outro
+nome, e a semente que ela propunha aborta na primeira folha real.**
 
-Semeia com `select distinct code, description, nature from app.payroll_entry` —
-o cliente já classificou. A reunião com a contabilidade preenche `category` e
-marca `validated`; **linha não validada não entra em indicador financeiro**,
-mesma regra da curadoria de unidade.
+⛔ **`app.payroll_code_map` NÃO foi criada, por decisão do dono.** A curadoria de
+rubrica nasceu na **migration 30**, em 28/08/2026, como `app.payroll_event_map` —
+mesma chave `(tenant_id, code)`, mesma `category`, mesmo `validated_by`/
+`validated_at` — e **está aplicada em produção**. Criar a segunda seria a mesma
+curadoria escrita duas vezes, com dois vocabulários. O `ANEXO` §4.5 ("falta só a
+tabela de mapeamento") ficou velho no dia seguinte ao que foi escrito.
+
+**O que o S5 fez, então, é aditivo:** as duas colunas que a proposta queria e que
+a 30 não tinha — `description` (o nome que a folha do cliente dá à verba, e que a
+contabilidade reconhece na tela) e `nature` (o P/D/I do legado, espelhado de
+`app.payroll_entry.nature`), ambas anuláveis.
+
+**Três coisas da proposta original não sobreviveram à medição:**
+
+1. ⛔ **Sem `validated boolean`.** A 30 tem `validated_at`. Dois jeitos de dizer a
+   mesma coisa divergem no primeiro `update` que atualiza um e esquece o outro, e
+   a metade que diverge é a que ninguém lê. "Validada" é `validated_at is not null`.
+2. ⛔ **`category` passou a ser anulável**, e a promessa virou condicional e mais
+   forte: `check (validated_at is null or category is not null)` — validar **exige**
+   ter classificado. A semente traz código que ninguém classificou ainda, e semear
+   `'other'` seria o produto decidindo como o dinheiro é somado; pior, `'other'` é
+   categoria legítima, então a linha semeada ficaria indistinguível de uma curada.
+   "Não classificado" passa a ser um estado representável, que é o que ele é.
+3. ⛔ **A semente não é `select distinct code, description, nature`.** Medido em
+   07/09/2026: esse `select` devolve mais de uma linha por código assim que o mesmo
+   código aparecer com duas descrições ou duas naturezas — truncamento, rótulo
+   trocado no meio do ano, duas competências importadas —, estoura `duplicate key`
+   e **nenhuma linha entra**. É o mesmo padrão `Atested`/`ATEST M` que o S3 achou
+   noutra tabela. A forma correta é `distinct on (tenant_id, code)` com desempate
+   estável (`created_at desc, id`), mais o `tenant_id` que o `select` da proposta
+   não trazia.
+
+   E a idempotência é **anti-join** (`where not exists`), não `on conflict do
+   nothing`: medido, com `on conflict` a troca de `distinct on` por `distinct`
+   **passa verde** — o conflito acontece dentro do próprio statement, é engolido, e
+   a descrição que fica é a que o planejador devolver primeiro. O defeito deixa de
+   ser erro e vira escolha arbitrária, que é pior, porque ninguém procura o que não
+   reclamou.
+
+📌 **"Linha não validada não entra em indicador financeiro" não mora no banco.** A
+leitura literal não é enunciável: `public.vw_payroll_summary` soma
+`app.payroll_entry` por `nature`, sem consultar mapa nenhum, e nenhum indicador do
+repositório lê a `category` de curadoria. A regra mora em
+`backend/operax/dp/rubricas.py`: a função que entrega categoria devolve **só linha
+validada**, e a não validada volta como pendência **nomeada**, nunca como silêncio
+— a mesma forma que o S3 deu à regra em `app.leave_justification_map`.
 
 ### 1j. `dp_cadastral_fields`
 
@@ -585,7 +616,17 @@ Visibilidade de aba por papel, sem cadeado e sem cinza — regra 5 do projeto.
 - `banking` existe no enum e a matriz semeada dá `true` só para owner,
   personnel e accounting.
 - `hr` não lê `app.employee_bank_account`; `personnel` lê. Duas asserções.
-- Nenhuma tabela desta etapa tem grant para `authenticated`.
+- Nenhuma tabela desta etapa concede **escrita** a `authenticated`; a única com
+  `select` é `app.unit_compliance_report`, e só porque `public.vw_unit_compliance`
+  é `security_invoker` e precisa executar em nome de quem perguntou. O grant **não**
+  a torna alcançável por PostgREST: `app` está fora dos exposed schemas, e as duas
+  metades disso são medidas — a view responde, a tabela devolve `PGRST106`.
+- ⛔ **Chamador novo de `rubricas.read_curation` carrega a guarda de autorização.**
+  Ela lê sob `tenant_scope` (`service_role`, RLS ignorada), então a policy
+  `payroll_event_map_admin` deixou de segurar esse caminho: o portão é o `if` da
+  rota. Os dois chamadores de hoje exigem `compensation` **e** administração — mais
+  estrito que a policy que substituíram. Quem escrever o terceiro herda a obrigação,
+  e o banco não vai reclamar se ele esquecer.
 - `unique (tenant_id, unit_id, code)` de `app.work_post` rejeita duplicata.
 - Laudo renovado não deixa duas linhas vigentes para o mesmo (unidade, tipo).
 - Ciclo `generated` recusa `update` — o gatilho falha alto.
