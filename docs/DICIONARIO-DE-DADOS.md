@@ -709,6 +709,43 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.deviation_adjudication`
+
+> Veredito humano sobre um indício do modo sombra — a verdade de referência do G4 desde 09/09/2026, quando a medição mostrou que a origem não tem veredito a dar (ver docs/DECISAO-VERDADE-DE-REFERENCIA-G4.md). Um veredito por indício, nunca por dia: a taxa do gate é por evento e um dia comporta os dois. Falso positivo exige causa; verdadeiro positivo a proíbe. Rever é update.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `deviation_event_id` | uuid | não |  | `app.deviation_event` |  |
+| `verdict` | text | não |  |  |  |
+| `cause` | text | sim |  |  | Só quando verdict = false_positive. wrong_schedule / wrong_tolerance / engine_bug são as três da SPEC-TECNICA §3.5; exempt_from_punching (não bate ponto por função) e justified_outside_system (combinado fora do Secullum) foram acrescentadas pela medição de 09/09/2026 e são as que o espelho jamais poderia informar. |
+| `note` | text | sim |  |  |  |
+| `author_user_id` | uuid | sim |  | `auth.users` |  |
+| `author_name` | text | sim |  |  |  |
+| `adjudicated_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Restrições**
+
+- `CHECK (((cause IS NULL) OR (cause = ANY (ARRAY['wrong_schedule'::text, 'wrong_tolerance'::text, 'engine_bug'::text, 'exempt_from_punching'::text, 'justified_outside_system'::text]))))`
+- `CHECK (((verdict = 'false_positive'::text) = (cause IS NOT NULL)))`
+- `CHECK ((verdict = ANY (ARRAY['true_positive'::text, 'false_positive'::text])))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `deviation_adjudication_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+
+<details><summary>Índices</summary>
+
+- `UNIQUE deviation_adjudication_deviation_event_id_key` — `app.deviation_adjudication USING btree (deviation_event_id)`
+
+</details>
+
+
 ## `app.deviation_event`
 
 *tabela — RLS ligada*

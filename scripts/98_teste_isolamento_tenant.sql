@@ -173,11 +173,20 @@ from app.tenant t cross join app.deviation_type dt
 where t.slug in ('tenant-a','tenant-b')
 on conflict do nothing;
 
-insert into app.deviation_event (tenant_id, employee_id, company_id, unit_id, reference_date, type, minutes, mode) values
-  ('aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c1','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a1','2026-08-10','late_entry',-15,'production'),
-  ('aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c2','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a2','2026-08-10','late_entry',-22,'production'),
-  ('aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c1','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a1','2026-08-11','late_exit', 40,'shadow'),
-  ('bbbbbbbb-0000-0000-0000-000000000002','b0000000-0000-0000-0000-0000000000c1','b0000000-0000-0000-0000-0000000000e1','b0000000-0000-0000-0000-0000000000a1','2026-08-10','late_entry',-99,'production');
+-- Os ids são explícitos desde 09/09/2026 porque o veredito do censo aponta para
+-- um evento pelo id, e a asserção precisa nomear qual.
+insert into app.deviation_event (id, tenant_id, employee_id, company_id, unit_id, reference_date, type, minutes, mode) values
+  ('a0000000-0000-0000-0000-00000000ad01','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c1','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a1','2026-08-10','late_entry',-15,'production'),
+  ('a0000000-0000-0000-0000-00000000ad02','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c2','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a2','2026-08-10','late_entry',-22,'production'),
+  ('a0000000-0000-0000-0000-00000000ad03','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c1','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a1','2026-08-11','late_exit', 40,'shadow'),
+  ('b0000000-0000-0000-0000-00000000ad04','bbbbbbbb-0000-0000-0000-000000000002','b0000000-0000-0000-0000-0000000000c1','b0000000-0000-0000-0000-0000000000e1','b0000000-0000-0000-0000-0000000000a1','2026-08-10','late_entry',-99,'production');
+
+-- O censo de adjudicação (migration 37). Uma linha em CADA tenant: sem a de B,
+-- "o owner de A não vê o veredito de B" ficaria verde num universo onde só
+-- existe A, que é o falso verde que este arquivo existe para não repetir.
+insert into app.deviation_adjudication (tenant_id, deviation_event_id, verdict, cause, author_name) values
+  ('aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-00000000ad03','false_positive','exempt_from_punching','Censo A'),
+  ('bbbbbbbb-0000-0000-0000-000000000002','b0000000-0000-0000-0000-00000000ad04','true_positive',null,'Censo B');
 
 -- Etapa DP / S1 — Quadro de Postos e catálogo de verbas.
 -- As cinco tabelas do S1 têm a MESMA forma das duas do S2: nenhum grant para
@@ -1282,6 +1291,75 @@ do $$ begin
     (select count(*) from public.vw_unit_compliance where unit_name = 'B Sul'), 1);
   perform pg_temp.assert_eq('e nenhum do tenant A',
     (select count(*) from public.vw_unit_compliance where unit_name like 'A %'), 0);
+end $$;
+
+-- ---------------------------------------------------------------------------
+\echo '--- O censo de adjudicação (migration 37) — quem julga o indício em sombra'
+-- ---------------------------------------------------------------------------
+-- A policy é `util.is_admin`, autorizada pelo dono em 09/09/2026, e o conjunto
+-- que ela nomeia é o MESMO que `deviation_read` já deixa ver evento em sombra:
+-- owner, hr e personnel. As asserções abaixo existem para que essa frase pare
+-- de ser uma leitura da policy e passe a ser uma medição — os três que podem
+-- contam 1, os dois que não podem contam 0, e o de fora conta 0 por outro
+-- motivo (tenant), que é a diferença que um teste só-negativo não enxerga.
+
+set local role authenticated;
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform pg_temp.assert_eq('owner A LÊ o veredito do tenant dele',
+    (select count(*) from app.deviation_adjudication), 1);
+  perform pg_temp.assert_eq('e o veredito que ele lê é o do evento em sombra dele',
+    (select count(*) from app.deviation_adjudication
+      where deviation_event_id = 'a0000000-0000-0000-0000-00000000ad03'), 1);
+end $$;
+
+set local request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+do $$ begin
+  perform pg_temp.assert_eq('DP lê o veredito (é quem faz o censo)',
+    (select count(*) from app.deviation_adjudication), 1);
+end $$;
+
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ begin
+  -- ⚠️ Esta é a asserção que fixa a decisão do dono. `util.is_admin` inclui
+  --    `hr`, então RH julga. Trocar a policy para {owner, personnel} deixa esta
+  --    linha vermelha, que é exatamente o aviso que se quer.
+  perform pg_temp.assert_eq('RH lê o veredito — util.is_admin o inclui, e a decisão foi essa',
+    (select count(*) from app.deviation_adjudication), 1);
+end $$;
+
+set local request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+do $$
+declare v_barrou boolean := false;
+begin
+  perform pg_temp.assert_eq('supervisor NÃO lê veredito (não é admin, e não vê o evento)',
+    (select count(*) from app.deviation_adjudication), 0);
+  -- O eixo de escrita, que a contagem acima não alcança: sem isto, um
+  -- `with check` afrouxado passaria verde enquanto o `using` segurasse a leitura.
+  begin
+    insert into app.deviation_adjudication (tenant_id, deviation_event_id, verdict)
+    values ('aaaaaaaa-0000-0000-0000-000000000001',
+            'a0000000-0000-0000-0000-00000000ad01', 'true_positive');
+  exception when insufficient_privilege then
+    v_barrou := true;
+  end;
+  perform pg_temp.assert_eq('supervisor NÃO grava veredito (with check da policy)',
+    case when v_barrou then 1 else 0 end, 1);
+end $$;
+
+set local request.jwt.claim.sub = '66666666-6666-6666-6666-666666666666';
+do $$ begin
+  perform pg_temp.assert_eq('contabilidade NÃO lê veredito (tem domínio, não é admin)',
+    (select count(*) from app.deviation_adjudication), 0);
+end $$;
+
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_eq('owner B lê só o veredito dele',
+    (select count(*) from app.deviation_adjudication), 1);
+  perform pg_temp.assert_eq('owner B não lê o veredito de A',
+    (select count(*) from app.deviation_adjudication
+      where deviation_event_id = 'a0000000-0000-0000-0000-00000000ad03'), 0);
 end $$;
 
 -- ---------------------------------------------------------------------------

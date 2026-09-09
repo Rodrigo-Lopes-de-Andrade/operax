@@ -286,15 +286,43 @@ Nunca deletar. O dashboard mostra o estado atual; a auditoria mostra o caminho.
 
 ### 3.5 Modo sombra
 
+⚠️ **O passo 2 mudou em 09/09/2026, e com ele o passo 3.** A versão anterior
+mandava comparar com "a apuração do próprio Secullum" — e a origem não tem
+apuração a dar: o espelho traz entrada, nunca veredito. A verdade de referência
+passa a ser **adjudicação humana**, gravada em `app.deviation_adjudication`. A
+medição que fechou aquela porta, e o que a decisão custa, estão em
+`docs/DECISAO-VERDADE-DE-REFERENCIA-G4.md`.
+
 ```
-1. executar com mode='sombra' no período de referência
-2. comparar contra a apuração do próprio Secullum:
-     - eventos que o OperaX viu e o Secullum não  -> candidato a falso positivo
-     - eventos que o Secullum viu e o OperaX não  -> falso negativo
-3. classificar cada divergência: escala errada, tolerância errada, bug
+1. executar com mode='shadow' no período de referência
+2. exportar o censo e julgar CADA indício ativo da janela:
+     - verdadeiro positivo -> merecia o tempo do gestor
+     - falso positivo      -> não merecia, e a causa diz por quê
+3. classificar cada falso positivo: escala errada, tolerância errada, bug,
+   não bate ponto por função, justificado fora do sistema
 4. corrigir e repetir
-5. promover para produção quando falso positivo <= 5% por duas execuções seguidas
+5. promover para produção quando falso positivo <= 5% por duas execuções
+   seguidas — e só com o censo COMPLETO
 ```
+
+**Censo, não amostra.** Medido em produção em 09/09/2026: 820 indícios ativos em
+sombra, sobre 326 dias-colaborador e 67 pessoas. Julgar tudo cabe numa tarde e
+dispensa a conversa sobre intervalo de confiança. A ferramenta:
+
+```bash
+python -m operax.motor.adjudicacao exportar --saida censo.xlsx
+python -m operax.motor.adjudicacao importar --arquivo censo.xlsx --autor "Nome"
+python -m operax.motor.adjudicacao medir
+```
+
+⛔ **Taxa sobre censo parcial não responde ao gate.** `medir` imprime a cobertura
+ao lado da taxa e recusa dizer "passou" enquanto faltar veredito na janela — 5%
+sobre os 40 casos que alguém julgou não diz nada sobre os 820.
+
+⛔ **O falso negativo saiu do gate.** O passo 2 antigo também pedia "eventos que o
+Secullum viu e o OperaX não". Sem veredito da origem esse conjunto não existe, e
+quem lê o dia julga o que o motor emitiu, não o que ele deixou de emitir. O G4
+mede falso positivo e só.
 
 As views do dashboard leem apenas `modo = 'producao'`, então a sombra pode rodar
 em paralelo sem contaminar nada. Evento em sombra só é visível para administrador.
