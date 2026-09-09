@@ -133,15 +133,38 @@ select d.id                                as deviation_event_id,
        d.minutes                           as minutes,
        to_char(d.expected_time, 'HH24:MI') as expected_time,
        to_char(d.actual_time, 'HH24:MI')   as actual_time,
-       coalesce((
-           select string_agg(to_char(m.hora, 'HH24:MI'), ' ' order by m.hora)
-             from app.batida_marcacao m
-             join ponte p on p.mirror_id = m.funcionario_id
-            where p.employee_id = d.employee_id
-              and m.data = d.reference_date
-              and m.hora is not null
-              and not m.desconsiderada
-       ), '')                              as punches,
+       -- ⛔ HORA NULA NÃO É COLUNA VAZIA — E A PRIMEIRA VERSÃO DISTO MENTIA
+       -- Medido em 09/09/2026, ao gerar o censo de produção: 82 dos 820
+       -- indícios saíam com o contexto em branco. Não era o motor: a coluna do
+       -- dia existe e carrega TEXTO DE STATUS em vez de hora — `Férias`,
+       -- `ATEST M`, `ABONO`, `ESQUECI`, `FOLGA`. Filtrar por `hora is not null`
+       -- escondia justamente o que decide o veredito `justified_outside_system`,
+       -- e deixava o julgador sem nada para olhar em uma linha a cada dez.
+       -- ⚠️ Nem em comentário se escreve o sinal de porcentagem nesta string: o
+       -- psycopg a varre inteira atrás de placeholder e recusa o sinal sozinho.
+       --
+       -- As horas vêm todas e em ordem (duas batidas no mesmo minuto são fato,
+       -- não ruído); os rótulos vêm DISTINTOS, porque um dia de férias carimba
+       -- a mesma palavra nas dez colunas e repeti-la dez vezes não informa.
+       coalesce(nullif(concat_ws(' ',
+           (select string_agg(to_char(m.hora, 'HH24:MI'), ' ' order by m.hora)
+              from app.batida_marcacao m
+              join ponte p on p.mirror_id = m.funcionario_id
+             where p.employee_id = d.employee_id
+               and m.data = d.reference_date
+               and m.hora is not null
+               and not m.desconsiderada),
+           (select string_agg(distinct btrim(s.rotulo), ' ')
+              from (select coalesce(nullif(m2.status_rotulo, ''), m2.valor_bruto) as rotulo
+                      from app.batida_marcacao m2
+                      join ponte p2 on p2.mirror_id = m2.funcionario_id
+                     where p2.employee_id = d.employee_id
+                       and m2.data = d.reference_date
+                       and m2.hora is null
+                       and not m2.desconsiderada
+                       and nullif(btrim(coalesce(m2.status_rotulo, m2.valor_bruto)), '') is not null
+                   ) s)
+       ), ''), '')                         as punches,
        w.workload_minutes                  as workload_minutes,
        w.confidence                        as confidence,
        a.verdict                           as verdict,
