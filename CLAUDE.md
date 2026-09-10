@@ -61,7 +61,7 @@ Convenções não-óbvias (o resto está em `package.json` / `pyproject.toml`):
 
 ### Backend (`backend/`)
 
-- FastAPI servindo três coisas: API do painel para dado individual e sensível, o assistente de IA, e os endpoints administrativos. Motor e sender rodam agendados no mesmo container. **A sincronização não** — ver abaixo.
+- FastAPI servindo três coisas: API do painel para dado individual e sensível, o assistente de IA, e os endpoints administrativos. ⚠️ **O motor NÃO roda no container da API — medido em 10/09/2026.** Não havia scheduler nenhum: entre 04/09 e 10/09 a detecção só rodou quando alguém a chamou à mão, e o painel ficou congelado enquanto a sincronização seguia entregando batidas. Desde 10/09 são dois serviços cron próprios no Railway — ver Deploy. **O sender continua sem agendamento, e de propósito**, enquanto o G4 não fechar. **A sincronização também não roda aqui** — ver abaixo.
 - Agente LangChain 1.x com `create_agent` — multi-provider (OpenAI / Anthropic / Google GenAI). **Sem text-to-SQL:** o agente escolhe do catálogo `app.metric` e devolve `{metrica, parametros}`; quem executa é o backend, como o usuário que perguntou.
 - **A sincronização com o Secullum não é worker Python.** `backend/operax/sync/` **não existe e não deve ser criado**. A regra que continua valendo é a que importa: trocar de sistema de ponto mexe num lugar só.
   ⛔ **Mas esse lugar não é mais a Edge Function — e o repositório não tem o código dele.** Medido em produção em 27/08/2026: `GET /v1/projects/<ref>/functions` devolve `[]`, e os dois jobs de `pg_cron` chamam o serviço **`kastropark-jobs` na Vercel**, com a URL vinda dos segredos `vercel_jobs_base_url` e `vercel_cron_secret` do Vault. A troca aconteceu em 25/08, uma hora depois de o P1 blindar as Edge Functions. ⚠️ **São TRÊS jobs desde 02/09/2026**, não dois: a outra equipe criou o `sync-fotos-cron` (`17 3 * * *`, jobid 5) em produção sem aviso, e ele também fala PostgREST. Ele é o motivo de a quarta função existir aqui.
@@ -110,7 +110,11 @@ Fronteira de segurança do produto inteiro. Detalhe em `docs/DICIONARIO-DE-DADOS
 ### Deploy
 
 - **Backend:** Railway, serviço `operax-api`, deploy automático a cada push em `feature/s5-gestao-de-ponto`, root `/backend`. ⚠️ **Medido em 01/09/2026:** o builder configurado é **RAILPACK**, não o `Dockerfile`, e **não existe pre-deploy command** — ao contrário do que esta linha afirmava. **Nenhum deploy aplica migration alguma**, em nenhum ambiente. Quem quiser schema novo aplica à mão, e é por isso que staging está sem a `33`.
-- **Frontend:** Vercel.
+- **Motor:** dois serviços cron no mesmo projeto do Railway, criados em 10/09/2026, mesma branch e mesmo root `/backend`, variáveis por referência às do `operax-api`:
+  `operax-motor` (`*/15 * * * *`, `--dias 1 --dias-jornada 3`) e `operax-motor-retro` (`20 5 * * *`, `--dias 7`).
+  ⛔ **A jornada entra no incremental de propósito.** `--so-deteccao` pula a materialização de `app.expected_workday`, e sem a linha do dia a detecção compara contra expectativa inexistente: grava zero indício e fica verde. Foi medido antes de rodar.
+  ⛔ **`create-deployment` e `redeploy` do Railway constroem a branch do deployment ORIGINAL, não a do config.** Os dois serviços nasceram apontando para o config certo e rodaram `main` mesmo assim — que é anterior ao `run_cli` que abre os pools, então o processo morria em `PoolClosed`. Quem corrige é um push na branch.
+- **Frontend:** Vercel. ⚠️ **Push só cria preview** — produção exige `vercel promote`, que RECONSTRÓI com o ambiente de produção em vez de trocar alias.
 - **Banco:** Supabase gerenciado. **Exposed schemas deve conter apenas `public` e `graphql_public`** — checar após qualquer mudança de projeto.
 - **Topologia:** instância única no Railway — rate limiting in-memory é aceitável; revisar antes de escalar horizontalmente.
 - **Env de produção:** painéis do Railway e da Vercel; chave nova entra no `.env.example` **e** no painel correspondente. Credencial de integração por tenant **não** é env — vai para o Supabase Vault.
