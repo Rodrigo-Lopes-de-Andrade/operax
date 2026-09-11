@@ -95,6 +95,7 @@ from uuid import UUID
 
 from operax.core.db import run_cli
 from operax.core.tenant import Bound, active_tenants, tenant_scope
+from operax.motor.relogio import tenant_clock
 
 TASK = "motor.jornada"
 
@@ -400,10 +401,18 @@ async def materialize(context: Bound, start: date, end: date) -> Coverage:
 
 
 async def run(days: int = DEFAULT_WINDOW_DAYS, today: date | None = None) -> list[Coverage]:
-    """Every active tenant, one at a time, each bound to its own context."""
-    end = today or date.today()
-    start = end - timedelta(days=days - 1)
-    return [await materialize(ctx, start, end) for ctx in await active_tenants(TASK)]
+    """Every active tenant, one at a time, each bound to its own context.
+
+    The window ends on the tenant's "today", so the day people are about to
+    work exists before the first punch — and the day they are still finishing
+    at 22:00 local is not dropped because UTC already moved on.
+    """
+    results: list[Coverage] = []
+    for ctx in await active_tenants(TASK):
+        end = today or (await tenant_clock(ctx)).today
+        start = end - timedelta(days=days - 1)
+        results.append(await materialize(ctx, start, end))
+    return results
 
 
 def relatorio(coberturas: list[Coverage]) -> str:

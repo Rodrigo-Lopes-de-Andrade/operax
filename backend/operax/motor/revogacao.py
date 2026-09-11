@@ -32,13 +32,14 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from uuid import UUID
 
 from operax.core.db import run_cli
 from operax.core.tenant import SystemContext, active_tenants, tenant_scope
 from operax.motor.deteccao import BACKFILL_DAYS, ENGINE_VERSION, MODES
 from operax.motor.regras import SUPERSEDED_SQL, VANISHED_SQL
+from operax.motor.relogio import tenant_clock
 
 TASK = "motor.revogacao"
 
@@ -107,10 +108,20 @@ class RevocationResult:
 
 
 async def reconcile(
-    context: SystemContext, start: date, end: date, *, mode: str = "production"
+    context: SystemContext,
+    start: date,
+    end: date,
+    *,
+    mode: str = "production",
+    now: datetime | None = None,
 ) -> RevocationResult:
     """Compara o que está gravado com o que as batidas dizem hoje."""
+    # The same clock the detector used: the reconciliation re-asks the rules,
+    # and a rule gated on "is the shift over" must hear the same answer.
+    if now is None:
+        now = (await tenant_clock(context)).now
     window = {"start": start, "end": end, "mode": mode}
+    rules = {**window, "now": now}
     revoked: list[Change] = []
     superseded: list[Change] = []
 
@@ -127,7 +138,7 @@ async def reconcile(
         )
         run_id = (await scope.fetchone())["id"]
 
-        await scope.execute(VANISHED_SQL, window)
+        await scope.execute(VANISHED_SQL, rules)
         for row in await scope.fetchall():
             await scope.execute(_REVOKE_SQL, {"event_id": row["id"], "reason": REASON_VANISHED})
             revoked.append(
@@ -141,7 +152,7 @@ async def reconcile(
                 )
             )
 
-        await scope.execute(SUPERSEDED_SQL, window)
+        await scope.execute(SUPERSEDED_SQL, rules)
         for row in await scope.fetchall():
             # Revogar ANTES de inserir: o índice único cobre um ativo por
             # (colaborador, dia, tipo, modo), e os dois não podem coexistir.
@@ -187,9 +198,13 @@ async def reconcile(
 async def run(
     *, days: int = BACKFILL_DAYS, mode: str = "production", today: date | None = None
 ) -> list[RevocationResult]:
-    end = today or date.today()
-    start = end - timedelta(days=days - 1)
-    return [await reconcile(ctx, start, end, mode=mode) for ctx in await active_tenants(TASK)]
+    results: list[RevocationResult] = []
+    for ctx in await active_tenants(TASK):
+        clock = await tenant_clock(ctx)
+        end = today or clock.today
+        start = end - timedelta(days=days - 1)
+        results.append(await reconcile(ctx, start, end, mode=mode, now=clock.now))
+    return results
 
 
 def relatorio(resultados: list[RevocationResult]) -> str:

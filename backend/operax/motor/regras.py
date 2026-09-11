@@ -169,7 +169,25 @@ fato as (
              where c.funcionario_id = d.mirror_id and c.data = d.reference_date
                and c.tipo_coluna = 'Entrada' and c.indice_coluna = 2
                and c.hora is null and c.memoria is not null
-           ) as no_return
+           ) as no_return,
+           -- A DAY IN PROGRESS IS NOT A DAY WITH SOMETHING MISSING
+           -- Four types describe an absence: no punch, an odd punch, a break
+           -- nobody came back from, an exit before the shift ended. On a day
+           -- that is still happening every one of them is merely "not yet".
+           -- Measured on 2026-09-11, the first day the engine ran every 15
+           -- minutes: 141 of 141 events of these types that were revoked that
+           -- day had been created before the person's shift had closed —
+           -- 56 `no_punches` at 21:00 the night BEFORE, for a day nobody had
+           -- started. The `now` is a parameter, not `now()`, so the test can
+           -- hold the clock at midday and prove the silence.
+           --
+           -- "Closed" is the expected exit plus the absence tolerance, in the
+           -- tenant's local time. A day whose exit the roster cannot describe
+           -- closes when the calendar day does: past that, absence is a fact.
+           %(now)s::timestamp >= coalesce(
+             d.expected_exit_at + make_interval(mins => d.tolerance_absence_minutes),
+             (d.reference_date + 1)::timestamp
+           ) as shift_closed
     from dia d
     left join resumo r on r.funcionario_id = d.mirror_id and r.data = d.reference_date
     left join trabalhado t on t.funcionario_id = d.mirror_id and t.data = d.reference_date
@@ -199,7 +217,7 @@ evento as (
            'no_punches', -f.workload_minutes, f.expected_entry, null::time
     from fato f
     left join cfg c on c.code = 'no_punches'
-    where coalesce(c.active, true) and f.day_type = 'work'
+    where coalesce(c.active, true) and f.day_type = 'work' and f.shift_closed
       and f.punches = 0 and f.workload_minutes is not null
 
     union all
@@ -208,7 +226,8 @@ evento as (
            'incomplete_punches', 0, null::time, f.last_punch
     from fato f
     left join cfg c on c.code = 'incomplete_punches'
-    where coalesce(c.active, true) and f.punches > 0 and f.punches %% 2 = 1
+    where coalesce(c.active, true) and f.shift_closed
+      and f.punches > 0 and f.punches %% 2 = 1
 
     union all
     select f.employee_id, f.reference_date, f.company_id, f.unit_id, f.punch_ids,
@@ -241,7 +260,7 @@ evento as (
            f.expected_exit, f.last_punch
     from fato f
     left join cfg c on c.code = 'early_exit'
-    where coalesce(c.active, true) and f.day_type = 'work'
+    where coalesce(c.active, true) and f.day_type = 'work' and f.shift_closed
       and f.punches > 1 and f.expected_exit_at is not null
       and extract(epoch from (f.last_punch_at - f.expected_exit_at)) / 60
           < -coalesce(c.tolerance_absence_minutes, f.tolerance_absence_minutes)
@@ -289,7 +308,7 @@ evento as (
            'break_no_return', 0, null::time, f.last_punch
     from fato f
     left join cfg c on c.code = 'break_no_return'
-    where coalesce(c.active, true) and f.no_return
+    where coalesce(c.active, true) and f.no_return and f.shift_closed
       and f.expected_break_minutes is not null
 
     union all

@@ -37,12 +37,27 @@ ENV = {
 
 TENANT = "dddddddd-0000-0000-0000-000000000001"
 RUN = "dddddddd-0000-0000-0000-0000000000f0"
+RUN_MEIO_DIA = "dddddddd-0000-0000-0000-0000000000f9"
 DIA = "2026-08-10"  # segunda-feira
+# O relógio é parâmetro do SQL, não `now()`, para o teste poder segurá-lo. Ao
+# meio-dia de DIA nenhum turno fechou — nem o diurno (18:00) nem o noturno
+# (05:00 do dia seguinte); ao meio-dia do dia seguinte todos fecharam, com folga
+# para a tolerância. Os casos que já existiam rodam no relógio fechado e não
+# mudam de resultado.
+NOW_MEIO_DIA = "2026-08-10 12:00:00"
+NOW_FECHADO = "2026-08-11 12:00:00"
 
 
-def ligar(corpo: str, *, run_id: str = RUN, mode: str = "shadow", exige_run: bool = True) -> str:
+def ligar(
+    corpo: str,
+    *,
+    run_id: str = RUN,
+    mode: str = "shadow",
+    exige_run: bool = True,
+    now: str = NOW_FECHADO,
+) -> str:
     """O SQL do motor com os parâmetros ligados, como o psycopg o entregaria."""
-    obrigatorios = ["%(tenant_id)s", "%(start)s", "%(end)s", "%(mode)s"]
+    obrigatorios = ["%(tenant_id)s", "%(start)s", "%(end)s", "%(mode)s", "%(now)s"]
     if exige_run:
         obrigatorios.append("%(run_id)s")
     for marca in obrigatorios:
@@ -51,12 +66,13 @@ def ligar(corpo: str, *, run_id: str = RUN, mode: str = "shadow", exige_run: boo
     corpo = corpo.replace("%(tenant_id)s", f"'{TENANT}'")
     corpo = corpo.replace("%(start)s", f"'{DIA}'").replace("%(end)s", f"'{DIA}'")
     corpo = corpo.replace("%(mode)s", f"'{mode}'").replace("%(run_id)s", f"'{run_id}'")
+    corpo = corpo.replace("%(now)s", f"'{now}'")
     # `%%` é escape de psycopg; no psql o literal é `%`.
     return corpo.replace("%%", "%")
 
 
-def sql_do_motor(run_id: str = RUN, mode: str = "shadow") -> str:
-    return ligar(regras.DETECT_SQL, run_id=run_id, mode=mode)
+def sql_do_motor(run_id: str = RUN, mode: str = "shadow", now: str = NOW_FECHADO) -> str:
+    return ligar(regras.DETECT_SQL, run_id=run_id, mode=mode, now=now)
 
 
 # ---------------------------------------------------------------------------
@@ -290,7 +306,37 @@ from app.batida_marcacao m
 where m.tenant_id = '{TENANT}' and m.funcionario_id = md5('det-f16')::uuid;
 
 -- ---------------------------------------------------------------------------
--- Primeira execução
+-- Execução zero: o dia em andamento
+-- ---------------------------------------------------------------------------
+-- Medido em produção em 11/09/2026, no primeiro dia do motor agendado: 141 de
+-- 141 indícios de dia-incompleto revogados naquele dia tinham nascido antes de
+-- o turno da pessoa fechar — 56 `no_punches` às 21:00 da NOITE ANTERIOR. Ao
+-- meio-dia, as mesmas batidas e as mesmas escalas têm de produzir silêncio nos
+-- quatro tipos que descrevem ausência, e barulho normal nos que descrevem um
+-- fato que já aconteceu.
+insert into app.detection_run (id, tenant_id, mode, period_start, period_end)
+values ('{RUN_MEIO_DIA}', '{TENANT}', 'shadow', '{DIA}', '{DIA}');
+
+{{MOTOR_MEIO_DIA}}
+
+do $$ begin
+  perform pg_temp.assert_eq('ao meio-dia, ninguém "faltou" ainda (no_punches)',
+    (select count(*)::text from app.deviation_event where type = 'no_punches'), '0');
+  perform pg_temp.assert_eq('ao meio-dia, par ímpar ainda não é par ímpar (incomplete_punches)',
+    (select count(*)::text from app.deviation_event where type = 'incomplete_punches'), '0');
+  perform pg_temp.assert_eq('ao meio-dia, sair para o intervalo não é "não voltou" (break_no_return)',
+    (select count(*)::text from app.deviation_event where type = 'break_no_return'), '0');
+  perform pg_temp.assert_eq('ao meio-dia, ninguém "saiu cedo" ainda (early_exit)',
+    (select count(*)::text from app.deviation_event where type = 'early_exit'), '0');
+  -- O positivo, para o silêncio acima não ser vácuo: um atraso de entrada já
+  -- aconteceu ao meio-dia, e o portão não pode calá-lo.
+  perform pg_temp.assert_eq('ao meio-dia, entrada atrasada JÁ é indício',
+    (select count(*)::text from app.deviation_event
+      where employee_id = md5('det-c2')::uuid and type = 'late_entry'), '1');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- Primeira execução — o dia fechou
 -- ---------------------------------------------------------------------------
 insert into app.detection_run (id, tenant_id, mode, period_start, period_end)
 values ('{RUN}', '{TENANT}', 'shadow', '{DIA}', '{DIA}');
@@ -599,7 +645,8 @@ rollback;
 
 def main() -> None:
     script = (
-        CENARIO.replace("{MOTOR}", sql_do_motor() + ";")
+        CENARIO.replace("{MOTOR_MEIO_DIA}", sql_do_motor(run_id=RUN_MEIO_DIA, now=NOW_MEIO_DIA) + ";")
+        .replace("{MOTOR}", sql_do_motor() + ";")
         + SEGUNDA_RODADA.replace(
             "{MOTOR2}", sql_do_motor(run_id="dddddddd-0000-0000-0000-0000000000f1") + ";"
         ).replace(

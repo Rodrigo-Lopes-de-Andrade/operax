@@ -52,12 +52,13 @@ from __future__ import annotations
 
 import argparse
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from uuid import UUID
 
 from operax.core.db import run_cli
 from operax.core.tenant import SystemContext, active_tenants, tenant_scope
 from operax.motor.regras import DETECT_SQL
+from operax.motor.relogio import tenant_clock
 
 TASK = "motor.deteccao"
 
@@ -170,7 +171,12 @@ class RunResult:
 
 
 async def detect(
-    context: SystemContext, start: date, end: date, *, mode: str = "shadow"
+    context: SystemContext,
+    start: date,
+    end: date,
+    *,
+    mode: str = "shadow",
+    now: datetime | None = None,
 ) -> RunResult:
     """Run the engine for one tenant over one window, idempotently.
 
@@ -179,6 +185,10 @@ async def detect(
     engine version that produced it, and a run left `running` is how a crash
     announces itself instead of looking like a quiet day.
     """
+    # The rules ask "is this shift over yet" against the tenant's wall clock —
+    # never the container's, which on Railway is three hours into tomorrow.
+    if now is None:
+        now = (await tenant_clock(context)).now
     window = {"start": start, "end": end}
     async with tenant_scope(context) as scope:
         await scope.execute(
@@ -197,7 +207,7 @@ async def detect(
         run_id = run["id"]
 
         try:
-            await scope.execute(DETECT_SQL, {**window, "mode": mode, "run_id": run_id})
+            await scope.execute(DETECT_SQL, {**window, "mode": mode, "run_id": run_id, "now": now})
         except Exception as erro:
             await scope.execute(
                 _CLOSE_RUN_SQL,
@@ -248,10 +258,19 @@ async def detect(
 async def run(
     *, days: int = BACKFILL_DAYS, mode: str = "shadow", today: date | None = None
 ) -> list[RunResult]:
-    """Every active tenant, one at a time, each bound to its own context."""
-    end = today or date.today()
-    start = end - timedelta(days=days - 1)
-    return [await detect(ctx, start, end, mode=mode) for ctx in await active_tenants(TASK)]
+    """Every active tenant, one at a time, each bound to its own context.
+
+    "Today" is the tenant's, not the container's: with `date.today()` in UTC the
+    window flipped to tomorrow at 21:00 in São Paulo, and the incremental run
+    spent three hours detecting a day nobody had started.
+    """
+    results: list[RunResult] = []
+    for ctx in await active_tenants(TASK):
+        clock = await tenant_clock(ctx)
+        end = today or clock.today
+        start = end - timedelta(days=days - 1)
+        results.append(await detect(ctx, start, end, mode=mode, now=clock.now))
+    return results
 
 
 def relatorio(resultados: list[RunResult]) -> str:
