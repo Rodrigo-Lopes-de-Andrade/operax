@@ -196,6 +196,10 @@ def test_o_log_de_longo_prazo_nao_guarda_o_telefone():
 def test_o_gate_pergunta_ao_banco_em_vez_de_ler_uma_flag():
     assert "mode = 'production'" in sender._GATE_SQL
     assert "status = 'completed'" in sender._GATE_SQL
+    # A segunda metade, desde 11/09/2026: promover o motor deixou de ser "a sombra
+    # fechou". A liberação é uma linha, e uma linha revogada não conta.
+    assert "from app.alert_release" in sender._GATE_SQL
+    assert "revoked_at is null" in sender._GATE_SQL
 
 
 class FakeCursor:
@@ -229,15 +233,18 @@ class FakeScope:
 
 
 class FakeDB:
-    def __init__(self, *, promovido: bool, fila: list[dict[str, Any]]) -> None:
+    def __init__(
+        self, *, promovido: bool, fila: list[dict[str, Any]], liberado: bool = True
+    ) -> None:
         self.promovido = promovido
+        self.liberado = liberado
         self.fila = fila
         self.log: list[dict[str, Any]] = []
         self.marcadas: list[tuple[str, Any]] = []
 
     def responder(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
         if "from app.detection_run" in sql:
-            return [{"promovido": self.promovido}]
+            return [{"promovido": self.promovido, "liberado": self.liberado}]
         if "update app.alert_queue q" in sql:
             return list(self.fila)
         if "insert into app.alert_sent" in sql:
@@ -302,6 +309,26 @@ async def test_com_o_gate_aberto_nada_sai_da_fila(monkeypatch: pytest.MonkeyPatc
     assert espiao.enviadas == []
     # E a tentativa fica registrada com o motivo — silêncio não é resultado.
     assert "gate G4 aberto" in estado.log[0]["error"]
+
+
+@pytest.mark.anyio
+async def test_promovido_sem_liberacao_nada_sai(monkeypatch: pytest.MonkeyPatch):
+    """O estado de 09/09/2026: motor em produção, censo em zero, porta aberta.
+
+    Era exatamente isto que o gate antigo deixava passar. Com a segunda metade,
+    o motor promovido sem liberação registrada entrega nada — e diz por quê.
+    """
+    estado = _sender_db(monkeypatch, FakeDB(promovido=True, liberado=False, fila=[_fila()]))
+    espiao = SpyProvider()
+
+    resultado = await sender.dispatch(
+        SystemContext(tenant_id=TENANT, task="teste"), {"meta_cloud": espiao}
+    )
+
+    assert resultado.gate_open is True
+    assert resultado.sent == 0
+    assert espiao.enviadas == []
+    assert "nunca foi liberada" in estado.log[0]["error"]
 
 
 @pytest.mark.anyio

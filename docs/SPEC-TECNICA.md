@@ -303,6 +303,8 @@ medição que fechou aquela porta, e o que a decisão custa, estão em
 4. corrigir e repetir
 5. promover para produção quando falso positivo <= 5% por duas execuções
    seguidas — e só com o censo COMPLETO
+6. LIBERAR a entrega: `adjudicacao liberar --autor` grava app.alert_release
+   com a taxa medida; o sender exige essa linha além do motor promovido
 ```
 
 **Censo, não amostra.** Medido em produção em 09/09/2026: 820 indícios ativos em

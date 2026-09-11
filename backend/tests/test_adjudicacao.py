@@ -18,6 +18,7 @@ from io import BytesIO
 from typing import Any
 from uuid import UUID, uuid4
 
+import pytest
 from openpyxl import load_workbook
 
 from operax.motor.adjudicacao import (
@@ -221,3 +222,47 @@ def test_censo_completo_no_limite_passa() -> None:
 
 def test_censo_completo_acima_do_limite_reprova() -> None:
     assert medicao(events=100, judged=100, falsos=6).gate_passes is False
+
+
+# ---------------------------------------------------------------------------
+# A liberação recusa o que o schema também recusa — e antes de tocar o banco
+# ---------------------------------------------------------------------------
+
+
+def _release_com_medicao(monkeypatch: pytest.MonkeyPatch, m: Measurement):
+    """`release` com a medição fixada e o banco PROIBIDO: abrir escopo é falha."""
+    from operax.motor import adjudicacao
+
+    async def medir_falso(*_: object, **__: object) -> Measurement:
+        return m
+
+    def escopo_proibido(*_: object, **__: object):
+        raise AssertionError("release abriu conexão antes de a medição autorizar")
+
+    monkeypatch.setattr(adjudicacao, "measure", medir_falso)
+    monkeypatch.setattr(adjudicacao, "tenant_scope", escopo_proibido)
+    return adjudicacao
+
+
+@pytest.mark.anyio
+async def test_liberacao_recusa_censo_incompleto_sem_tocar_o_banco(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adjudicacao = _release_com_medicao(monkeypatch, medicao(events=820, judged=40, falsos=0))
+
+    with pytest.raises(adjudicacao.ReleaseRefusedError, match="incompleto"):
+        await adjudicacao.release(
+            object(), date(2026, 8, 12), date(2026, 9, 10), mode="shadow", author="x", note=None
+        )
+
+
+@pytest.mark.anyio
+async def test_liberacao_recusa_taxa_acima_do_teto_sem_tocar_o_banco(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    adjudicacao = _release_com_medicao(monkeypatch, medicao(events=100, judged=100, falsos=6))
+
+    with pytest.raises(adjudicacao.ReleaseRefusedError, match="acima do teto"):
+        await adjudicacao.release(
+            object(), date(2026, 8, 12), date(2026, 9, 10), mode="shadow", author="x", note=None
+        )

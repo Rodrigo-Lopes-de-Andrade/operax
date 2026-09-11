@@ -165,6 +165,40 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.alert_release`
+
+> Liberação registrada da entrega de alertas — a regra 8 virando fato. Uma linha por liberação, gravada pelo comando `liberar` só depois de `medir` responder PASSA sobre censo completo; `revoked_at` preenchido é liberação que deixou de valer. O sender exige motor promovido E uma linha vigente aqui. Ver docs/DECISAO-VERDADE-DE-REFERENCIA-G4.md.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `released_by` | text | não |  |  |  |
+| `released_at` | timestamp with time zone | não | `now()` |  |  |
+| `census_size` | integer | não |  |  |  |
+| `judged` | integer | não |  |  |  |
+| `false_positives` | integer | não |  |  |  |
+| `measured_rate` | numeric(5,2) | não |  |  | Falso positivo em porcentagem no ato da liberação. O check em 5.00 é a regra 8 escrita no schema: uma liberação acima do teto não existe. |
+| `note` | text | sim |  |  |  |
+| `revoked_by` | text | sim |  |  |  |
+| `revoked_at` | timestamp with time zone | sim |  |  |  |
+| `revoked_note` | text | sim |  |  |  |
+
+**Restrições**
+
+- `CHECK (((judged = census_size) AND (census_size > 0)))`
+- `CHECK (((measured_rate >= (0)::numeric) AND (measured_rate <= 5.00)))`
+- `CHECK (((revoked_at IS NULL) = (revoked_by IS NULL)))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `alert_release_read` | SELECT | `util.is_admin(tenant_id)` | `-` |
+
+
 ## `app.alert_rule`
 
 *tabela — RLS ligada*

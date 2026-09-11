@@ -43,14 +43,29 @@ BATCH = 50
 BACKOFF_MINUTES = (1, 5, 15, 60, 360)
 MAX_ATTEMPTS = len(BACKOFF_MINUTES)
 
-#: A pergunta que é o gate G4. Uma execução completa em produção só existe depois
-#: de alguém promover o motor, e promover o motor é o que "a sombra fechou"
-#: quer dizer.
+#: A pergunta que é o gate G4 — em duas metades, porque a primeira sozinha mentiu.
+#:
+#: Até 11/09/2026 o gate era só `promovido`: uma execução completa em produção,
+#: sob a premissa de que promover o motor é o que "a sombra fechou" quer dizer.
+#: Em 09/09 o motor foi promovido para o DP ver o painel, com o censo do G4 em
+#: zero adjudicações — e a porta ficou aberta com a taxa de falso positivo não
+#: medida. O que segurava a entrega era não existir regra de alerta cadastrada.
+#:
+#: `liberado` é a medição virando fato: uma linha em `app.alert_release`, gravada
+#: por `python -m operax.motor.adjudicacao liberar` só depois de `medir` responder
+#: PASSA sobre censo completo, e sem `revoked_at`. O schema recusa taxa acima de
+#: 5% e censo parcial (migration 38). As duas metades são exigidas: promovido sem
+#: liberação é o estado de 09/09; liberação sem motor promovido não tem o que
+#: entregar.
 _GATE_SQL = """
 select exists (
   select 1 from app.detection_run
   where tenant_id = %(tenant_id)s and mode = 'production' and status = 'completed'
-) as promovido
+) as promovido,
+exists (
+  select 1 from app.alert_release
+  where tenant_id = %(tenant_id)s and revoked_at is null
+) as liberado
 """
 
 #: A reserva do lote. `skip locked` é o que permite mais de um sender; marcar
@@ -135,19 +150,25 @@ async def dispatch(
 
     async with tenant_scope(context) as scope:
         await scope.execute(_GATE_SQL, {})
-        promovido = bool((await scope.fetchone())["promovido"])
+        gate = await scope.fetchone()
+        promovido = bool(gate["promovido"])
+        liberado = bool(gate["liberado"])
 
         await scope.execute(_CLAIM_SQL, {"batch": batch})
         lote = await scope.fetchall()
 
         for linha in lote:
             provider = providers.get(linha["provider"] or "")
-            if not promovido or provider is None:
-                motivo = (
-                    "gate G4 aberto: o motor nunca rodou em produção neste cliente"
-                    if not promovido
-                    else f"provedor {linha['provider']!r} não configurado"
-                )
+            if not promovido or not liberado or provider is None:
+                if not promovido:
+                    motivo = "gate G4 aberto: o motor nunca rodou em produção neste cliente"
+                elif not liberado:
+                    motivo = (
+                        "gate G4 aberto: a entrega nunca foi liberada — o censo não fechou "
+                        "com falso positivo ≤5%, ou ninguém registrou a liberação"
+                    )
+                else:
+                    motivo = f"provedor {linha['provider']!r} não configurado"
                 entrega = Delivery(status="failed", error=motivo)
             else:
                 variables: tuple[str, ...] = ()
@@ -199,7 +220,7 @@ async def dispatch(
 
     return SendResult(
         tenant_id=context.tenant_id,
-        gate_open=not promovido,
+        gate_open=not (promovido and liberado),
         claimed=len(lote),
         sent=sent,
         failed=failed,
@@ -231,7 +252,8 @@ def relatorio(resultados: list[SendResult]) -> str:
         if r.gate_open:
             linhas.append(
                 f"tenant {r.tenant_id}: ⛔ gate G4 aberto — {r.claimed} mensagem(ns) na fila e "
-                f"nenhuma entregue. O motor precisa rodar em produção antes."
+                f"nenhuma entregue. Exige motor em produção E liberação registrada "
+                f"(`python -m operax.motor.adjudicacao liberar`, depois de `medir` PASSAR)."
             )
             continue
         linhas.append(

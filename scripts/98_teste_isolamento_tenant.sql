@@ -188,6 +188,12 @@ insert into app.deviation_adjudication (tenant_id, deviation_event_id, verdict, 
   ('aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-00000000ad03','false_positive','exempt_from_punching','Censo A'),
   ('bbbbbbbb-0000-0000-0000-000000000002','b0000000-0000-0000-0000-00000000ad04','true_positive',null,'Censo B');
 
+-- A liberação da entrega (migration 38). Uma em cada tenant, pelo mesmo motivo
+-- do censo: sem a de B, "A não vê a liberação de B" seria verde no vácuo.
+insert into app.alert_release (tenant_id, released_by, census_size, judged, false_positives, measured_rate) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'Owner A', 100, 100, 3, 3.00),
+  ('bbbbbbbb-0000-0000-0000-000000000002', 'Owner B', 50, 50, 1, 2.00);
+
 -- Etapa DP / S1 — Quadro de Postos e catálogo de verbas.
 -- As cinco tabelas do S1 têm a MESMA forma das duas do S2: nenhum grant para
 -- `authenticated`. Então um `select` ali é `permission denied` para todo mundo,
@@ -1360,6 +1366,53 @@ do $$ begin
   perform pg_temp.assert_eq('owner B não lê o veredito de A',
     (select count(*) from app.deviation_adjudication
       where deviation_event_id = 'a0000000-0000-0000-0000-00000000ad03'), 0);
+end $$;
+
+-- ---------------------------------------------------------------------------
+\echo '--- A liberação da entrega (migration 38) — lida por quem vê o censo, escrita por ninguém'
+-- ---------------------------------------------------------------------------
+set local role authenticated;
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$
+declare v_barrou boolean := false;
+begin
+  perform pg_temp.assert_eq('owner A LÊ a liberação do tenant dele',
+    (select count(*) from app.alert_release), 1);
+  perform pg_temp.assert_eq('e é a dele, com a taxa que sustentou a decisão',
+    (select count(*) from app.alert_release where released_by = 'Owner A' and measured_rate = 3.00), 1);
+  -- Liberar é ato do comando, nunca clique: até o owner toma permission denied.
+  begin
+    insert into app.alert_release (tenant_id, released_by, census_size, judged, false_positives, measured_rate)
+    values ('aaaaaaaa-0000-0000-0000-000000000001', 'clique', 10, 10, 0, 0.00);
+  exception when insufficient_privilege then v_barrou := true; end;
+  perform pg_temp.assert_eq('owner NÃO grava liberação pelo navegador (sem grant de insert)',
+    case when v_barrou then 1 else 0 end, 1);
+end $$;
+
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ begin
+  perform pg_temp.assert_eq('RH lê a liberação (util.is_admin)',
+    (select count(*) from app.alert_release), 1);
+end $$;
+
+set local request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+do $$ begin
+  perform pg_temp.assert_eq('supervisor NÃO lê a liberação',
+    (select count(*) from app.alert_release), 0);
+end $$;
+
+set local request.jwt.claim.sub = '66666666-6666-6666-6666-666666666666';
+do $$ begin
+  perform pg_temp.assert_eq('contabilidade NÃO lê a liberação',
+    (select count(*) from app.alert_release), 0);
+end $$;
+
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_eq('owner B lê só a liberação dele',
+    (select count(*) from app.alert_release where released_by = 'Owner B'), 1);
+  perform pg_temp.assert_eq('owner B não lê a liberação de A',
+    (select count(*) from app.alert_release where released_by = 'Owner A'), 0);
 end $$;
 
 -- ---------------------------------------------------------------------------

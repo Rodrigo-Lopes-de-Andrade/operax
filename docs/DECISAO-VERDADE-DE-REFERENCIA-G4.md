@@ -116,3 +116,27 @@ tamanho da classe antes de a decisão ser tomada, em vez de depois.
 gate uma taxa sobre censo parcial: 5% sobre os 40 casos que alguém julgou não diz
 nada sobre os 820. Enquanto faltar veredito, ela imprime a taxa parcial marcada
 como parcial e o gate responde "ainda não sei" — nunca "passou".
+
+## 6. A liberação é um registro, não um deploy (11/09/2026)
+
+Em 09/09 o motor foi promovido para o DP ver dado no painel, com o censo em
+zero adjudicações — e o gate do sender, que perguntava só "existe execução em
+produção?", abriu num deploy em vez de numa medição. O que impedia uma mensagem
+de sair era não existir regra de alerta cadastrada.
+
+Desde a migration 38 o sender exige **duas** coisas: motor promovido **e** uma
+linha vigente em `app.alert_release`. A linha é gravada por
+
+```bash
+python -m operax.motor.adjudicacao liberar --autor "Nome" [--nota "..."]
+python -m operax.motor.adjudicacao liberar --revogar --autor "Nome" --nota "por quê"
+```
+
+e o comando só grava depois de `medir` responder `PASSA` sobre censo completo.
+O schema recusa o mesmo que o comando: taxa acima de 5% e censo parcial não
+existem como liberação. `revoked_at` preenchido fecha a porta de novo — uma
+trava que só fecha seria porta de mão única.
+
+⚠️ **A §3.5 pede duas execuções seguidas; a liberação registra uma.** O comando
+avisa. Exigir a segunda no schema seria modelar uma série de medições que hoje
+não existe — fica como disciplina de quem libera, escrita na saída do comando.

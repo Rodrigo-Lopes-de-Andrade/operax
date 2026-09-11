@@ -32,6 +32,15 @@ and the vocabulary disagree, and importing the rest would bury that under a
 number. So parsing collects every line error and writes nothing until they are
 gone.
 
+WHY THE RELEASE IS A ROW, AND WHY THIS MODULE WRITES IT
+On 2026-09-09 the engine was promoted to production with the census at zero
+adjudications, and the alert sender's gate — "has the engine run in
+production?" — swung open on a deploy instead of a measurement. `liberar` is
+the measurement becoming a fact: it runs `measure`, refuses anything short of a
+complete census within the 5% ceiling, and writes `app.alert_release` with the
+numbers and a name. The sender requires that row (migration 38). It lives here
+because the only honest source of the numbers on that row is the census.
+
 WHY COVERAGE TRAVELS WITH THE RATE, ALWAYS
 A rate over a partial census is the false green this repository keeps finding:
 5% of the 40 cases somebody bothered to judge says nothing about the 820. The
@@ -484,6 +493,75 @@ def relatorio(medicoes: list[Measurement]) -> str:
 
 
 # ---------------------------------------------------------------------------
+# The release
+# ---------------------------------------------------------------------------
+
+_RELEASE_SQL = """
+insert into app.alert_release
+    (tenant_id, released_by, census_size, judged, false_positives, measured_rate, note)
+values (%(tenant_id)s, %(author)s, %(census_size)s, %(judged)s, %(false_positives)s,
+        %(rate)s, %(note)s)
+returning id
+"""
+
+_REVOKE_RELEASE_SQL = """
+update app.alert_release
+   set revoked_by = %(author)s, revoked_at = now(), revoked_note = %(note)s
+ where tenant_id = %(tenant_id)s and revoked_at is null
+returning id
+"""
+
+
+class ReleaseRefusedError(RuntimeError):
+    """The census does not support a release. The message is the reason."""
+
+
+async def release(
+    context: SystemContext,
+    start: date,
+    end: date,
+    *,
+    mode: str,
+    author: str,
+    note: str | None,
+) -> Measurement:
+    """Measure, and only then write. The schema refuses the same things twice."""
+    medicao = await measure(context, start, end, mode=mode)
+    if medicao.gate_passes is None:
+        faltam = medicao.total.events - medicao.total.judged
+        raise ReleaseRefusedError(
+            f"censo incompleto: faltam {faltam} veredito(s) em {medicao.total.events}. "
+            "Uma taxa sobre censo parcial não libera nada."
+        )
+    if not medicao.gate_passes:
+        raise ReleaseRefusedError(
+            f"falso positivo em {medicao.total.rate:.1f}%, acima do teto de "
+            f"{GATE_MAX_FALSE_POSITIVE:.0f}%."
+        )
+    async with tenant_scope(context) as scope:
+        await scope.execute(
+            _RELEASE_SQL,
+            {
+                "author": author,
+                "census_size": medicao.total.events,
+                "judged": medicao.total.judged,
+                "false_positives": medicao.total.false_positives,
+                "rate": round(medicao.total.rate or 0.0, 2),
+                "note": note,
+            },
+        )
+        await scope.fetchone()
+    return medicao
+
+
+async def revoke_release(context: SystemContext, *, author: str, note: str) -> int:
+    """Close the latch again. Returns how many releases it closed (0 or 1)."""
+    async with tenant_scope(context) as scope:
+        await scope.execute(_REVOKE_RELEASE_SQL, {"author": author, "note": note})
+        return len(await scope.fetchall())
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -555,6 +633,61 @@ def _medir(args: argparse.Namespace) -> int:
     return 0
 
 
+def _liberar(args: argparse.Namespace) -> int:
+    end = date.today()
+    start = end - timedelta(days=args.dias - 1)
+
+    if args.revogar:
+        if not args.nota:
+            print("revogar exige --nota: uma liberação fechada sem motivo não explica nada.")
+            return 2
+
+        async def revogar_todos() -> int:
+            return sum(
+                [
+                    await revoke_release(context, author=args.autor, note=args.nota)
+                    for context in await active_tenants(TASK)
+                ]
+            )
+
+        fechadas = run_cli(revogar_todos())
+        print(f"{fechadas} liberação(ões) revogada(s) por {args.autor}. O sender volta a recusar.")
+        return 0
+
+    async def liberar_todos() -> list[tuple[UUID, Measurement | ReleaseRefusedError]]:
+        saida: list[tuple[UUID, Measurement | ReleaseRefusedError]] = []
+        for context in await active_tenants(TASK):
+            try:
+                saida.append(
+                    (
+                        context.tenant_id,
+                        await release(
+                            context, start, end, mode=args.modo, author=args.autor, note=args.nota
+                        ),
+                    )
+                )
+            except ReleaseRefusedError as recusa:
+                saida.append((context.tenant_id, recusa))
+        return saida
+
+    codigo = 0
+    for tenant_id, resultado in run_cli(liberar_todos()):
+        if isinstance(resultado, ReleaseRefusedError):
+            print(f"tenant {tenant_id}: ⛔ NÃO liberado — {resultado}")
+            codigo = 1
+            continue
+        print(
+            f"tenant {tenant_id}: ✅ entrega LIBERADA por {args.autor} — "
+            f"{resultado.total.false_positives} falso(s) em {resultado.total.events} "
+            f"({resultado.total.rate:.1f}%)."
+        )
+        print(
+            "  ⚠️  a §3.5 pede duas execuções seguidas abaixo do teto: esta liberação registra "
+            "uma. Se a taxa subir, `liberar --revogar --nota` fecha a porta de novo."
+        )
+    return codigo
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Censo de adjudicação do modo sombra — a verdade de referência do G4."
@@ -579,6 +712,16 @@ def main(argv: list[str] | None = None) -> int:
 
     medir = sub.add_parser("medir", help="taxa de falso positivo, com a cobertura ao lado")
     medir.set_defaults(func=_medir)
+
+    liberar = sub.add_parser(
+        "liberar", help="registra a liberação da entrega de alertas — só com o censo PASSANDO"
+    )
+    liberar.add_argument("--autor", required=True, help="quem libera — vai para released_by")
+    liberar.add_argument("--nota", default=None)
+    liberar.add_argument(
+        "--revogar", action="store_true", help="fecha a liberação vigente (exige --nota)"
+    )
+    liberar.set_defaults(func=_liberar)
 
     args = parser.parse_args(argv)
     return args.func(args)
