@@ -70,7 +70,11 @@ BACKFILL_DAYS = 7
 
 #: Stamped on every `app.detection_run`. It is what makes "this event came from a
 #: version of the engine that had the tolerance bug" answerable.
-ENGINE_VERSION = "deteccao.v1"
+#:
+#: v2 (2026-09-11): the four absence types wait for the shift to close, and the
+#: window is the tenant's day. Every `no_punches` stamped v1 on a day that was
+#: still in progress is a transient of the old engine, not a fact about anyone.
+ENGINE_VERSION = "deteccao.v2"
 
 #: The CLI speaks pt-BR because the operator does; the column speaks the schema.
 MODES = {
