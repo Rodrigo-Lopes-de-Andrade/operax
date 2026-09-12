@@ -1683,15 +1683,17 @@ alguma unidade?"* e a lista some. É o mesmo item já aberto pelo frontend de S1
 
 ### O que o frontend do S5 NÃO fechou
 
-- ⏳ **`frontend/src/lib/database.types.ts` tem `vw_unit_compliance` inserida à
-  mão**, com `Relationships: []`. O bloco saiu do próprio `supabase gen types`
-  (contra produção) e o `Row` é correto — o `tsc` o valida de verdade: coluna
-  inventada no `select` produz nove `TS2339`. Mas uma geração **local** emitiria
-  `unit_compliance_report_unit_id_fkey → vw_unit`, como emite para todas as
-  outras views do arquivo. **Consequência para quem regenerar quando o Docker
-  voltar: o diff correto NÃO é vazio — é essa entrada aparecendo.** Foi feito à
-  mão porque o Docker caiu, e gerar contra produção **regride** o arquivo inteiro
-  (produção só expõe `public`, e todas as `Relationships` viram `[]`).
+- ✅ **`database.types.ts` — pendência FECHADA em 12/09, e a previsão estava
+  certa.** A view entrou à mão com `Relationships: []` enquanto o Docker esteve
+  fora. Com ele de volta, a geração contra o banco do ensaio emitiu exatamente o
+  que o revisor tinha previsto: `unit_compliance_report_unit_id_fkey → vw_unit`.
+  Aplicado.
+  ⚠️ **E a regeneração cheia continua NÃO sendo o caminho**, por dois motivos
+  medidos: contra **produção** todas as `Relationships` do arquivo viram `[]`
+  (produção só expõe `public`, e as FKs para `app` somem); contra o **ensaio** o
+  schema `graphql_public` inteiro desaparece (ele é da plataforma Supabase, não
+  das migrations). Nos dois casos a saída do gerador é o insumo, e o merge é
+  cirúrgico — sobrescrever o arquivo regride.
 - ⏳ **`GET /dp/laudos` é chamada e tem as `rows` descartadas.** É o preço de a
   view ter o consumidor que a autorizou: a lista vem do Caminho 1, e a rota
   responde só `can_write`. Decisão minha, declarada no docstring.

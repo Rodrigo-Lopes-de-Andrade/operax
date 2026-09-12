@@ -251,7 +251,15 @@ export type Database = {
           unit_name: string | null;
           valid_until: string | null;
         };
-        Relationships: [];
+        Relationships: [
+          {
+            foreignKeyName: "unit_compliance_report_unit_id_fkey";
+            columns: ["unit_id"];
+            isOneToOne: false;
+            referencedRelation: "vw_unit";
+            referencedColumns: ["unit_id"];
+          },
+        ];
       };
     };
     Functions: {
