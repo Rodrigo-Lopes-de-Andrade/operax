@@ -215,7 +215,7 @@ andaime que a orquestração exige e que o documento não tinha.
 | S2 — Domínio `banking` | ✅ **aprovada** (05/09) | `dp_banking_domain`, `dp_banking_account` | guardião ✅ · revisor ✅ | 1 |
 | S3 — Ciclo mensal | ✅ **aprovada** (06/09) — **backend e banco; frontend não despachado; reconciliação com o legado ABERTA** | `dp_benefit_cycle`, `dp_leave_category`, `dp_absence_map` | guardião ✅ · revisor ✅ | 2 |
 | S4 — Painel e alertas | ✅ **aprovada** (07/09) — **backend e banco; frontend não despachado; reconciliação dos 9 KPIs ABERTA** | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | guardião ✅ · revisor ✅ | 2 |
-| S5 — Laudos e rubricas | ✅ **aprovada** — backend e banco (08/09), **frontend (12/09)** | `dp_unit_compliance`, `dp_payroll_code_map` | guardião ✅ · revisor ✅ (backend) · revisor ✅ (frontend) | 2 + 3 (frontend) |
+| S5 — Laudos e rubricas | ✅ **aprovada** — backend e banco (08/09), **frontend (12/09)** | `dp_unit_compliance`, `dp_payroll_code_map` | guardião ✅ (backend) · revisor ✅ (backend) · revisor ✅ (frontend) · **guardião ✅ (frontend, 12/09)** | 2 + 3 (frontend) |
 
 Onze slots, um arquivo por slot. ⛔ `dp_banking_domain` e `dp_banking_account`
 são **arquivos separados**: o Postgres proíbe usar o valor novo do enum na mesma
@@ -1697,10 +1697,37 @@ alguma unidade?"* e a lista some. É o mesmo item já aberto pelo frontend de S1
 - ⏳ **`GET /dp/laudos` é chamada e tem as `rows` descartadas.** É o preço de a
   view ter o consumidor que a autorizou: a lista vem do Caminho 1, e a rota
   responde só `can_write`. Decisão minha, declarada no docstring.
-- ⏳ **O par do guardião não foi medido nesta metade** — *supervisor lê os laudos
-  da unidade dele e zero de outra, pela view, como `authenticated`*. A garantia é
-  de banco e foi auditada com o backend do S5 em 08/09; o que falta é a medição
-  do caminho novo, e ela depende do `db-test` voltar.
+- ✅ **O par do guardião foi medido em 12/09, e em DOIS fios.** Com o Docker de
+  volta: `scripts/98_teste_isolamento_tenant.sql:1233-1300` já trazia as oito
+  asserções, verdes — e o desenho delas é melhor que o mínimo, porque o supervisor
+  conta **1 na view e 2 na tabela**. Números diferentes de propósito: é o que
+  separa o recorte da policy do filtro de vigência, e um teste que contasse 1 nos
+  dois lugares não saberia dizer de onde veio o zero. A testemunha está ao lado —
+  *"o DP VÊ os dois laudos de A Norte"* —, então os zeros do supervisor são
+  recorte e não banco vazio.
+  E o guardião estendeu ao fio real: subiu um PostgREST descartável contra
+  `operax_test` e refez o par por HTTP com JWT assinado. Supervisor lê a unidade
+  dele (200), pede outra (`[]`), pede a view sem filtro (só a dele), **forja
+  `tenant_id` do tenant B (`[]`)**, DP vê três, `anon` toma 401. A policy não
+  confia em parâmetro do cliente — medido, não deduzido. E as duas metades da
+  SPEC §4: a view responde 200, a tabela devolve `PGRST106`.
+
+📌 **E a extensão ao fio real não foi zelo: ela cobriu uma cegueira do harness.**
+Em `operax_test`, o stub de `auth.uid()` (`scripts/_baseline.sql:32`) lê **só**
+`request.jwt.claim.sub`. O PostgREST v16 manda `request.jwt.claims`, um JSON.
+Sob o servidor real o stub devolveria NULL e toda policy falharia **fechada** —
+seguro, e por isso a primeira chamada HTTP voltou `[]`. Mas significa que **o
+`98` sozinho não pega regressão no encanamento de claims**: ele prova as policies
+sob uma identidade que não é a que produção injeta. Vale para as 52 asserções de
+isolamento, não só para estas oito.
+
+- ⏳ **`public.vw_unit_compliance` concede os sete verbos a `authenticated`**,
+  apesar de a migration escrever só `grant select` — herança do `pg_default_acl`
+  da plataforma, que pega **9 de 9** views de `public`. Anterior a esta sprint e
+  não introduzido por ela. O guardião mediu a exploração e ela não existe: a view
+  não é atualizável (`pg_relation_is_updatable = 0` nas nove) e os três verbos na
+  tabela batem em `permission denied`. Grant cosmético, não porta — mas entra na
+  mesma varredura que o `delete` conhecido em `app.payroll_event_map`.
 - ⏳ Histórico de laudo, `document_id` e filtro de situação na API seguem fora,
   como no despacho.
 
