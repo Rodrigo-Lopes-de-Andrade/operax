@@ -38,7 +38,11 @@ vi.mock("@/state/session", () => ({
 const shellProps = vi.fn();
 
 vi.mock("@/components/app-shell", () => ({
-  AppShell: (props: { showAdmin: boolean; showAdminWrites: boolean }) => {
+  AppShell: (props: {
+    showAdmin: boolean;
+    showAdminWrites: boolean;
+    showComplianceReports: boolean;
+  }) => {
     shellProps(props);
     return null;
   },
@@ -49,8 +53,9 @@ async function montar(role: string | null) {
 
   render(await DashboardLayout({ children: <p>conteúdo</p> }));
 
-  const { showAdmin, showAdminWrites } = shellProps.mock.calls[0][0];
-  return { showAdmin, showAdminWrites };
+  const { showAdmin, showAdminWrites, showComplianceReports } =
+    shellProps.mock.calls[0][0];
+  return { showAdmin, showAdminWrites, showComplianceReports };
 }
 
 beforeEach(() => {
@@ -61,17 +66,23 @@ beforeEach(() => {
 /**
  * Qual eixo alimenta qual prop — e só isso.
  *
- * A sidebar decide certo a partir das duas props, e isso é de
- * `app-shell.test.tsx`. Quem as escolhe é este arquivo, e trocar uma pela outra
- * deixa aquela suíte inteira verde: ela recebe booleanos, não papéis. O eixo de
- * leitura é `HR_ROLES` e o de escrita é `util.is_admin` — `executive` é a única
- * linha em que os dois discordam, e é por isso que é ele quem responde aqui.
+ * A sidebar decide certo a partir das props, e isso é de `app-shell.test.tsx`.
+ * Quem as escolhe é este arquivo, e trocar uma pela outra deixa aquela suíte
+ * inteira verde: ela recebe booleanos, não papéis.
+ *
+ * São **três** eixos, e cada um tem a linha em que discorda dos outros:
+ * leitura de RH (`HR_ROLES`), escrita (`util.is_admin`) e laudos
+ * (`HR_ROLES + unit_supervisor`). `executive` separa os dois primeiros;
+ * `unit_supervisor` separa o terceiro dos dois — ele é a única linha do produto
+ * que recebe laudos sem receber a área de RH, e sem ele um `showAdmin` fixo
+ * alimentando a prova passaria por aqui.
  */
 describe("o layout escolhe qual eixo alimenta a sidebar", () => {
   it("⛔ `executive` lê a área de RH e não recebe os itens de escrita", async () => {
     expect(await montar("executive")).toEqual({
       showAdmin: true,
       showAdminWrites: false,
+      showComplianceReports: true,
     });
   });
 
@@ -79,6 +90,7 @@ describe("o layout escolhe qual eixo alimenta a sidebar", () => {
     expect(await montar("owner")).toEqual({
       showAdmin: true,
       showAdminWrites: true,
+      showComplianceReports: true,
     });
   });
 
@@ -89,6 +101,18 @@ describe("o layout escolhe qual eixo alimenta a sidebar", () => {
     expect(await montar("personnel")).toEqual({
       showAdmin: true,
       showAdminWrites: true,
+      showComplianceReports: true,
+    });
+  });
+
+  it("⛔ `unit_supervisor` recebe laudos e NÃO recebe a área de RH", async () => {
+    // A linha que separa o terceiro eixo dos outros dois. Enquanto "Laudos"
+    // viveu dentro de `showAdmin`, a única porta do supervisor era digitar a
+    // URL — e nenhum teste caía, porque nenhum olhava para esta prop.
+    expect(await montar("unit_supervisor")).toEqual({
+      showAdmin: false,
+      showAdminWrites: false,
+      showComplianceReports: true,
     });
   });
 
@@ -96,6 +120,7 @@ describe("o layout escolhe qual eixo alimenta a sidebar", () => {
     expect(await montar("accounting")).toEqual({
       showAdmin: false,
       showAdminWrites: false,
+      showComplianceReports: false,
     });
   });
 
@@ -106,6 +131,7 @@ describe("o layout escolhe qual eixo alimenta a sidebar", () => {
     expect(await montar(null)).toEqual({
       showAdmin: false,
       showAdminWrites: false,
+      showComplianceReports: false,
     });
   });
 });

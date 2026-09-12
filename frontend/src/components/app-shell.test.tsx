@@ -2,7 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "@/components/app-shell";
-import { isAdmin, reachesHr } from "@/lib/identity";
+import { isAdmin, reachesComplianceReports, reachesHr } from "@/lib/identity";
 
 // `@/lib/identity` explode num bundle de cliente de propósito; aqui os dois
 // predicados são exercitados fora do Next, e é deles que a sidebar depende.
@@ -33,7 +33,11 @@ vi.mock("@/components/user-badge", () => ({
  */
 function comPapel(role: string) {
   return render(
-    <AppShell showAdmin={reachesHr(role)} showAdminWrites={isAdmin(role)}>
+    <AppShell
+      showAdmin={reachesHr(role)}
+      showAdminWrites={isAdmin(role)}
+      showComplianceReports={reachesComplianceReports(role)}
+    >
       <p>conteúdo</p>
     </AppShell>,
   );
@@ -44,7 +48,7 @@ function administracao() {
 }
 
 describe("a sidebar não oferece porta que não abre", () => {
-  it("`owner` recebe as sete: quatro de leitura e três de escrita", () => {
+  it("`owner` recebe as nove: cinco de leitura e quatro de escrita", () => {
     comPapel("owner");
 
     const admin = administracao();
@@ -52,9 +56,11 @@ describe("a sidebar não oferece porta que não abre", () => {
       "Colaboradores",
       "Importação",
       "Quadro de Postos",
+      "Laudos",
       "Benefícios",
       "Folha",
       "Mapeamento",
+      "Rubricas",
       "Escalas",
     ]) {
       expect(within(admin).getByRole("link", { name: item })).toBeVisible();
@@ -75,11 +81,13 @@ describe("a sidebar não oferece porta que não abre", () => {
     expect(
       within(admin).getByRole("link", { name: "Benefícios" }),
     ).toBeVisible();
+    expect(within(admin).getByRole("link", { name: "Laudos" })).toBeVisible();
 
     expect(within(admin).queryByRole("link", { name: "Folha" })).toBeNull();
     expect(
       within(admin).queryByRole("link", { name: "Mapeamento" }),
     ).toBeNull();
+    expect(within(admin).queryByRole("link", { name: "Rubricas" })).toBeNull();
     expect(within(admin).queryByRole("link", { name: "Escalas" })).toBeNull();
   });
 
@@ -95,6 +103,10 @@ describe("a sidebar não oferece porta que não abre", () => {
     expect(
       within(admin).getByRole("link", { name: "Mapeamento" }),
     ).toBeVisible();
+    // Rubricas também: a página abre para ele, e é a API que responde 403 com
+    // a frase escrita para ele. Esconder o item aqui seria a matriz de
+    // domínios copiada para a sidebar.
+    expect(within(admin).getByRole("link", { name: "Rubricas" })).toBeVisible();
   });
 
   it("⛔ `personnel` está nas DUAS listas — lê a área de RH e escreve nela", () => {
@@ -114,6 +126,48 @@ describe("a sidebar não oferece porta que não abre", () => {
     ).toBeVisible();
     expect(within(admin).getByRole("link", { name: "Escalas" })).toBeVisible();
   });
+
+  it("✅ `unit_supervisor` tem Laudos, e só Laudos", () => {
+    // A porta da persona a quem a página foi deliberadamente aberta: a view
+    // recorta por `util.can_see_unit` e a rota não checa domínio, então ele lê
+    // os laudos da unidade dele. Enquanto o item viveu dentro de `showAdmin`
+    // (= `reachesHr`, que não o inclui), a única porta era digitar a URL.
+    comPapel("unit_supervisor");
+
+    const admin = administracao();
+    expect(within(admin).getByRole("link", { name: "Laudos" })).toBeVisible();
+
+    // ⛔ E nada além disso: ele não alcança a área de RH.
+    for (const item of [
+      "Colaboradores",
+      "Importação",
+      "Quadro de Postos",
+      "Benefícios",
+      "Folha",
+      "Mapeamento",
+      "Rubricas",
+      "Escalas",
+    ]) {
+      expect(within(admin).queryByRole("link", { name: item })).toBeNull();
+    }
+  });
+
+  it.each(["regional_manager", "operations_manager"])(
+    "✅ `%s` também tem Laudos, e só Laudos",
+    (papel) => {
+      // Os outros dois papéis de operação de unidade. `util.can_see_unit` os
+      // libera pela linha de `app.user_scope`, igual ao supervisor — deixá-los
+      // de fora repetiria calado o mesmo defeito: porta aberta pelo banco e
+      // nenhum link para ela.
+      comPapel(papel);
+
+      const admin = administracao();
+      expect(within(admin).getByRole("link", { name: "Laudos" })).toBeVisible();
+      expect(
+        within(admin).queryByRole("link", { name: "Colaboradores" }),
+      ).toBeNull();
+    },
+  );
 
   it("⛔ `accounting` não tem bloco Administração, e o Painel de DP é a porta dele", () => {
     // Ele confere a remessa: tem `compensation` e `banking`, e não está em

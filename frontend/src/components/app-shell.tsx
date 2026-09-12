@@ -11,7 +11,13 @@ import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
 import { MAPEAMENTO_PATH, ROTACOES_PATH } from "@/lib/curadoria/url";
-import { BENEFICIOS_PATH, PAINEL_PATH, POSTOS_PATH } from "@/lib/dp/url";
+import {
+  BENEFICIOS_PATH,
+  LAUDOS_PATH,
+  PAINEL_PATH,
+  POSTOS_PATH,
+  RUBRICAS_PATH,
+} from "@/lib/dp/url";
 import { FOLHA_PATH } from "@/lib/folha/url";
 import { COLABORADORES_PATH, IMPORTACAO_PATH } from "@/lib/rh/url";
 import { TV_PATH } from "@/lib/tv/url";
@@ -36,6 +42,7 @@ export function AppShell({
   children,
   showAdmin = false,
   showAdminWrites = false,
+  showComplianceReports = false,
 }: {
   children: ReactNode;
   showAdmin?: boolean;
@@ -54,6 +61,17 @@ export function AppShell({
    * resposta foi sim.
    */
   showAdminWrites?: boolean;
+  /**
+   * Laudos, e só ele — o eixo desta tela não é a área de RH.
+   *
+   * A view recorta por `util.can_see_unit` e a rota não checa domínio: o
+   * supervisor de unidade lê os laudos da unidade dele. Ele não está em
+   * `HR_ROLES`, então herdar `showAdmin` deixava a persona a que a página foi
+   * aberta sem porta nenhuma — só URL digitada. Aqui a condição é própria
+   * (`reachesComplianceReports`), e por isso o bloco Administração pode existir
+   * com este item sozinho.
+   */
+  showComplianceReports?: boolean;
 }) {
   return (
     <div className="bg-canvas flex min-h-dvh">
@@ -102,7 +120,7 @@ export function AppShell({
           <NavLink href={PAINEL_PATH} label="Painel de DP" />
         </nav>
 
-        {showAdmin ? (
+        {showAdmin || showComplianceReports ? (
           <nav
             aria-label="Administração"
             className="flex flex-col gap-1 px-4 py-2"
@@ -110,14 +128,29 @@ export function AppShell({
             <p className="text-2xs px-3 py-2 font-bold tracking-[0.08em] text-white/80 uppercase">
               Administração
             </p>
-            <NavLink href={COLABORADORES_PATH} label="Colaboradores" />
-            <NavLink href={IMPORTACAO_PATH} label="Importação" />
-            <NavLink href={POSTOS_PATH} label="Quadro de Postos" />
-            <NavLink href={BENEFICIOS_PATH} label="Benefícios" />
+            {showAdmin ? (
+              <>
+                <NavLink href={COLABORADORES_PATH} label="Colaboradores" />
+                <NavLink href={IMPORTACAO_PATH} label="Importação" />
+                <NavLink href={POSTOS_PATH} label="Quadro de Postos" />
+              </>
+            ) : null}
+            {/*
+              A condição é própria: `unit_supervisor` não está em `HR_ROLES` e
+              esta é a tela dele. O bloco existe para ele com um item só, e é
+              melhor do que um bloco a mais na navegação de quem não abre nada.
+            */}
+            {showComplianceReports ? (
+              <NavLink href={LAUDOS_PATH} label="Laudos" />
+            ) : null}
+            {showAdmin ? (
+              <NavLink href={BENEFICIOS_PATH} label="Benefícios" />
+            ) : null}
             {showAdminWrites ? (
               <>
                 <NavLink href={FOLHA_PATH} label="Folha" />
                 <NavLink href={MAPEAMENTO_PATH} label="Mapeamento" />
+                <NavLink href={RUBRICAS_PATH} label="Rubricas" />
                 <NavLink href={ROTACOES_PATH} label="Escalas" />
               </>
             ) : null}

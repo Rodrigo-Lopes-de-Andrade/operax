@@ -13,6 +13,8 @@ import { ADMIN_PATH } from "@/lib/rh/url";
 
 export const POSTOS_PATH = `${ADMIN_PATH}/postos`;
 export const BENEFICIOS_PATH = `${ADMIN_PATH}/beneficios`;
+export const LAUDOS_PATH = `${ADMIN_PATH}/laudos`;
+export const RUBRICAS_PATH = `${ADMIN_PATH}/rubricas`;
 export const CICLO_PATH = "/dashboard/dp/ciclos";
 export const PAINEL_PATH = "/dashboard/dp/painel";
 
@@ -51,6 +53,70 @@ export function postosHref(filters: PostosFilters): string {
 
 /** A query que `GET /dp/postos` espera, montada do mesmo recorte. */
 export function postosQuery(filters: PostosFilters): string {
+  return filters.unitId ? `unidade=${encodeURIComponent(filters.unitId)}` : "";
+}
+
+/**
+ * As três situações de um laudo, derivadas de `days_to_expiry` na tela.
+ *
+ * ⛔ Nem a view nem a rota filtram por situação, e a ausência é o desenho:
+ * "a vencer" precisa de uma janela que o schema não tem para laudo, e ela é
+ * declarada na UI — `DUE_SOON_DAYS` em `lib/rh/labels.ts`. Por isso `situacao`
+ * fica na URL e é aplicada na tela, sobre as linhas que a leitura devolveu.
+ */
+export const REPORT_STATUSES = ["vencido", "a_vencer", "em_dia"] as const;
+export type ReportStatus = (typeof REPORT_STATUSES)[number];
+
+export const REPORT_STATUS_LABEL: Record<ReportStatus, string> = {
+  vencido: "Vencido",
+  a_vencer: "A vencer",
+  em_dia: "Em dia",
+};
+
+/**
+ * Recorte dos laudos: a unidade e a situação.
+ *
+ * A unidade viaja para **dois** consumidores e tem de dizer a mesma coisa aos
+ * dois: o `.eq("unit_id", …)` da consulta a `public.vw_unit_compliance`, que é
+ * de onde a lista sai, e a query da rota que responde `can_write`. A situação
+ * não viaja para lugar nenhum — ela é aplicada sobre as linhas já lidas,
+ * porque nem a view nem a rota têm coluna de situação, de propósito.
+ */
+export type LaudosFilters = {
+  unitId: string | null;
+  status: ReportStatus | null;
+};
+
+export function parseLaudosFilters(params: RawSearchParams): LaudosFilters {
+  const unit = first(params.un);
+  const status = first(params.situacao);
+
+  // Lixo nos dois vira "todas", como no Quadro de Postos: o link velho abre a
+  // tela, não uma exceção.
+  return {
+    unitId: unit && UUID.test(unit) ? unit : null,
+    status: (REPORT_STATUSES as readonly string[]).includes(status ?? "")
+      ? (status as ReportStatus)
+      : null,
+  };
+}
+
+export function laudosHref(
+  filters: LaudosFilters,
+  overrides: Partial<LaudosFilters> = {},
+): string {
+  const next = { ...filters, ...overrides };
+  const query = new URLSearchParams();
+
+  if (next.unitId) query.set("un", next.unitId);
+  if (next.status) query.set("situacao", next.status);
+
+  const search = query.toString();
+  return search ? `${LAUDOS_PATH}?${search}` : LAUDOS_PATH;
+}
+
+/** A query de `GET /dp/laudos`: só a unidade. A situação não viaja — ver acima. */
+export function laudosQuery(filters: LaudosFilters): string {
   return filters.unitId ? `unidade=${encodeURIComponent(filters.unitId)}` : "";
 }
 

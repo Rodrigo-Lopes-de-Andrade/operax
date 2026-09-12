@@ -238,6 +238,21 @@ export type Database = {
         };
         Relationships: [];
       };
+      vw_unit_compliance: {
+        Row: {
+          created_at: string | null;
+          days_to_expiry: number | null;
+          notes: string | null;
+          renewal_count: number | null;
+          report_id: string | null;
+          tenant_id: string | null;
+          type: string | null;
+          unit_id: string | null;
+          unit_name: string | null;
+          valid_until: string | null;
+        };
+        Relationships: [];
+      };
     };
     Functions: {
       fn_data_freshness: {

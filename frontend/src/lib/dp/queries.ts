@@ -7,24 +7,34 @@ import type { Database } from "@/lib/database.types";
 import {
   catalogQuery,
   cyclesQuery,
+  laudosQuery,
   panelQuery,
   postosQuery,
   type CatalogFilters,
   type CycleFilters,
   type CycleKind,
+  type LaudosFilters,
   type PanelFilters,
   type PostosFilters,
 } from "@/lib/dp/url";
 import { getServerSupabase } from "@/lib/supabase-server";
 
 /**
- * Caminho 2, e não poderia ser outro.
+ * Caminho 2 quase sempre, e a exceção está nomeada.
  *
- * Nenhuma das tabelas desta etapa concede leitura a `authenticated`, então não
+ * Quase nenhuma tabela desta etapa concede leitura a `authenticated`, então não
  * existe view em `public` para o navegador ler direto: o Quadro de Postos e o
  * catálogo de preços vêm do FastAPI, que pergunta papel e domínio ao banco a
- * cada chamada. O que o painel lê pelo caminho 1 aqui é só a lista de unidades
- * do seletor, que é `vw_unit`.
+ * cada chamada. O que o painel lê pelo caminho 1 é a lista de unidades do
+ * seletor (`vw_unit`) e os oito contadores de alerta (`fn_dp_alerts`).
+ *
+ * ⚠️ `app.unit_compliance_report` É A EXCEÇÃO DO S5, E ELA É DELIBERADA
+ * A migration `20260907182520_dp_unit_compliance.sql` concede `select` nela a
+ * `authenticated` porque `public.vw_unit_compliance` é `security_invoker` e
+ * sem o grant devolveria `permission denied` — e a concede **para esta tela**,
+ * pelo Caminho 1, autorizada pelo dono em 07/09/2026. Laudo é documento da
+ * unidade: não há pessoa, não há valor e não há domínio sensível. Ver
+ * `loadComplianceReports`.
  */
 
 export type WorkPostRow = {
@@ -173,6 +183,70 @@ export type CycleListResult =
   | { status: "forbidden" }
   | { status: "unavailable" };
 
+/**
+ * Um laudo VIGENTE da unidade.
+ *
+ * ⛔ Não há campo de situação, e a ausência é do contrato (`ComplianceReportRow`):
+ * EM DIA / A VENCER / VENCIDO se derivam de `days_to_expiry` com o limiar que a
+ * UI já declara em `lib/rh/labels.ts` (`dueTone`). `days_to_expiry` é negativo
+ * quando venceu; `renewal_count` é quantas vezes esta cadeia já foi renovada.
+ */
+export type ComplianceReportRow = {
+  id: string;
+  unit_id: string;
+  unit_name: string;
+  type: string;
+  valid_until: string;
+  days_to_expiry: number;
+  renewal_count: number;
+  notes: string | null;
+  created_at: string;
+};
+
+/** `can_write` é cortesia do backend para esconder Renovar — não é fronteira. */
+export type ComplianceReportList = {
+  rows: ComplianceReportRow[];
+  can_write: boolean;
+};
+
+/**
+ * Um código do plano de contas do cliente e o que a curadoria já disse dele.
+ *
+ * `category` nula = conhecido e ainda não classificado — o estado em que a
+ * semente entrega a lista. `validated` é `validated_at is not null`, e não uma
+ * coluna. `in_payroll` distingue o código que a folha usa daquele que alguém
+ * curou e a folha não usa mais: o segundo não conta como pendência.
+ */
+export type PayrollCodeRow = {
+  code: string;
+  label: string | null;
+  nature: string | null;
+  category: string | null;
+  validated: boolean;
+  validated_at: string | null;
+  in_payroll: boolean;
+};
+
+/**
+ * `pending` conta **códigos que a folha usa e ninguém classificou** — o número
+ * que diz se algum indicador financeiro está incompleto. Vem da mesma função
+ * que entrega categoria a quem soma; a tela não o recalcula.
+ */
+export type PayrollCodeList = {
+  rows: PayrollCodeRow[];
+  pending: number;
+  can_write: boolean;
+};
+
+/**
+ * `forbidden` carrega o `detail` da API de propósito: `hr` é admin, passa a
+ * porta da página, e recebe 403 porque não tem `compensation` — e a frase que
+ * explica isso é escrita no backend para o usuário ler.
+ */
+export type PayrollCodesResult =
+  | { status: "ok"; list: PayrollCodeList }
+  | { status: "forbidden"; detail: string | null };
+
 async function accessToken(): Promise<string | null> {
   const supabase = await getServerSupabase();
   const { data } = await supabase.auth.getSession();
@@ -206,6 +280,152 @@ export async function loadWorkPosts(
     }
 
     throw error;
+  }
+}
+
+/** As colunas da view, na ordem em que a linha da tabela as mostra. */
+const COMPLIANCE_COLUMNS =
+  "report_id, unit_id, unit_name, type, valid_until, days_to_expiry, renewal_count, notes, created_at";
+
+/**
+ * A lista pelo Caminho 1 — a leitura que a migration autorizou.
+ *
+ * O recorte de unidade vai na consulta, e não numa filtragem depois: a policy
+ * já recortou por escopo, e trazer o resto para descartar aqui seria ler o que
+ * a tela não mostra. A ordem é a mesma da rota (`unit_name, type`), para que as
+ * duas leituras da mesma view não discordem na ordem das linhas.
+ *
+ * O `| null` de cada coluna é artefato do gerador de tipos para view; na tabela
+ * elas são `not null`. Os defaults seguem o que `toOccurrence` já faz com
+ * `vw_deviation_event`.
+ */
+async function readComplianceView(
+  supabase: SupabaseClient<Database>,
+  filters: LaudosFilters,
+): Promise<ComplianceReportRow[] | null> {
+  let query = supabase
+    .from("vw_unit_compliance")
+    .select(COMPLIANCE_COLUMNS)
+    .order("unit_name")
+    .order("type");
+
+  if (filters.unitId) {
+    query = query.eq("unit_id", filters.unitId);
+  }
+
+  const { data, error } = await query;
+
+  if (error || !data) {
+    return null;
+  }
+
+  return data.map((row) => ({
+    id: row.report_id ?? "",
+    unit_id: row.unit_id ?? "",
+    unit_name: row.unit_name ?? "",
+    type: row.type ?? "",
+    valid_until: row.valid_until ?? "",
+    days_to_expiry: row.days_to_expiry ?? 0,
+    renewal_count: row.renewal_count ?? 0,
+    notes: row.notes,
+    created_at: row.created_at ?? "",
+  }));
+}
+
+/**
+ * A única coisa que a rota responde para esta tela: se quem pergunta escreve.
+ *
+ * Falha nenhuma daqui derruba a tela. `can_write` é cortesia para esconder
+ * Renovar, e **ausência vale "não pode"** — a API revalida `util.is_admin` em
+ * todo `POST`, então esconder o botão por não ter conseguido perguntar não
+ * fecha porta nenhuma que estivesse aberta.
+ */
+async function readComplianceWrite(filters: LaudosFilters): Promise<boolean> {
+  const token = await accessToken();
+
+  if (!token) {
+    return false;
+  }
+
+  const query = laudosQuery(filters);
+
+  try {
+    const list = await requestApi<ComplianceReportList>(
+      query ? `/dp/laudos?${query}` : "/dp/laudos",
+      { accessToken: token },
+    );
+
+    return list.can_write === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Os laudos vigentes das unidades que quem pergunta enxerga: a lista da view,
+ * o `can_write` da rota, as duas em paralelo.
+ *
+ * ⛔ A LISTA VEM DA VIEW, E É A MIGRATION QUE MANDA
+ * `20260907182520_dp_unit_compliance.sql` escreve, na seção da superfície
+ * pública: "a tela de Unidades e o link filtrado leem daqui; a rota
+ * `/dp/laudos` serve o retorno de `POST`/`renovar` e o `can_write`" — Caminho
+ * 1, autorizado pelo dono em 07/09/2026. Ler a lista pela rota deixaria
+ * `public.vw_unit_compliance` com um grant a `authenticated` vivo e nenhum
+ * consumidor no repositório: superfície sem dono.
+ *
+ * ⚠️ O QUE ISSO CUSTA, E A DECISÃO É DO DONO, NÃO DESTA CAMADA
+ * `GET /dp/laudos` devolve `rows` que esta função **descarta**: a chamada existe
+ * pelo `can_write`. É o preço de a view ter o consumidor que a autorizou. O
+ * recorte não diverge — a rota lê a mesma view, com o mesmo filtro de unidade.
+ *
+ * Sem porta por papel: a policy recorta por `util.can_see_unit`, e o supervisor
+ * de unidade recebe os laudos da unidade dele — persona nomeada no PRD.
+ *
+ * Null é "a lista não foi lida", e só a view o produz: sessão sem
+ * `authenticated`, view ausente no ambiente, banco fora. A rota que não responde
+ * não é isso — ver `readComplianceWrite`.
+ */
+export async function loadComplianceReports(
+  supabase: SupabaseClient<Database>,
+  filters: LaudosFilters,
+): Promise<ComplianceReportList | null> {
+  const [rows, canWrite] = await Promise.all([
+    readComplianceView(supabase, filters),
+    readComplianceWrite(filters),
+  ]);
+
+  return rows === null ? null : { rows, can_write: canWrite };
+}
+
+/**
+ * O plano de contas com a curadoria — e o 403 aqui NÃO é o mesmo estado que o
+ * 401.
+ *
+ * A rota exige `compensation` **e** administração. `hr` é admin sem
+ * `compensation`: passa a porta da página (`isAdmin`) e é recusado pela API com
+ * uma frase escrita para ele. Devolvê-la é o que faz a tela concordar com o
+ * backend em vez de mostrar "não pôde ser lido" para uma recusa deliberada.
+ * Sessão ausente, 401 e a API fora do ar viram null: nada foi lido.
+ */
+export async function loadPayrollCodes(): Promise<PayrollCodesResult | null> {
+  const token = await accessToken();
+
+  if (!token) {
+    return null;
+  }
+
+  try {
+    const list = await requestApi<PayrollCodeList>("/dp/rubricas", {
+      accessToken: token,
+    });
+
+    return { status: "ok", list };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 403) {
+      return { status: "forbidden", detail: error.detail };
+    }
+
+    return null;
   }
 }
 

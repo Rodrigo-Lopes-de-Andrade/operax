@@ -3,7 +3,12 @@ import { redirect } from "next/navigation";
 import type { ReactNode } from "react";
 
 import { AppShell } from "@/components/app-shell";
-import { isAdmin, loadIdentity, reachesHr } from "@/lib/identity";
+import {
+  isAdmin,
+  loadIdentity,
+  reachesComplianceReports,
+  reachesHr,
+} from "@/lib/identity";
 import { LOGIN_PATH, PATHNAME_HEADER, safeNextPath } from "@/lib/navigation";
 import { getCurrentUser } from "@/lib/supabase-server";
 import { SessionProvider } from "@/state/session";
@@ -38,6 +43,7 @@ export default async function DashboardLayout({
       <AppShell
         showAdmin={reachesHr(identity?.role)}
         showAdminWrites={isAdmin(identity?.role)}
+        showComplianceReports={reachesComplianceReports(identity?.role)}
       >
         {children}
       </AppShell>

@@ -215,7 +215,7 @@ andaime que a orquestração exige e que o documento não tinha.
 | S2 — Domínio `banking` | ✅ **aprovada** (05/09) | `dp_banking_domain`, `dp_banking_account` | guardião ✅ · revisor ✅ | 1 |
 | S3 — Ciclo mensal | ✅ **aprovada** (06/09) — **backend e banco; frontend não despachado; reconciliação com o legado ABERTA** | `dp_benefit_cycle`, `dp_leave_category`, `dp_absence_map` | guardião ✅ · revisor ✅ | 2 |
 | S4 — Painel e alertas | ✅ **aprovada** (07/09) — **backend e banco; frontend não despachado; reconciliação dos 9 KPIs ABERTA** | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | guardião ✅ · revisor ✅ | 2 |
-| S5 — Laudos e rubricas | ✅ **aprovada** (08/09) — **backend e banco; frontend não despachado** | `dp_unit_compliance`, `dp_payroll_code_map` | guardião ✅ · revisor ✅ | 2 |
+| S5 — Laudos e rubricas | ✅ **aprovada** — backend e banco (08/09), **frontend (12/09)** | `dp_unit_compliance`, `dp_payroll_code_map` | guardião ✅ · revisor ✅ (backend) · revisor ✅ (frontend) | 2 + 3 (frontend) |
 
 Onze slots, um arquivo por slot. ⛔ `dp_banking_domain` e `dp_banking_account`
 são **arquivos separados**: o Postgres proíbe usar o valor novo do enum na mesma
@@ -1613,6 +1613,94 @@ dito não era o que se queria.** Nenhuma foi erro de quem implementa ou mede.
 - ⏳ Três `delete` de limpeza **inicial** nas provas vivas não sustentam nada — o
   `raise` já reverte o bloco. Ficam por consistência do argumento que removeu os
   outros 17.
+
+## O frontend do S5 — a tela que o backend tinha construído e ninguém consumia
+
+**Ciclo 1: REPROVADO** (1 ALTO, 2 MÉDIO, 3 BAIXO). **Ciclo 2: REPROVADO**
+(2 MÉDIO, 3 BAIXO). **Ciclo 3: APROVADO.** Portões medidos por mim, não
+relatados: `vitest` **638** (baseline 545 — +4 arquivos, +93 testes), `pytest`
+639, `prettier --check .` limpo, `tsc --noEmit` exit 0, `ruff` limpo.
+
+⛔ **`make db-test` não rodou, e o motivo não é a sprint.** O Docker desta
+máquina parou em 12/09 (engine responde 500, integração WSL desligada), e com
+ele caem `98`, `99`, o dicionário e o `verificar_docs.py`. `git status` não tem
+uma entrada sob `supabase/`: esta metade não tocou migration, policy, view nem
+grant. Fica **pendente**, não aprovado.
+
+### 🔴 O ALTO era do despacho, não de quem implementou
+
+A migration `dp_unit_compliance` diz, na seção autorizada pelo dono em 07/09:
+*"A tela de Unidades e o link filtrado **leem daqui**; a rota `/dp/laudos` serve
+o retorno de `POST`/`renovar` e o `can_write`"*. E concede `select` em
+`app.unit_compliance_report` a `authenticated` **só** por causa dessa tela. Meu
+despacho mandou ler tudo pela rota e pôs `public.vw_unit_compliance` fora de
+escopo: a view ficou **sem consumidor nenhum**, e o grant a `authenticated`
+sobrou vivo sem dono.
+
+Não era vazamento — a rota lê a mesma view e o recorte é idêntico. Era
+superfície sem dono, decidida em silêncio contra duas declarações escritas.
+
+📌 **E a premissa que sustentava o erro estava no código, em prosa:** o docstring
+de `lib/dp/queries.ts` justificava o Caminho 2 dizendo que *"nenhuma das tabelas
+desta etapa concede leitura a `authenticated`"* — **falso desde o S5**. É a
+terceira aparição da mesma forma nesta etapa: o comentário que virou mentira e
+levou o desenho junto. Corrigido; a lista sai da view, `can_write` da rota.
+
+### O que as três revisões acharam, e o padrão que elas desenham
+
+Os três ciclos acharam **o mesmo tipo de defeito em camadas diferentes**: uma
+garantia escrita que nada segurava.
+
+1. **Ciclo 1** — a premissa em prosa (acima) e o 500 sem teste: mutar
+   `loadComplianceReports` para engolir qualquer erro deixava **617/617 verdes**.
+2. **Ciclo 2** — a correção da porta do supervisor podia ser **desfeita** com
+   **632/632 verdes**: `layout.test.tsx`, cujo trabalho é exatamente prender qual
+   eixo alimenta qual prop, não olhava para a prop nova. E a suíte não fixava
+   `TZ`: nesta máquina, em São Paulo, um formatador que **esquecesse** o fuso do
+   tenant passava verde — morre só sob `TZ=UTC`, que agora é o do `vitest.config`.
+3. **Ciclo 3** — nada novo do mesmo tipo. 14 mutações do revisor, 14 mortas.
+
+📌 **A lição, e ela não é sobre laudos:** *asserção que não existe é indistinguível
+de asserção que passa*. As duas sobreviventes do ciclo 2 estavam em arquivos que
+se descrevem como a prova daquilo — o teste da fiação e o do fuso. O arquivo
+certo existia; a linha não.
+
+### A decisão de papéis, fechada e não omitida
+
+A sidebar oferece Laudos por `COMPLIANCE_REPORT_ROLES` = `HR_ROLES` +
+`unit_supervisor` + `regional_manager` + `operations_manager`.
+
+⛔ **A lista é um PROXY, e está escrito no código que é.** `util.can_see_unit`
+libera por papel para `{owner, executive, hr, personnel}` **ou** por existir linha
+em `app.user_scope` — que qualquer papel pode ter. `/me` devolve papel, não
+escopo, então a barra lateral não consegue fazer a pergunta certa. Os três papéis
+de operação de unidade entram juntos porque deixar dois de fora repetiria, calado,
+o defeito que o terceiro acabou de ter. `accounting` (a porta dele é o Painel de
+DP) e `viewer` ficam fora **com teste que prende a ausência**.
+
+⏳ Quando `/me` devolver o escopo resolvido, a pergunta vira *"esta pessoa alcança
+alguma unidade?"* e a lista some. É o mesmo item já aberto pelo frontend de S1/S3/S4.
+
+### O que o frontend do S5 NÃO fechou
+
+- ⏳ **`frontend/src/lib/database.types.ts` tem `vw_unit_compliance` inserida à
+  mão**, com `Relationships: []`. O bloco saiu do próprio `supabase gen types`
+  (contra produção) e o `Row` é correto — o `tsc` o valida de verdade: coluna
+  inventada no `select` produz nove `TS2339`. Mas uma geração **local** emitiria
+  `unit_compliance_report_unit_id_fkey → vw_unit`, como emite para todas as
+  outras views do arquivo. **Consequência para quem regenerar quando o Docker
+  voltar: o diff correto NÃO é vazio — é essa entrada aparecendo.** Foi feito à
+  mão porque o Docker caiu, e gerar contra produção **regride** o arquivo inteiro
+  (produção só expõe `public`, e todas as `Relationships` viram `[]`).
+- ⏳ **`GET /dp/laudos` é chamada e tem as `rows` descartadas.** É o preço de a
+  view ter o consumidor que a autorizou: a lista vem do Caminho 1, e a rota
+  responde só `can_write`. Decisão minha, declarada no docstring.
+- ⏳ **O par do guardião não foi medido nesta metade** — *supervisor lê os laudos
+  da unidade dele e zero de outra, pela view, como `authenticated`*. A garantia é
+  de banco e foi auditada com o backend do S5 em 08/09; o que falta é a medição
+  do caminho novo, e ela depende do `db-test` voltar.
+- ⏳ Histórico de laudo, `document_id` e filtro de situação na API seguem fora,
+  como no despacho.
 
 ## Itens próprios abertos pelo S1 — fora do escopo de qualquer sprint desta etapa
 

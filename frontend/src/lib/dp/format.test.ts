@@ -3,7 +3,11 @@ import { describe, expect, it } from "vitest";
 import {
   formatCents,
   formatCurrency,
+  formatDayInTenantZone,
   formatPercent,
+  PAYROLL_CATEGORIES,
+  PAYROLL_CATEGORY_LABEL,
+  PAYROLL_NATURE_LABEL,
   share,
   toCents,
 } from "@/lib/dp/format";
@@ -49,5 +53,51 @@ describe("proporção", () => {
   it("fatia de uma folha zerada não existe — não é 0%", () => {
     expect(share(0, 0)).toBeNull();
     expect(share(2500, 10000)).toBe(25);
+  });
+});
+
+describe("rótulos da curadoria de rubrica", () => {
+  it("são as nove categorias do `check` da migration 30, na ordem do select", () => {
+    expect(PAYROLL_CATEGORIES).toEqual([
+      "base_salary",
+      "overtime",
+      "vacation",
+      "thirteenth",
+      "termination",
+      "benefit",
+      "charge",
+      "deduction",
+      "other",
+    ]);
+    expect(PAYROLL_CATEGORY_LABEL.overtime).toBe("Horas adicionais");
+    expect(PAYROLL_CATEGORY_LABEL.thirteenth).toBe("13º salário");
+  });
+
+  it("⛔ nenhum rótulo de UI diz 'hora extra'", () => {
+    // O registro oficial é o sistema de ponto, e o OperaX aponta indício —
+    // vocabulário de produto do CLAUDE.md. `overtime` é a verba da folha, e o
+    // nome dela na tela não pode ser um veredito sobre a jornada.
+    for (const rotulo of [
+      ...Object.values(PAYROLL_CATEGORY_LABEL),
+      ...Object.values(PAYROLL_NATURE_LABEL),
+    ]) {
+      expect(rotulo.toLowerCase()).not.toMatch(/hora\s*extra/);
+    }
+  });
+});
+
+describe("o dia de um timestamptz", () => {
+  it("⛔ o aval das 21h30 é do dia 8, e não do 9 — o fuso é o do tenant", () => {
+    // `2026-09-09T00:30:00Z` é 08/09 às 21h30 em Brasília. Cortar a string ISO
+    // nos dez primeiros caracteres mostraria 09/09 para quem clicou no dia 8, e
+    // a curadoria passaria a ter a data errada toda noite.
+    expect(formatDayInTenantZone("2026-09-09T00:30:00Z")).toBe("08/09/2026");
+    expect(formatDayInTenantZone("2026-09-08T14:30:00Z")).toBe("08/09/2026");
+  });
+
+  it("sem valor é travessão, e valor inválido também", () => {
+    expect(formatDayInTenantZone(null)).toBe("—");
+    expect(formatDayInTenantZone("")).toBe("—");
+    expect(formatDayInTenantZone("nunca")).toBe("—");
   });
 });

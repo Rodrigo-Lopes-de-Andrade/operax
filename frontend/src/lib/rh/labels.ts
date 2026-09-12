@@ -155,11 +155,17 @@ export function dueLabel(days: number): string {
   return `vence em ${days} ${days === 1 ? "dia" : "dias"}`;
 }
 
+/**
+ * A janela de "a vencer", declarada UMA vez — e quem a explica ao usuário lê
+ * daqui, nunca escreve o número de novo. Ver `dueTone`.
+ */
+export const DUE_SOON_DAYS = 30;
+
 /** Vencido é falha; vencendo é alerta; o resto é apenas informação. */
 export function dueTone(days: number): "bad" | "alert" | "neutral" {
   if (days < 0) {
     return "bad";
   }
 
-  return days <= 30 ? "alert" : "neutral";
+  return days <= DUE_SOON_DAYS ? "alert" : "neutral";
 }

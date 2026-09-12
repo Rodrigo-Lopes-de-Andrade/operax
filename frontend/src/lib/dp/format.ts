@@ -1,4 +1,5 @@
 import { MESES } from "@/lib/folha/url";
+import { TENANT_TIME_ZONE } from "@/lib/ponto/filters";
 
 /**
  * Os dois formatos que as telas de DP mostram: dinheiro e competência.
@@ -34,6 +35,34 @@ export function formatDate(value: string | null | undefined): string {
 
   const [year, month, day] = value.split("-");
   return `${day}/${month}/${year}`;
+}
+
+const DAY_IN_TENANT_ZONE = new Intl.DateTimeFormat("pt-BR", {
+  day: "2-digit",
+  month: "2-digit",
+  year: "numeric",
+  timeZone: TENANT_TIME_ZONE,
+});
+
+/**
+ * O DIA de um `timestamptz`, no fuso do tenant — e não o dia em UTC.
+ *
+ * Um aval dado às 21h30 em Brasília é `00h30` do dia seguinte em UTC: cortar a
+ * string ISO nos dez primeiros caracteres mostraria a data errada para tudo que
+ * acontece depois das 21h. O fuso é fixo, como em `formatClock`, e não o do
+ * navegador: o mesmo valor tem de sair igual no servidor e no cliente, senão a
+ * hidratação diverge.
+ */
+export function formatDayInTenantZone(
+  value: string | null | undefined,
+): string {
+  if (!value) {
+    return "—";
+  }
+
+  const at = new Date(value);
+
+  return Number.isNaN(at.getTime()) ? "—" : DAY_IN_TENANT_ZONE.format(at);
 }
 
 /**
@@ -92,3 +121,38 @@ export function formatCents(cents: number): string {
 export function share(part: number, whole: number): number | null {
   return whole === 0 ? null : Math.round((part / whole) * 100);
 }
+
+/**
+ * As nove categorias contábeis de `app.payroll_event_map.category` — o `check`
+ * da migration 30, na ordem em que a curadoria as escolhe.
+ *
+ * ⛔ `overtime` NÃO é "hora extra". O registro oficial é o sistema de ponto, e
+ * o OperaX aponta indício; "horas adicionais" é o nome da verba na folha, não
+ * um veredito sobre a jornada (CLAUDE.md, vocabulário de produto).
+ */
+export const PAYROLL_CATEGORY_LABEL = {
+  base_salary: "Salário base",
+  overtime: "Horas adicionais",
+  vacation: "Férias",
+  thirteenth: "13º salário",
+  termination: "Rescisão",
+  benefit: "Benefício",
+  charge: "Encargo",
+  deduction: "Desconto",
+  other: "Outros",
+} as const satisfies Record<string, string>;
+
+export type PayrollCategory = keyof typeof PAYROLL_CATEGORY_LABEL;
+
+export const PAYROLL_CATEGORIES = Object.keys(
+  PAYROLL_CATEGORY_LABEL,
+) as PayrollCategory[];
+
+/** A natureza P/D/I da folha, como `app.payroll_entry.nature` a guarda. */
+export const PAYROLL_NATURE_LABEL: Record<string, string> = {
+  earning: "Provento",
+  deduction: "Desconto",
+  base: "Base de cálculo",
+  payroll_charge: "Encargo",
+  informational: "Informativo",
+};

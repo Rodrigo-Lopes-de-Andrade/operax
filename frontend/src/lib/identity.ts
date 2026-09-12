@@ -48,6 +48,46 @@ export function isAdmin(role: string | undefined): boolean {
 }
 
 /**
+ * Os papéis a quem a tela de Laudos é oferecida — e ela NÃO é uma tela de RH.
+ *
+ * Laudo é documento da unidade: `public.vw_unit_compliance` recorta por
+ * `util.can_see_unit` e a rota não checa domínio sensível, então o supervisor de
+ * unidade lê os laudos da unidade dele — persona nomeada no PRD ("gestor de
+ * unidade consulta laudos da sua unidade"). Enquanto o item viveu dentro de
+ * `reachesHr`, a única porta dele era digitar a URL.
+ *
+ * ⚠️ O valor é `unit_supervisor`, como o enum `app.user_role` o escreve e como
+ * `/me` o devolve. "supervisor" é o nome da persona nas conversas e não existe
+ * no banco: uma lista com ele deixaria a porta fechada exatamente para quem ela
+ * foi aberta.
+ *
+ * ⛔ **Esta lista é um PROXY, e o eixo real é outro.** `util.can_see_unit`
+ * (migration 04) libera por papel para `{owner, executive, hr, personnel}` **ou**
+ * por existir linha em `app.user_scope` — que qualquer papel pode ter. A sidebar
+ * não sabe disso: `/me` devolve papel, não escopo. Então os três papéis de
+ * operação de unidade entram juntos: deixar `regional_manager` e
+ * `operations_manager` de fora repetiria, calado, o mesmo defeito que
+ * `unit_supervisor` teve — porta aberta pelo banco e nenhum link para ela.
+ *
+ * `accounting` e `viewer` ficam fora de propósito, e não por esquecimento: a
+ * porta da contabilidade é o Painel de DP, e `viewer` é leitura sem área
+ * própria. Os dois têm teste que prende a ausência.
+ *
+ * ⏳ O dia em que `/me` devolver o escopo resolvido, isto vira a pergunta certa
+ * ("esta pessoa alcança alguma unidade?") e a lista some.
+ */
+export const COMPLIANCE_REPORT_ROLES = [
+  ...HR_ROLES,
+  "unit_supervisor",
+  "regional_manager",
+  "operations_manager",
+] as const;
+
+export function reachesComplianceReports(role: string | undefined): boolean {
+  return (COMPLIANCE_REPORT_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
  * Cached per request: the shell asks for it, and so does any page that needs to
  * fail closed on a deep link. `cache` makes that one call, not three.
  */

@@ -4,10 +4,13 @@ import {
   catalogHref,
   catalogQuery,
   cycleHref,
+  laudosHref,
+  laudosQuery,
   parseCatalogFilters,
   panelHref,
   panelQuery,
   parseCycleFilters,
+  parseLaudosFilters,
   parsePanelFilters,
   parsePostosFilters,
   postosHref,
@@ -156,5 +159,57 @@ describe("recorte do painel de DP", () => {
 
     expect(panelQuery(filters)).toBe(`unidade=${UNIT}`);
     expect(panelHref(filters)).not.toContain("em=");
+  });
+});
+
+describe("recorte dos laudos", () => {
+  it("leva a unidade para a query da API e os dois filtros para o link", () => {
+    const filters = parseLaudosFilters({ un: UNIT, situacao: "vencido" });
+
+    expect(filters).toEqual({ unitId: UNIT, status: "vencido" });
+    expect(laudosQuery(filters)).toBe(`unidade=${UNIT}`);
+    expect(laudosHref(filters)).toBe(
+      `/dashboard/administracao/laudos?un=${UNIT}&situacao=vencido`,
+    );
+  });
+
+  it("⛔ a situação NÃO viaja para a API — a rota não filtra por ela de propósito", () => {
+    // "A vencer" precisa de uma janela que o schema não tem para laudo; ela é
+    // declarada na UI e aplicada sobre o que a API devolveu.
+    const filters = parseLaudosFilters({ situacao: "a_vencer" });
+
+    expect(filters).toEqual({ unitId: null, status: "a_vencer" });
+    expect(laudosQuery(filters)).toBe("");
+    expect(laudosHref(filters)).toBe(
+      "/dashboard/administracao/laudos?situacao=a_vencer",
+    );
+  });
+
+  it("situação que não existe cai em 'todas', e a unidade sobrevive", () => {
+    const filters = parseLaudosFilters({ un: UNIT, situacao: "atrasado" });
+
+    expect(filters).toEqual({ unitId: UNIT, status: null });
+    expect(laudosHref(filters)).toBe(
+      `/dashboard/administracao/laudos?un=${UNIT}`,
+    );
+  });
+
+  it("abre em todas as unidades quando o link traz lixo", () => {
+    const filters = parseLaudosFilters({ un: "unidade-que-nao-existe" });
+
+    expect(filters).toEqual({ unitId: null, status: null });
+    expect(laudosQuery(filters)).toBe("");
+    expect(laudosHref(filters)).toBe("/dashboard/administracao/laudos");
+  });
+
+  it("trocar a situação mantém a unidade, e vice-versa", () => {
+    const filters = parseLaudosFilters({ un: UNIT, situacao: "em_dia" });
+
+    expect(laudosHref(filters, { status: "vencido" })).toBe(
+      `/dashboard/administracao/laudos?un=${UNIT}&situacao=vencido`,
+    );
+    expect(laudosHref(filters, { unitId: null })).toBe(
+      "/dashboard/administracao/laudos?situacao=em_dia",
+    );
   });
 });

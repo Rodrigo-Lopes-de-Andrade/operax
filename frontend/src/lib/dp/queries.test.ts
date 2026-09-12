@@ -2,9 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   loadCompanyRollup,
+  loadComplianceReports,
   loadCycles,
   loadDpAlerts,
   loadDpPanel,
+  loadPayrollCodes,
   type CompanyChoice,
 } from "@/lib/dp/queries";
 
@@ -294,6 +296,284 @@ describe("as competências já apuradas — o portão da tela de ciclo", () => {
     getSession.mockResolvedValueOnce({ data: { session: null } });
 
     expect(await loadCycles(SETEMBRO)).toEqual({ status: "forbidden" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("os laudos vigentes — a lista pelo caminho 1, o `can_write` pela rota", () => {
+  const UNIDADE = "11111111-1111-4111-8111-111111111111";
+
+  /** Uma linha como `public.vw_unit_compliance` a devolve: a chave é `report_id`. */
+  const DA_VIEW = {
+    report_id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+    unit_id: UNIDADE,
+    unit_name: "Aeroporto",
+    type: "PCMSO",
+    valid_until: "2026-10-01",
+    days_to_expiry: 20,
+    renewal_count: 1,
+    notes: null,
+    created_at: "2026-09-01T12:00:00Z",
+  };
+
+  /** A linha já traduzida para a tela — `report_id` vira `id`, e nada mais muda. */
+  const NA_TELA = {
+    id: DA_VIEW.report_id,
+    unit_id: UNIDADE,
+    unit_name: "Aeroporto",
+    type: "PCMSO",
+    valid_until: "2026-10-01",
+    days_to_expiry: 20,
+    renewal_count: 1,
+    notes: null,
+    created_at: "2026-09-01T12:00:00Z",
+  };
+
+  /**
+   * O que a ROTA devolve, e que a tela descarta: o `id` aqui é outro de
+   * propósito. Se a lista voltar a sair da rota, as asserções abaixo o veem.
+   */
+  const DA_ROTA = {
+    rows: [{ ...NA_TELA, id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee" }],
+    can_write: true,
+  };
+
+  function view(resposta: { data: unknown; error: unknown }) {
+    const builder = {
+      select: vi.fn(() => builder),
+      order: vi.fn(() => builder),
+      eq: vi.fn(() => builder),
+      then: (ok: (value: unknown) => unknown) => ok(resposta),
+    };
+    const from = vi.fn(() => builder);
+
+    return {
+      client: { from } as unknown as Parameters<
+        typeof loadComplianceReports
+      >[0],
+      from,
+      builder,
+    };
+  }
+
+  it("⛔ a LISTA sai da view, e da rota só se usa `can_write`", async () => {
+    // A migration `20260907182520_dp_unit_compliance.sql` autoriza esta tela a
+    // ler `public.vw_unit_compliance` pelo Caminho 1 — é o único consumidor do
+    // grant a `authenticated`. Trocar a leitura da view pela da rota deixaria o
+    // grant vivo sem dono, e este teste é o que segura isso.
+    fetchMock.mockImplementation(async () => answer(200, DA_ROTA));
+    const { client, from, builder } = view({ data: [DA_VIEW], error: null });
+
+    const result = await loadComplianceReports(client, {
+      unitId: null,
+      status: null,
+    });
+
+    expect(from).toHaveBeenCalledWith("vw_unit_compliance");
+    expect(builder.select).toHaveBeenCalledWith(
+      expect.stringContaining("report_id"),
+    );
+    // A linha é a da view — o `id` da rota não aparece em lugar nenhum.
+    expect(result).toEqual({ rows: [NA_TELA], can_write: true });
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/dp\/laudos$/);
+  });
+
+  it("o recorte de unidade vai NA CONSULTA da view, e o tenant nunca vai", async () => {
+    fetchMock.mockImplementation(async () => answer(200, DA_ROTA));
+    const { client, builder } = view({ data: [DA_VIEW], error: null });
+
+    await loadComplianceReports(client, {
+      unitId: UNIDADE,
+      status: "vencido",
+    });
+
+    expect(builder.eq).toHaveBeenCalledWith("unit_id", UNIDADE);
+    // ⛔ O cliente não manda tenant: a policy não confiaria nele.
+    expect(builder.eq).toHaveBeenCalledTimes(1);
+    // A situação não viaja para lado nenhum — ela é derivada na tela.
+    expect(fetchMock.mock.calls[0][0]).not.toMatch(/situacao|tenant/i);
+    // ⛔ E a ROTA leva o MESMO recorte. O docstring de `loadComplianceReports`
+    // afirma que as duas leituras não divergem; sem esta linha a afirmação
+    // ficava só no comentário, e o comentário que ninguém segura é o que vira
+    // mentira — foi assim que nasceu o achado ALTO do ciclo 1.
+    expect(fetchMock.mock.calls[0][0]).toMatch(
+      new RegExp(`/dp/laudos\\?.*unidade=${UNIDADE}`),
+    );
+  });
+
+  it("sem recorte não há `eq` nenhum nem query vazia na rota", async () => {
+    fetchMock.mockImplementation(async () => answer(200, DA_ROTA));
+    const { client, builder } = view({ data: [], error: null });
+
+    await loadComplianceReports(client, { unitId: null, status: null });
+
+    expect(builder.eq).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/dp\/laudos$/);
+  });
+
+  it("a ordem é a mesma da rota: unidade e depois tipo", async () => {
+    // As duas leituras são da MESMA view; discordar na ordem faria a lista
+    // mudar de forma conforme quem a leu.
+    fetchMock.mockImplementation(async () => answer(200, DA_ROTA));
+    const { client, builder } = view({ data: [DA_VIEW], error: null });
+
+    await loadComplianceReports(client, { unitId: null, status: null });
+
+    expect(builder.order).toHaveBeenCalledTimes(2);
+    expect(builder.order).toHaveBeenNthCalledWith(1, "unit_name");
+    expect(builder.order).toHaveBeenNthCalledWith(2, "type");
+  });
+
+  it("⛔ `can_write` é da rota, e a view não tem como inventá-lo", async () => {
+    fetchMock.mockImplementation(async () =>
+      answer(200, { ...DA_ROTA, can_write: false }),
+    );
+    const { client } = view({ data: [DA_VIEW], error: null });
+
+    const result = await loadComplianceReports(client, {
+      unitId: null,
+      status: null,
+    });
+
+    expect(result).toEqual({ rows: [NA_TELA], can_write: false });
+    expect(fetchMock.mock.calls[0][1].headers.Authorization).toBe(
+      "Bearer token-de-teste",
+    );
+  });
+
+  it("resposta da rota sem a chave vale 'não pode'", async () => {
+    fetchMock.mockImplementation(async () => answer(200, { rows: [] }));
+    const { client } = view({ data: [DA_VIEW], error: null });
+
+    expect(
+      await loadComplianceReports(client, { unitId: null, status: null }),
+    ).toEqual({ rows: [NA_TELA], can_write: false });
+  });
+
+  it("a view que falha é null — não há lista para mostrar", async () => {
+    fetchMock.mockImplementation(async () => answer(200, DA_ROTA));
+    const { client } = view({
+      data: null,
+      error: { message: "permission denied for view vw_unit_compliance" },
+    });
+
+    expect(
+      await loadComplianceReports(client, { unitId: null, status: null }),
+    ).toBeNull();
+  });
+
+  it("⛔ 500 da ROTA não derruba a lista: ela é lida pelo outro caminho", async () => {
+    // O 500 tem lado, e é este: a rota fora do ar tira o botão de escrever e
+    // não a lista, que não depende dela. Relançar aqui mandaria a tela inteira
+    // para o error boundary por causa de um booleano.
+    fetchMock.mockResolvedValue(answer(500, { detail: "boom" }));
+    const { client } = view({ data: [DA_VIEW], error: null });
+
+    expect(
+      await loadComplianceReports(client, { unitId: null, status: null }),
+    ).toEqual({ rows: [NA_TELA], can_write: false });
+  });
+
+  it("401 e 403 da rota também só tiram a escrita", async () => {
+    fetchMock.mockResolvedValueOnce(answer(403, { detail: "…" }));
+    const primeira = view({ data: [DA_VIEW], error: null });
+    expect(
+      await loadComplianceReports(primeira.client, {
+        unitId: null,
+        status: null,
+      }),
+    ).toEqual({ rows: [NA_TELA], can_write: false });
+
+    fetchMock.mockResolvedValueOnce(answer(401, { detail: "…" }));
+    const segunda = view({ data: [DA_VIEW], error: null });
+    expect(
+      await loadComplianceReports(segunda.client, {
+        unitId: null,
+        status: null,
+      }),
+    ).toEqual({ rows: [NA_TELA], can_write: false });
+  });
+
+  it("a rede caída na rota não tira a lista do ar", async () => {
+    fetchMock.mockRejectedValue(new TypeError("fetch failed"));
+    const { client } = view({ data: [DA_VIEW], error: null });
+
+    expect(
+      await loadComplianceReports(client, { unitId: null, status: null }),
+    ).toEqual({ rows: [NA_TELA], can_write: false });
+  });
+
+  it("sem sessão a rota não é chamada, e a view responde pela RLS", async () => {
+    getSession.mockResolvedValueOnce({ data: { session: null } });
+    const { client, from } = view({ data: [], error: null });
+
+    expect(
+      await loadComplianceReports(client, { unitId: null, status: null }),
+    ).toEqual({ rows: [], can_write: false });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(from).toHaveBeenCalledWith("vw_unit_compliance");
+  });
+});
+
+describe("a curadoria de rubrica — o 403 carrega a frase da API", () => {
+  const RUBRICAS = {
+    rows: [
+      {
+        code: "0001",
+        label: "SALARIO BASE",
+        nature: "earning",
+        category: null,
+        validated: false,
+        validated_at: null,
+        in_payroll: true,
+      },
+    ],
+    pending: 1,
+    can_write: true,
+  };
+
+  it("200 devolve a lista com `pending` e `can_write` como vieram", async () => {
+    fetchMock.mockImplementation(async () => answer(200, RUBRICAS));
+
+    const result = await loadPayrollCodes();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/dp\/rubricas$/);
+    expect(init.headers.Authorization).toBe("Bearer token-de-teste");
+    expect(result).toEqual({ status: "ok", list: RUBRICAS });
+  });
+
+  it("⛔ 403 é `forbidden` COM o detail — `hr` é admin, passa a página, e a API explica", async () => {
+    fetchMock.mockResolvedValue(
+      answer(403, {
+        detail:
+          "Classificar rubrica exige papel administrativo. Seu papel consulta a folha, mas não define como ela é somada.",
+      }),
+    );
+
+    expect(await loadPayrollCodes()).toEqual({
+      status: "forbidden",
+      detail:
+        "Classificar rubrica exige papel administrativo. Seu papel consulta a folha, mas não define como ela é somada.",
+    });
+  });
+
+  it("401 é null, e não `forbidden`: sessão vencida não tem frase para mostrar", async () => {
+    fetchMock.mockResolvedValue(answer(401, { detail: "Not authenticated" }));
+
+    expect(await loadPayrollCodes()).toBeNull();
+  });
+
+  it("API fora do ar também é null — nada foi lido", async () => {
+    fetchMock.mockResolvedValue(answer(500, { detail: "boom" }));
+
+    expect(await loadPayrollCodes()).toBeNull();
+  });
+
+  it("sem sessão não chega a chamar a API", async () => {
+    getSession.mockResolvedValueOnce({ data: { session: null } });
+
+    expect(await loadPayrollCodes()).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
