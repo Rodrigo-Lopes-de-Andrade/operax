@@ -155,24 +155,71 @@ MATRIX: tuple[Field, ...] = (
 )
 
 
-# A matriz da SPEC §4 nomeia sete campos que não têm coluna em lugar nenhum. Eles
-# ficam aqui, nomeados, em vez de sumirem da matriz — um template de remuneração
-# sem VR não é uma decisão de produto se ninguém percebeu que ela foi tomada.
-#
-# A SPEC §1c diz "sem tabela nova", e a migration 16 respeitou isso. A saída é uma
-# migration 17 que crie as colunas, ou tirar os campos do escopo v1. A decisão é
-# do dono e precisa sair ANTES do R2 congelar o template.
-SEM_COLUNA: dict[str, str] = {
-    "cbo": "sem coluna em app.employee",
-    "uniforme": "sem coluna em app.employee",
-    "nivel": "app.employee_position tem só `cargo`",
-    "beneficios_vr": "app.employee_compensation tem só `salary`",
-    "beneficios_planos": "app.employee_compensation tem só `salary`",
-    "beneficios_cesta": "app.employee_compensation tem só `salary`",
-    "beneficios_vt": "app.employee_compensation tem só `salary`",
-    "periculosidade": "app.employee_compensation tem só `salary`",
-    "cargo_de_confianca": "app.employee_compensation tem só `salary`",
-    "unidade_de_atuacao": "sem coluna; `unit_id` é a lotação, e este é um dos três pendentes",
+#: Os seis campos de benefício apontam para a MESMA casa, criada pela migration
+#: `dp_benefit_catalog` (06/09/2026): `app.employee_benefit` guarda o valor por
+#: pessoa e `app.benefit_type` o catálogo, com os oito códigos semeados que
+#: cobrem VR, VT, cesta, planos, periculosidade e cargo de confiança.
+_BENEFICIO: tuple[str, str] = ("employee_benefit", "benefit_type_id")
+_BENEFICIO_TEM_CASA = (
+    "app.employee_benefit existe desde 06/09/2026, com os oito tipos semeados em "
+    "app.benefit_type, e a carga inicial ainda não escreve neles"
+)
+
+
+@dataclass(frozen=True)
+class Lacuna:
+    """Um campo que a SPEC §4 nomeia e a carga inicial recusa — com a razão AFERÍVEL.
+
+    O `motivo` é o que o cliente lê na ata da implantação. As outras duas são a
+    razão em forma de **afirmação sobre o schema**, e existem porque a razão em
+    prosa envelhece calada: `scripts/95_teste_matriz_rh.py` confere cada uma
+    contra o banco a cada `make db-test`.
+
+    São dois tipos de lacuna, e confundi-los foi o que fez o texto mentir:
+
+    - `ausente` — não há onde gravar. A afirmação é "esta coluna NÃO existe", e o
+      guarda reprova no dia em que alguém a criar sem reescrever o texto.
+    - `destino` — há onde gravar, e a carga inicial é que ainda não escreve.
+      A afirmação é "esta tabela EXISTE", e o guarda reprova se ela sumir.
+
+    ⚠️ Os dois recusam o campo do mesmo jeito: **o escopo da v1 não mudou aqui**.
+    O que mudou é o texto parar de dizer que não há lugar quando há.
+    """
+
+    motivo: str
+    ausente: tuple[str, str] | None = None
+    destino: tuple[str, str] | None = None
+
+    def __post_init__(self) -> None:
+        if (self.ausente is None) == (self.destino is None):
+            raise ValueError(f"{self.motivo}: declare exatamente um de `ausente` ou `destino`")
+
+
+# ⛔ ESTES TEXTOS CHEGAM AO CLIENTE, e sete deles mentiram entre 06/09 e 12/09.
+# As migrations do S1 do DP criaram casa para o que aqui se declarava sem casa —
+# `level`, e os oito códigos de `app.benefit_type` — e o `carga_inicial.py`
+# seguiu imprimindo "não há coluna" na ata da implantação. A causa foi o guarda:
+# ele só recusava nome que estivesse em SEM_COLUNA *e* na matriz, e nunca
+# perguntava se a lacuna ainda era verdade. Agora pergunta.
+SEM_COLUNA: dict[str, Lacuna] = {
+    "cbo": Lacuna("sem coluna em app.employee", ausente=("employee", "cbo")),
+    "uniforme": Lacuna("sem coluna em app.employee", ausente=("employee", "uniforme")),
+    "nivel": Lacuna(
+        "app.employee_position.level existe desde 06/09/2026, e a carga inicial ainda "
+        "não escreve nele",
+        destino=("employee_position", "level"),
+    ),
+    "beneficios_vr": Lacuna(_BENEFICIO_TEM_CASA, destino=_BENEFICIO),
+    "beneficios_planos": Lacuna(_BENEFICIO_TEM_CASA, destino=_BENEFICIO),
+    "beneficios_cesta": Lacuna(_BENEFICIO_TEM_CASA, destino=_BENEFICIO),
+    "beneficios_vt": Lacuna(_BENEFICIO_TEM_CASA, destino=_BENEFICIO),
+    "periculosidade": Lacuna(_BENEFICIO_TEM_CASA, destino=_BENEFICIO),
+    "cargo_de_confianca": Lacuna(_BENEFICIO_TEM_CASA, destino=_BENEFICIO),
+    "unidade_de_atuacao": Lacuna(
+        "app.workforce_movement passou a ter unidade de origem e destino em 07/09/2026; "
+        "`unit_id` continua sendo a lotação, e a carga inicial não escreve o período",
+        destino=("workforce_movement", "destination_unit_id"),
+    ),
 }
 
 # Os valores que cada coluna aceita. Estão aqui, e não só no banco, porque o

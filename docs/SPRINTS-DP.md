@@ -1746,23 +1746,41 @@ derruba a asserção.
 
 ## Itens próprios abertos pelo S1 — fora do escopo de qualquer sprint desta etapa
 
-**A. 🔴 A matriz dono-do-campo do RH passou a mentir para o cliente.** As
-migrations do S1 criaram casa para sete das dez lacunas declaradas em
-`backend/operax/rh/ownership.py` (`SEM_COLUNA`): `nivel` diz *"`app.employee_position`
-tem só cargo"* e a coluna `level` agora existe; seis `beneficios_*`,
-`periculosidade` e `cargo_de_confianca` dizem *"`app.employee_compensation` tem só
-`salary`"*, que é exatamente o que `app.employee_benefit` + `app.benefit_type`
-resolveram — com os oito códigos da semente batendo um a um.
+**A. ✅ A matriz dono-do-campo do RH mentiu para o cliente entre 06/09 e 12/09 —
+corrigido em 12/09.** As migrations do S1 do DP criaram casa para **oito** das dez
+lacunas declaradas em `backend/operax/rh/ownership.py` (`SEM_COLUNA`), e o texto
+seguiu dizendo que não havia lugar. Medido contra o schema em 12/09:
 
-⛔ **`backend/operax/rh/carga_inicial.py` imprime esse texto para o cliente
-durante a implantação.** A reconciliação da matriz é sprint própria; o texto
-errado ao cliente é o que não espera por ela.
+| lacuna | o que o texto dizia | o que o schema diz |
+|---|---|---|
+| `cbo`, `uniforme` | sem coluna em `app.employee` | ✅ verdade, seguem sem coluna |
+| `nivel` | *"`app.employee_position` tem só cargo"* | ❌ `level` existe desde 06/09 |
+| os seis `beneficios_*`, `periculosidade`, `cargo_de_confianca` | *"`app.employee_compensation` tem só `salary`"* | ❌ literalmente verdade, e a casa mudou de tabela: `app.employee_benefit` + `app.benefit_type`, com os oito códigos da semente cobrindo VR, VT, cesta, planos, periculosidade e cargo de confiança |
+| `unidade_de_atuacao` | sem coluna | ❌ `app.workforce_movement` ganhou origem e destino em 07/09 |
 
-📌 **E a causa é a terceira aparição do mesmo cego:** `scripts/95_teste_matriz_rh.py`
-só recusa nome que esteja em `SEM_COLUNA` **e** na matriz — **nunca reclama de
-exceção que sobrou**. É o mesmo defeito do `verificar_docs.py` (que já custou
-duas exceções vencidas neste arquivo, corrigidas em 06/09) e do check 4 do `99`.
-Três ferramentas de guarda deste repositório suprimem e não reclamam de sobra.
+⛔ **`backend/operax/rh/carga_inicial.py` imprime esse texto na ata da
+implantação.** Por isso não esperou pela sprint de reconciliação.
+
+**O que mudou, e o que deliberadamente NÃO mudou.** `SEM_COLUNA` deixou de ser
+`str` e passou a ser `Lacuna`, que carrega a razão em **duas formas**: a prosa
+que o cliente lê e uma **afirmação sobre o schema**, de um de dois tipos —
+`ausente` (*não há onde gravar*, e a afirmação é que a coluna não existe) ou
+`destino` (*há onde gravar, e a carga inicial é que ainda não escreve*, e a
+afirmação é que a tabela existe). ⛔ **A recusa continua igual nos dez**: o escopo
+da v1 é decisão do dono, e reclassificar campo não é conserto de texto.
+
+📌 **A causa era a terceira aparição do mesmo cego, e ela foi fechada:**
+`scripts/95_teste_matriz_rh.py` só recusava nome que estivesse em `SEM_COLUNA`
+**e** na matriz — **nunca reclamava de exceção que sobrou**. Agora confere cada
+lacuna contra o `information_schema` nas duas direções. Provado por mutação:
+reinstalar a frase exata que esteve no ar seis dias reprova com
+*"`nivel` afirma que app.employee_position.level não existe, e ela EXISTE — a
+lacuna venceu, e o texto dela vai para a ata da implantação"*; apontar um
+`destino` inexistente reprova nos seis benefícios.
+
+⏳ **O mesmo cego segue aberto em duas ferramentas:** `verificar_docs.py` (que já
+custou duas exceções vencidas neste arquivo, corrigidas em 06/09) e o check 4 do
+`99`. Suprimir sem reclamar de sobra é o padrão a caçar nas três.
 
 **B. `pg_default_acl` do schema `public` concede `authenticated=arwdDxtm` em
 tabelas.** Medido pelo guardião. O que separa isso de um vazamento total é **só o

@@ -263,15 +263,21 @@ _SEM_UUID = (
 
 
 def _sem_coluna(label: str, chave: str) -> SourceColumn:
-    """Coluna que a SPEC §4 nomeia e o banco não tem.
+    """Coluna que a SPEC §4 nomeia e a carga inicial recusa.
 
     O motivo vem de `ownership.SEM_COLUNA`, e não de um texto escrito aqui: a
-    decisão de deixar os benefícios fora da v1 foi tomada uma vez, no R1, e é
-    ela que precisa aparecer na ata da implantação.
+    decisão foi tomada uma vez, no R1, e é ela que precisa aparecer na ata da
+    implantação.
+
+    ⚠️ "Sem coluna" deixou de ser verdade para oito dos dez em 06-07/09/2026, e
+    o texto seguiu dizendo que não havia lugar. O nome desta função ficou, mas o
+    motivo agora distingue **não há onde gravar** de **há, e a carga ainda não
+    grava** — e `scripts/95_teste_matriz_rh.py` confere as duas afirmações contra
+    o schema. O que NÃO mudou é a recusa: o escopo da v1 é decisão do dono.
     """
     from operax.rh.ownership import SEM_COLUNA
 
-    return SourceColumn(label, refused=f"fora do escopo v1 — {SEM_COLUNA[chave]}")
+    return SourceColumn(label, refused=f"fora do escopo v1 — {SEM_COLUNA[chave].motivo}")
 
 
 DADOS_FUNCIONARIOS = SourceSheet(

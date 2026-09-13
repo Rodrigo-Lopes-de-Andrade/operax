@@ -74,6 +74,29 @@ for nome in SEM_COLUNA:
     if any(f.column == nome for f in MATRIX):
         problemas.append(f"{nome} está em SEM_COLUNA e na matriz ao mesmo tempo")
 
+# ⛔ E a lacuna tem de continuar sendo VERDADE. Esta é a metade que faltava, e a
+# falta custou seis dias de texto errado ao cliente: as migrations do S1 do DP
+# criaram `employee_position.level` e `app.employee_benefit`, e o
+# `carga_inicial.py` seguiu imprimindo "não há coluna" na ata da implantação. O
+# guarda acima nunca reclamou, porque ele só olhava para a matriz — **exceção
+# que sobra não dispara nada**. É o mesmo cego do `verificar_docs.py` e do check
+# 4 do `99`, e aqui ele passa a ter as duas direções:
+for nome, lacuna in SEM_COLUNA.items():
+    if lacuna.ausente is not None:
+        alvo = f"{lacuna.ausente[0]}.{lacuna.ausente[1]}"
+        if alvo in colunas_app:
+            problemas.append(
+                f"{nome} afirma que app.{alvo} não existe, e ela EXISTE — "
+                "a lacuna venceu, e o texto dela vai para a ata da implantação"
+            )
+    else:
+        assert lacuna.destino is not None  # o `__post_init__` garante o par
+        alvo = f"{lacuna.destino[0]}.{lacuna.destino[1]}"
+        if alvo not in colunas_app:
+            problemas.append(
+                f"{nome} aponta para app.{alvo} como a casa do campo, e ela NÃO existe"
+            )
+
 
 # Os enums copiados para o Python têm de ser exatamente o `check` do banco. Um
 # valor a menos recusa linha boa no preview; um a mais deixa passar a linha que o
