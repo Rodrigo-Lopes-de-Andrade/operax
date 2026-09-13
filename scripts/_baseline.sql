@@ -29,14 +29,30 @@ create table auth.users (
   email text
 );
 
+-- ⚠️ Estes dois stubs são cópia da definição REAL de produção, lida do catálogo
+-- em 12/09/2026, e não uma simplificação dela. As duas grafias importam: o
+-- PostgREST manda `request.jwt.claims` (um JSON) e o backend manda as duas
+-- (ver `_ACT_AS_USER_SQL` em `operax/core/tenant.py`). Um stub que lesse só a
+-- primeira responde NULL sob o PostgREST de verdade — e policy com `auth.uid()`
+-- nulo não estoura: ela devolve zero linha, que é indistinguível de recorte
+-- funcionando. Foi exatamente o que apareceu ao provar os laudos do S5 por HTTP
+-- em 12/09. `auth.role()` cai em `current_user` porque no ensaio quem troca de
+-- papel é o `set role`, e não um token.
 create or replace function auth.uid() returns uuid
 language sql stable as $$
-  select nullif(current_setting('request.jwt.claim.sub', true), '')::uuid;
+  select coalesce(
+    nullif(current_setting('request.jwt.claim.sub', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'sub')
+  )::uuid;
 $$;
 
 create or replace function auth.role() returns text
 language sql stable as $$
-  select coalesce(nullif(current_setting('request.jwt.claim.role', true), ''), current_user::text);
+  select coalesce(
+    nullif(current_setting('request.jwt.claim.role', true), ''),
+    (nullif(current_setting('request.jwt.claims', true), '')::jsonb ->> 'role'),
+    current_user::text
+  );
 $$;
 
 grant usage on schema auth, extensions to anon, authenticated, service_role;

@@ -1712,14 +1712,27 @@ alguma unidade?"* e a lista some. É o mesmo item já aberto pelo frontend de S1
   confia em parâmetro do cliente — medido, não deduzido. E as duas metades da
   SPEC §4: a view responde 200, a tabela devolve `PGRST106`.
 
-📌 **E a extensão ao fio real não foi zelo: ela cobriu uma cegueira do harness.**
-Em `operax_test`, o stub de `auth.uid()` (`scripts/_baseline.sql:32`) lê **só**
-`request.jwt.claim.sub`. O PostgREST v16 manda `request.jwt.claims`, um JSON.
-Sob o servidor real o stub devolveria NULL e toda policy falharia **fechada** —
-seguro, e por isso a primeira chamada HTTP voltou `[]`. Mas significa que **o
-`98` sozinho não pega regressão no encanamento de claims**: ele prova as policies
-sob uma identidade que não é a que produção injeta. Vale para as 52 asserções de
-isolamento, não só para estas oito.
+📌 **E a extensão ao fio real cobriu uma lacuna do harness — menor do que
+pareceu à primeira leitura, e vale registrar o tamanho certo.** Conferido no
+catálogo de produção em 12/09: `auth.uid()` faz `coalesce` das **duas** grafias
+(`request.jwt.claim.sub` e o `sub` dentro de `request.jwt.claims`), e
+`backend/operax/core/tenant.py` escreve as duas, com o comentário dizendo por
+quê. Então o `98`, injetando a primeira, usa **uma das duas formas que produção
+aceita** — as 52 asserções não estavam provando policy sob identidade inválida,
+como cheguei a escrever.
+
+A lacuna real era outra e mais estreita: o stub de `auth.uid()` do ensaio
+(`scripts/_baseline.sql`) lia **só a primeira**, sendo mais estreito que a função
+de verdade. Nada no ensaio exercitava o segundo ramo — justamente o que o
+PostgREST usa. E a falha desse ramo é **muda**: `auth.uid()` nulo não estoura,
+devolve zero linha, e zero linha é indistinguível de recorte funcionando. Foi o
+que apareceu na primeira chamada HTTP do guardião.
+
+✅ **Fechado em 12/09:** os stubs de `auth.uid()` e `auth.role()` passaram a ser
+cópia da definição real de produção, e o `98` ganhou o par pela grafia JSON —
+a única asserção do arquivo que exercita esse ramo, com o positivo contando 1
+(zero seria o mutante passando). Mutação provada: voltar o stub à forma estreita
+derruba a asserção.
 
 - ⏳ **`public.vw_unit_compliance` concede os sete verbos a `authenticated`**,
   apesar de a migration escrever só `grant select` — herança do `pg_default_acl`

@@ -1299,6 +1299,28 @@ do $$ begin
     (select count(*) from public.vw_unit_compliance where unit_name like 'A %'), 0);
 end $$;
 
+-- --- a MESMA prova, pela grafia de claim que o PostgREST realmente manda ------
+-- ⛔ O resto deste arquivo injeta identidade com `request.jwt.claim.sub`, e o
+-- PostgREST manda `request.jwt.claims`, um JSON. As duas grafias chegam à mesma
+-- pessoa porque `auth.uid()` faz `coalesce` das duas — em produção e, desde
+-- 12/09/2026, também no stub do ensaio, que era mais estreito que o de verdade.
+--
+-- Esta é a única asserção do arquivo que exercita o segundo ramo, e ela existe
+-- porque a falha dele é MUDA: `auth.uid()` nulo não estoura, devolve zero linha,
+-- e zero linha é indistinguível de recorte funcionando. O positivo é o que
+-- separa os dois — por isso aqui se conta 1, e não 0.
+reset request.jwt.claim.sub;
+set local request.jwt.claims = '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}';
+
+do $$ begin
+  perform pg_temp.assert_eq('auth.uid() responde pela grafia JSON do PostgREST',
+    (select count(*) from public.vw_unit_compliance where unit_name = 'A Centro'), 1);
+  perform pg_temp.assert_eq('e o recorte continua valendo por essa grafia',
+    (select count(*) from public.vw_unit_compliance where unit_name = 'A Norte'), 0);
+end $$;
+
+reset request.jwt.claims;
+
 -- ---------------------------------------------------------------------------
 \echo '--- O censo de adjudicação (migration 37) — quem julga o indício em sombra'
 -- ---------------------------------------------------------------------------
