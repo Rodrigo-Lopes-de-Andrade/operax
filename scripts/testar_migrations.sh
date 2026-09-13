@@ -46,6 +46,8 @@ echo "--- painel de DP (contadores de alerta, janela e escopo)"
 psql -q -v ON_ERROR_STOP=1 -f scripts/87_teste_painel_dp.sql 2>&1 | grep -Ev "^(INSERT|UPDATE|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- teste de regras de alerta e cadência"
 psql -q -v ON_ERROR_STOP=1 -f scripts/97_teste_regras_alerta.sql 2>&1 | grep -Ev "^(INSERT|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
+echo "--- tela de Conexões (a lista é a decomposição da contagem)"
+python3 scripts/97_teste_canais.py || exit 1
 echo "--- teste funcional multi-tenant"
 psql -q -v ON_ERROR_STOP=1 -f scripts/98_teste_isolamento_tenant.sql 2>&1 | grep -Ev "^(INSERT|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- verificação de isolamento"

@@ -68,6 +68,77 @@ tela **qual** template e **qual** regra. Hoje esse estado existe, é calculado p
 `fn_whatsapp_readiness` e é invisível — é o defeito que este sprint fecha, e o
 teste é ver a frase na tela, não a função devolver `false`.
 
+### ✅ C1, metade de backend — aprovada em 13/09/2026, dois ciclos
+
+**Ciclo 1: REPROVADO** (2 ALTO, 3 MÉDIO, 3 BAIXO). **Ciclo 2: APROVADO.** Portões
+medidos por mim: `pytest` **675** (baseline 639), `ruff` limpo, suíte de banco
+`SUÍTE COMPLETA OK` com um bloco novo (`scripts/97_teste_canais.py`).
+
+**Antes de despachar, o C0 foi refeito.** As cinco respostas de 05/09 tinham sido
+medidas contra 37 migrations; o repo tinha 53. Reconferidas uma a uma contra o
+schema: cinco "sim", nenhum "não".
+
+**O que entrou:**
+- `backend/operax/alertas/capacidades.py` — a doutrina da SPEC §1: um registro
+  congelado por provedor, as duas famílias de restrição como dados, fail-closed
+  (desconhecido lança), default conservador com o motivo escrito. **É o único
+  lugar do backend com os nomes dos provedores — e isso agora é teste, não
+  disciplina**: um `ast` percorre `operax/` e `server/` e reprova qualquer
+  literal fora da matriz (a exceção é o docstring de `provedores/base.py`).
+- `GET /canais/conexoes` — a frase que o produto sabia dizer e não dizia:
+  **qual** regra está bloqueada por **qual** template. As contagens vêm de
+  `fn_whatsapp_readiness`, a lista da rota, e **as duas leituras não são
+  fechadas por definição**: divergência entre elas é deriva de predicado e vai
+  para o log com tenant e os dois números, nos dois sentidos.
+- `outbox.py` e `sender.py` passaram a derivar a lista de provedores da matriz.
+  Há teste de igualdade de conjunto **nos dois sentidos** contra o predicado do
+  índice `integration_whatsapp_unico_ativo` e contra a CTE da função — um nome a
+  menos na lista é um cliente para quem `enqueue` grava a fila com provedor nulo
+  e o sender descarta: nenhum alerta, sem exceção. É exatamente a edição que o
+  C3 vai fazer nessa tupla.
+
+**Os dois ALTOs do ciclo 1 eram na esteira de alertas, e são a lição da sprint.**
+O implementador trocou `provider in (...)` por `provider = any(%(lista)s)`, e o
+`list()` que embrulhava a tupla era load-bearing — sem ele, `malformed array
+literal` no psycopg real. **Nenhum teste ligava o parâmetro**: `enqueue` não tem
+pytest, e o `93` só compila a instrução. A esteira quebraria em produção com 667
+verdes. Voltou à forma original, com o literal **renderizado em import time** a
+partir da matriz; o `93` compila o texto que roda de fato.
+
+📌 **Sete de nove mutações do revisor sobreviveram no ciclo 1, todas do mesmo
+tipo:** teste cujo docstring afirma o que a asserção não mede. O pior: um
+docstring dizia que o `98` provava o predicado contra Postgres — e o `98` nem
+menciona as tabelas. Agora `_BLOCKED_SQL` **executa** no banco de ensaio, com
+os três formatos nulos nomeados um a um e o positivo do par (aprovar o template
+tira uma regra da conta; desligar as outras duas leva `ready` a `true`).
+
+**Dois desvios de contrato, os dois certos e declarados:** `template_code` e
+`meta_status` são anuláveis, porque a função conta como bloqueada a regra sem
+template e a que cita código inexistente — a tela precisa distinguir os casos.
+⚠️ A resposta **não** distingue "código inexistente" de "template inativo"
+(ambos `meta_status null`); a frase da tela será a mesma para os dois.
+
+⛔ **Uma correção de ordem neste documento:** o C1 listava *"aba de templates com
+sincronização de `meta_status` a partir da WABA"*. **É impossível antes do C2** —
+sincronizar exige token da Graph API, e o token só existe quando o C2 gravar
+credencial. Movido para depois do C2. E `app.message_template` não tem escrita
+por superfície nenhuma: até lá, um cliente não sai de `ready = false` pelo
+painel.
+
+**Um erro de despacho, meu:** a §1 mandava tirar o literal de `sender.py` e a
+§3 mandava não tocar em `sender.py`. O implementador resolveu pelo lado que
+preserva comportamento.
+
+**O que o C1 backend NÃO fechou (dívida nomeada, não bloqueio):**
+- ⏳ `conftest.py:last_migration_with` só é provado "último" pelo ritual da
+  migration temporária; hoje índice e função têm uma definição só.
+- ⏳ `order by` de `_BLOCKED_SQL` não é contrato; se a tela depender da ordem,
+  prender.
+- ⏳ A metade de **frontend** do C1 (a tela de Conexões) não foi despachada.
+- ⏳ Produção segue **sem canal**: `app.integration` só tem o Secullum; contato,
+  regra e template em zero. A tela vai responder `provider: null` no primeiro
+  dia — e é isso que ela tem a dizer.
+
 ## C2 — Escrita de credencial pelo Caminho 2
 
 - `POST` que **valida e só então grava**; valor no Vault, ponteiro em

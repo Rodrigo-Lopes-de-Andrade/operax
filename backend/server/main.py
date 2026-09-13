@@ -19,6 +19,7 @@ from server.deps import CurrentTenant, CurrentUser
 from server.models import HealthResponse, Identity
 from server.routers import (
     assistente,
+    canais,
     curadoria,
     dp,
     employees,
@@ -55,6 +56,7 @@ app.add_middleware(
 
 
 app.include_router(assistente.router)
+app.include_router(canais.router)
 app.include_router(curadoria.router)
 app.include_router(dp.router)
 app.include_router(employees.router)

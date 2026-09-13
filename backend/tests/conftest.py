@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -43,6 +44,30 @@ ISSUER = "https://project.supabase.co/auth/v1"
 USER_ID = UUID("11111111-1111-4111-8111-111111111111")
 TENANT_ID = UUID("22222222-2222-4222-8222-222222222222")
 ROLE = UserRole.UNIT_SUPERVISOR
+MIGRATIONS = Path(__file__).resolve().parents[2] / "supabase" / "migrations"
+
+
+@pytest.fixture(scope="session")
+def last_migration_with() -> Callable[[str], str]:
+    """The text of the LAST migration containing `marker`.
+
+    An applied migration is never edited, so the only sanctioned way for a
+    function or an index to change is a new migration that redefines it. A test
+    anchored to the file that first defined the object keeps reading the old
+    definition while the database runs the new one — which is the exact drift
+    it exists to catch. `marker` is the idempotent `create` line the project
+    style mandates (`create or replace function ...`, `create ... if not exists
+    ...`), so a mention in a comment does not count as a redefinition.
+    """
+
+    def find(marker: str) -> str:
+        for path in sorted(MIGRATIONS.glob("*.sql"), reverse=True):
+            text = path.read_text(encoding="utf-8")
+            if marker in text:
+                return text
+        raise LookupError(f"no migration contains {marker!r}")
+
+    return find
 
 
 class StubSigningKeys:

@@ -12,9 +12,15 @@ ficar de fora do próximo.
 
 O SQL é lido dos módulos em vez de copiado: os três puxam o driver e este teste
 roda fora do venv, e uma cópia à mão divergiria na primeira alteração — que é
-sempre a cópia do teste.
+sempre a cópia do teste. A única coisa que não é texto puro é a lista de
+provedores de WhatsApp em `outbox._PROVIDER_SQL`, que o módulo renderiza em
+import time a partir de `capacidades.WHATSAPP_PROVIDERS`. Este teste renderiza
+o mesmo token do mesmo jeito — `capacidades.py` não puxa driver e é carregado
+direto do arquivo — para compilar a instrução que de fato vai rodar, e não um
+texto com o token no meio.
 """
 
+import importlib.util
 import os
 import pathlib
 import re
@@ -37,12 +43,24 @@ ANTES = "2026-08-10"  # a ocorrência detectada tarde, anterior ao início do ci
 MODULOS = ("ciclo.py", "outbox.py", "sender.py")
 
 
+def whatsapp_providers() -> str:
+    """`'meta_cloud', 'z_api', 'uazapi'` — como `outbox.py` renderiza o token."""
+    caminho = RAIZ / "backend" / "operax" / "alertas" / "capacidades.py"
+    spec = importlib.util.spec_from_file_location("capacidades", caminho)
+    assert spec is not None and spec.loader is not None
+    capacidades = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = capacidades  # `dataclass(slots=True)` procura o módulo aqui
+    spec.loader.exec_module(capacidades)
+    return ", ".join(f"'{provider}'" for provider in capacidades.WHATSAPP_PROVIDERS)
+
+
 def instrucoes() -> list[tuple[str, str]]:
     achadas: list[tuple[str, str]] = []
     for modulo in MODULOS:
         fonte = (RAIZ / "backend" / "operax" / "alertas" / modulo).read_text()
         achadas += re.findall(r'^(_?[A-Z][A-Z_]*_SQL) = """(.*?)"""', fonte, re.S | re.M)
-    return achadas
+    lista = whatsapp_providers()
+    return [(nome, sql.replace("{whatsapp_providers}", lista)) for nome, sql in achadas]
 
 
 def posicionar(sql: str) -> str:

@@ -1439,3 +1439,74 @@ class AssistantQuestion(BaseModel):
     #: Id do modelo, validado contra a allowlist de `operax.agente.agente`.
     #: `None` = o padrão do provider configurado.
     model: str | None = None
+
+
+class ChannelCapabilities(BaseModel):
+    """O que o canal permite. Cópia de `operax.alertas.capacidades`, nunca decisão daqui.
+
+    Os três campos existem para a tela dizer o que muda: `requires_templates`
+    manda esperar a aprovação da Meta antes de ligar a regra; `ban_risk` manda
+    tratar o número do cliente como perecível. `null` no lugar deste objeto
+    significa "nenhum provedor de WhatsApp ativo" — não "sem restrição".
+    """
+
+    official: bool
+    requires_templates: bool
+    ban_risk: bool
+
+
+class BlockedAlertRule(BaseModel):
+    """Uma regra ligada que não tem como entregar, e por quê.
+
+    É o que `public.fn_whatsapp_readiness` conta e não nomeia: ela devolve *"3
+    regras bloqueadas"*, e a frase que resolve o problema precisa de **qual**
+    regra e **qual** template.
+
+    ⚠️ TRÊS CASOS, E NENHUM DOS NULOS É "ESTÁ TUDO BEM"
+    O contrato da sprint dizia `str` nos dois; medido contra o predicado da
+    função, os nulos são estados que ela conta, e apagá-los seria mentir:
+
+    1. `template_code` e `meta_status` preenchidos — o template existe, está
+       ativo e está num estado que não é `approved` (`pending`, `rejected`,
+       `draft`...). É o caso que a tela explica melhor: *"template X está Y na
+       Meta"*.
+    2. `template_code` preenchido, `meta_status` nulo — a regra aponta para um
+       código que **não existe** neste cliente **ou está inativo**. A resposta
+       não distingue os dois: o `left join` filtra por `m.active` e os dois
+       caem no mesmo `m.id is null`. A frase da tela será a mesma para ambos.
+    3. `template_code` nulo (e `meta_status` nulo por consequência) — a regra é
+       de WhatsApp e não aponta para template nenhum. Com provedor oficial isso
+       é recusa garantida por `util.validate_alert_template`.
+    """
+
+    rule_name: str
+    template_code: str | None = None
+    meta_status: str | None = None
+
+
+class ConnectionsScreen(BaseModel):
+    """A tela de Conexões: o provedor ativo do cliente e por que o alerta não sai.
+
+    Tudo aqui já era calculado e invisível. Os seis primeiros campos são as
+    colunas de `public.fn_whatsapp_readiness` — não são recalculados — e
+    `blocked` é a lista que ela não devolve.
+
+    ⚠️ `rules_blocked` E `len(blocked)` SÃO DUAS LEITURAS DO MESMO FATO
+    A contagem vem da função e a lista vem da consulta que repete o predicado
+    dela. Divergência entre as duas é defeito, não arredondamento: a tela estaria
+    afirmando um número que a própria lista não sustenta. Uma regra pode aparecer
+    mais de uma vez quando o mesmo `code` existe em dois idiomas — a função conta
+    as duas linhas, e a lista também.
+
+    Sem provedor de WhatsApp ativo a tela não é um erro: é um cliente que ainda
+    não tem por onde entregar. `provider` e `capabilities` vêm nulos, as contagens
+    vêm zeradas e `ready` é falso.
+    """
+
+    provider: str | None = None
+    capabilities: ChannelCapabilities | None = None
+    templates_total: int = 0
+    templates_approved: int = 0
+    rules_blocked: int = 0
+    ready: bool = False
+    blocked: list[BlockedAlertRule] = []

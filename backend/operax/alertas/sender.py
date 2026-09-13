@@ -31,6 +31,7 @@ import hashlib
 from dataclasses import dataclass
 from uuid import UUID
 
+from operax.alertas.capacidades import WHATSAPP_PROVIDERS
 from operax.alertas.provedores.base import Delivery, Message, NullProvider, Provider
 from operax.core.db import run_cli
 from operax.core.tenant import SystemContext, active_tenants, tenant_scope
@@ -238,7 +239,11 @@ def default_providers() -> dict[str, Provider]:
     o que teria saído.
     """
     nulo = NullProvider()
-    return {nome: nulo for nome in ("meta_cloud", "z_api", "uazapi", "smtp", "resend")}
+    # Os de WhatsApp vêm da matriz de capacidades, que é quem os conhece. Os dois
+    # de e-mail continuam nominais aqui: e-mail não tem capacidade a declarar, e
+    # inventar linha na matriz para caber nesta lista seria a matriz servindo ao
+    # chamador em vez do contrário.
+    return {nome: nulo for nome in (*WHATSAPP_PROVIDERS, "smtp", "resend")}
 
 
 async def run(*, batch: int = BATCH) -> list[SendResult]:

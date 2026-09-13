@@ -33,6 +33,7 @@ from dataclasses import dataclass
 from typing import Any
 from uuid import UUID
 
+from operax.alertas.capacidades import WHATSAPP_PROVIDERS
 from operax.alertas.ciclo import Cycle
 from operax.core.tenant import SystemContext, tenant_scope
 
@@ -80,14 +81,26 @@ on conflict (idempotency_key) do nothing
 returning id
 """
 
+#: O `in (...)` do provedor, renderizado uma vez, em import time. Os valores são
+#: a tupla congelada de `operax.alertas.capacidades` — nunca entrada de usuário —
+#: e é por isso que entram no texto e não como parâmetro: a instrução que roda é
+#: a forma simples para a qual o índice parcial foi escrito, sem adaptação de
+#: driver no meio (tupla vira registro, não array, e o `93` só compila o texto).
+#: A lista continua tendo um dono só; isto é uma renderização dela.
+_WHATSAPP_PROVIDER_LIST = ", ".join(f"'{provider}'" for provider in WHATSAPP_PROVIDERS)
+
 #: O provedor de WhatsApp ativo do tenant. O índice único da migration 14 garante
 #: no máximo um, então `limit 1` é a forma e não um desempate.
+#:
+#: `{whatsapp_providers}` é o único token que não é do psycopg, e
+#: `scripts/93_teste_ciclo.py` o renderiza do mesmo jeito para compilar a
+#: instrução real.
 _PROVIDER_SQL = """
 select provider from app.integration
 where tenant_id = %(tenant_id)s and active
-  and provider in ('meta_cloud', 'z_api', 'uazapi')
+  and provider in ({whatsapp_providers})
 limit 1
-"""
+""".replace("{whatsapp_providers}", _WHATSAPP_PROVIDER_LIST)
 
 
 class TemplateMismatchError(RuntimeError):
