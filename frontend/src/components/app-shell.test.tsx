@@ -48,7 +48,7 @@ function administracao() {
 }
 
 describe("a sidebar não oferece porta que não abre", () => {
-  it("`owner` recebe as nove: cinco de leitura e quatro de escrita", () => {
+  it("`owner` recebe as dez: cinco de leitura e cinco de escrita", () => {
     comPapel("owner");
 
     const admin = administracao();
@@ -62,6 +62,7 @@ describe("a sidebar não oferece porta que não abre", () => {
       "Mapeamento",
       "Rubricas",
       "Escalas",
+      "Conexões",
     ]) {
       expect(within(admin).getByRole("link", { name: item })).toBeVisible();
     }
@@ -89,6 +90,9 @@ describe("a sidebar não oferece porta que não abre", () => {
     ).toBeNull();
     expect(within(admin).queryByRole("link", { name: "Rubricas" })).toBeNull();
     expect(within(admin).queryByRole("link", { name: "Escalas" })).toBeNull();
+    // Conexões é configuração de canal, e a página fecha por `isAdmin`: o
+    // item fora de `showAdminWrites` seria um link que leva a 404 para ele.
+    expect(within(admin).queryByRole("link", { name: "Conexões" })).toBeNull();
   });
 
   it("⛔ `hr` é admin e escreve — o eixo de escrita não é o domínio sensível", () => {
@@ -125,6 +129,7 @@ describe("a sidebar não oferece porta que não abre", () => {
       within(admin).getByRole("link", { name: "Mapeamento" }),
     ).toBeVisible();
     expect(within(admin).getByRole("link", { name: "Escalas" })).toBeVisible();
+    expect(within(admin).getByRole("link", { name: "Conexões" })).toBeVisible();
   });
 
   it("✅ `unit_supervisor` tem Laudos, e só Laudos", () => {
@@ -147,6 +152,7 @@ describe("a sidebar não oferece porta que não abre", () => {
       "Mapeamento",
       "Rubricas",
       "Escalas",
+      "Conexões",
     ]) {
       expect(within(admin).queryByRole("link", { name: item })).toBeNull();
     }
@@ -179,6 +185,7 @@ describe("a sidebar não oferece porta que não abre", () => {
     expect(
       screen.queryByRole("navigation", { name: "Administração" }),
     ).toBeNull();
+    expect(screen.queryByRole("link", { name: "Conexões" })).toBeNull();
     expect(
       within(
         screen.getByRole("navigation", { name: "Departamento pessoal" }),

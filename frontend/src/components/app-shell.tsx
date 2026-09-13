@@ -7,6 +7,7 @@ import { NavLink } from "@/components/nav-link";
 import { SignOutButton } from "@/components/sign-out-button";
 import { UserBadge } from "@/components/user-badge";
 import { ASSISTENTE_PATH } from "@/lib/assistente/url";
+import { CONEXOES_PATH } from "@/lib/canais/url";
 import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
@@ -50,7 +51,9 @@ export function AppShell({
    * Os itens que só escrevem — curadoria e folha. Escrita é `util.is_admin`, que
    * não inclui `executive`: ele alcança a área de RH para ler, não cura nada e
    * não publica folha. Então o item não aparece para ele: a página responde 404,
-   * e um link que leva a 404 é pior do que link nenhum.
+   * e um link que leva a 404 é pior do que link nenhum. Conexões entra aqui
+   * pelo mesmo motivo: é configuração de canal, e a escrita de credencial que
+   * a próxima etapa põe nela é de administrador — a página fecha por `isAdmin`.
    *
    * ⛔ O CICLO MENSAL SAIU DAQUI, e o motivo é que o eixo dele não é este.
    * Entrar na tela de ciclo exige o domínio `compensation` — que `hr` é admin e
@@ -152,6 +155,7 @@ export function AppShell({
                 <NavLink href={MAPEAMENTO_PATH} label="Mapeamento" />
                 <NavLink href={RUBRICAS_PATH} label="Rubricas" />
                 <NavLink href={ROTACOES_PATH} label="Escalas" />
+                <NavLink href={CONEXOES_PATH} label="Conexões" />
               </>
             ) : null}
           </nav>

@@ -134,10 +134,70 @@ preserva comportamento.
   migration temporária; hoje índice e função têm uma definição só.
 - ⏳ `order by` de `_BLOCKED_SQL` não é contrato; se a tela depender da ordem,
   prender.
-- ⏳ A metade de **frontend** do C1 (a tela de Conexões) não foi despachada.
+- ✅ A metade de **frontend** do C1 (a tela de Conexões) — aprovada em 13/09,
+  ver a seção abaixo.
 - ⏳ Produção segue **sem canal**: `app.integration` só tem o Secullum; contato,
   regra e template em zero. A tela vai responder `provider: null` no primeiro
   dia — e é isso que ela tem a dizer.
+
+### ✅ C1, metade de frontend — aprovada em 13/09/2026, um ciclo
+
+**Ciclo 1: APROVADO** — zero ALTO, zero MÉDIO, sete BAIXO. Portões medidos por
+mim: Vitest **42 arquivos / 675 testes** (baseline 38 / 638), prettier limpo,
+`tsc` exit 0, lint com os três warnings pré-existentes de outros arquivos.
+
+**O que entrou:** `dashboard/administracao/conexoes` (página), `components/canais/
+connections.tsx` (os três blocos: canal, saúde, o que está preso),
+`lib/canais/queries.ts` (Caminho 2, `GET /canais/conexoes`; 401/403 → `null`,
+500 relança), `lib/canais/labels.ts` (o único arquivo de `src/` com o nome de
+um provedor — e isso é teste que varre `src/`, não disciplina), `lib/canais/url.ts`,
+e "Conexões" na navegação sob `showAdminWrites`.
+
+**O gate da sprint está na tela e é teste:** tenant oficial com regra ligada
+apontando para template `pending` mostra *"a regra **X** aponta para o template
+**Y**, que está **pendente** na Meta"*. Os dois outros nulos do contrato têm frase
+própria — e a do caso 2 diz *"não existe ou está inativo"* porque a API não
+distingue, e a tela não finge que distingue.
+
+**Doutrina da SPEC §1 presa por duas trancas independentes:** a frase do que o
+canal exige vem de `capabilities`, nunca do nome. O revisor refez a mutação
+`requires_templates: provider === "meta_cloud"` e ela morre pelos dois testes de
+flags invertidas do componente **sozinhos**; a varredura de `labels.test.ts` é
+a segunda tranca, não a única.
+
+**Decisão declarada no despacho, não do implementador:** a página fecha por
+`isAdmin`, mais estreita que a rota (que aceita qualquer membro do tenant). O
+motivo: Conexões é configuração de canal, e o C2 põe a escrita de credencial
+exatamente aqui — escrita que só o admin faz. Nav e página na mesma condição,
+para não repetir o achado do S5 (porta aberta sem link). Medido pelo revisor:
+um 403 na rota implica 403 no `/me`, então a página já respondeu 404 antes de
+chamar a API — o `null` de `loadConnections` só sobra para 401 numa corrida de
+milissegundos.
+
+**Um arquivo fora da lista, aceito:** `lib/canais/url.ts` com `CONEXOES_PATH` —
+toda rota do produto vive em `lib/<área>/url.ts`, e o shell importa de lá.
+
+**Os sete BAIXOs, e o que foi feito com cada um.** Três sobreviveram a mutação e
+eu fechei antes do commit, com a mutação refeita e morrendo: (1) o ramo
+`capabilities: null` com `provider` preenchido não tinha teste — um fallback de
+flags falsas leria "aceita tudo", o erro que a matriz existe para impedir;
+(2) `ready && rules_blocked === 0` tinha uma metade morta por contrato
+(`ready ⇒ rules_blocked = 0`) e sem teste — simplificado para `ready`, e o
+docstring diz por que a tela confia; (3) o positivo da varredura só provava que
+ela lia `labels.ts` — agora exige o componente, o arquivo mais provável de
+ofender. **Os quatro restantes ficam nomeados:**
+- ⏳ A frase do estado `null` da página (*"a API não respondeu agora"*) afirma
+  uma causa que não é a real para 401; **copia `mapeamento/page.tsx`**, então
+  corrigir é nas duas, fora desta sprint.
+- ⏳ `<Requirements>` não tem frase para canal **sem nenhuma** das duas flags —
+  hoje impossível pela matriz, e é **exatamente o Telegram** (SPEC §1.1). É o
+  primeiro lugar que o C3 toca no frontend; silêncio ali seria a leitura "canal
+  sem regra" que a SPEC chama de perigosa.
+- ⏳ O critério 7 (não oficial sem "Meta") só cobre o estado real de hoje —
+  para não oficial a função devolve `ready = true` e a rota nem consulta a
+  lista.
+- ⏳ O teste "sem tenant na URL" checa só a URL; basta para GET, não cobriria
+  corpo de POST.
 
 ## C2 — Escrita de credencial pelo Caminho 2
 
