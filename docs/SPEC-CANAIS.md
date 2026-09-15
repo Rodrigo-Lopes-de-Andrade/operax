@@ -1,4 +1,3 @@
-<!-- verificar-docs: inexistentes-de-proposito app.messaging_identity app.messaging_invite app.channel_health public.fn_channel_readiness public.fn_telegram_adhesion -->
 
 # OperaX — SPEC de canais: tela de Conexões e entrada do Telegram
 
@@ -191,7 +190,7 @@ PostgreSQL 16.13, contra um schema mínimo. Oito comportamentos:
 A linha 1 é a razão de a tabela existir: é exatamente o que quebra se alguém
 acrescentar `'telegram'` ao predicado do índice de WhatsApp, e o sintoma —
 *"liguei o Telegram e o WhatsApp desligou"* — chega como bug de produto, não
-como erro de migration. **Vira `tests/db/test_channel_exclusivity.sql` no S1.**
+como erro de migration. **Virou `scripts/86_teste_canais_exclusividade.sql`** (onda 1 do C3, 15/09/2026), no lugar onde a suíte de banco roda os outros.
 
 ---
 
@@ -234,6 +233,12 @@ bloqueou o bot e voltou tem duas linhas e a história fica legível.
 
 O `chat_id` é dado pessoal: identifica a pessoa e a liga a uma conta de
 Telegram. **Domínio `pii`**, mesma matriz do CPF — `owner`, `personnel`, `hr`.
+
+> ✅ **Decisão do dono, 15/09/2026, mais dura que a linha acima:** nenhum
+> papel do painel lê `app.messaging_identity` nem `app.messaging_invite` —
+> nem `owner`. As duas tabelas têm RLS ligada e **zero policy**, a régua de
+> `app.integration_secret`; só `service_role` (o sender e o webhook) as
+> alcança. A matriz do CPF descreve quem *poderia* ver; ninguém precisa.
 
 Mas a tela não precisa dele. Ela precisa de **quantos aderiram**, por unidade.
 Então:

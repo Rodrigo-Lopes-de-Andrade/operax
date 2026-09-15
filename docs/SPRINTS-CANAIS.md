@@ -486,7 +486,7 @@ endpoint público sem autenticação de usuário.
 
 **Gate:**
 
-- as **oito** linhas da SPEC §2.2 viram `tests/db/test_channel_exclusivity.sql`,
+- as **oito** linhas da SPEC §2.2 viram `scripts/86_teste_canais_exclusividade.sql`,
   e a linha 1 (os dois canais coexistindo) é a que não pode passar por revisão de
   código — só o índice real responde;
 - o mesmo alerta sai por WhatsApp e por Telegram com **texto idêntico**, a partir
@@ -495,6 +495,72 @@ endpoint público sem autenticação de usuário.
   recusas são distinguíveis no log;
 - requisição no webhook sem o header secreto é descartada **antes** do parse;
 - derrubar o bot e rodar o vigia muda o status e **não** tenta reconectar.
+
+### ✅ As duas paradas foram abertas pelo dono em 15/09/2026
+
+Autorizado como proposto, item a item:
+
+1. **`app.messaging_identity` e `app.messaging_invite` sem policy** para
+   `authenticated` — a régua de `app.integration_secret`: `revoke all` de
+   `anon`/`authenticated`, `grant select, insert, update` a `service_role`
+   (sem `delete`: revogar é `revoked_at`), RLS ligada, **nenhuma policy**.
+   Nenhum papel do painel lê o `chat_id`, nem owner. O que a tela precisa vem
+   de `public.fn_telegram_adhesion`, `security definer` recortada por
+   `util.user_tenants()`, contagem por unidade, `grant execute` escrito.
+   `app.channel_health`: leitura `util.has_tenant`, escrita só `service_role`.
+2. **O webhook** como a SPEC §6: `POST /webhooks/telegram/{path_token}`,
+   `path_token` rotativo por integração (desconectar rotaciona), header
+   `X-Telegram-Bot-Api-Secret-Token` em comparação de tempo constante **antes
+   de qualquer parse** (sem ele, 404 seco), rate limit por IP e por token, só
+   `/start <token>`, nenhum eco do corpo em log ou erro.
+3. **Bot por tenant** (SPEC §10.1).
+4. **Convite válido por 7 dias** (SPEC §10.2).
+
+A autorização vale sob estas premissas (Regra 0). Nada disso é `db push`:
+aplicar em produção é outra autorização, com a ordem própria.
+
+### ✅ C3, onda 1 — o banco — aprovada em 15/09/2026, dois ciclos; guardião PASSA
+
+**O que entrou:** as cinco migrations da SPEC §4 (`20260915200001..05_ch_*`):
+`telegram` nos três checks e o índice irmão `integration_telegram_unico_ativo`
+(o de WhatsApp intacto); `app.messaging_identity` e `app.messaging_invite`
+como a §3 as escreve, mais três índices parciais em `revoked_at is null` (uma
+vigente por titular; um `chat_id` vigente por tenant) e `expires_at` de 7 dias;
+`app.channel_health` com `app.fn_record_channel_health` (o `status_changed_at`
+só avança quando o status muda — a regra da §7 mora no SQL);
+`public.fn_channel_readiness` (uma linha por integração ativa dos quatro
+provedores; Telegram é `ready` só com saúde `connected`; `fn_whatsapp_readiness`
+depreciada por `comment on`, não apagada) e `public.fn_telegram_adhesion`
+(contagem por unidade, sem nome nem `chat_id`; `joined/pending/revoked` é
+partição dos colaboradores ativos, e a função **não lê** `messaging_invite`).
+`scripts/86_teste_canais_exclusividade.sql` com as oito linhas da §2.2, cada
+recusa **nomeando a constraint**; `98`/`99` com `permission denied` explícito
+para owner/DP/RH (e o positivo, `employee_pii`, na mesma transação). Python:
+`telegram` na matriz com `requires_recipient_opt_in`, `CHANNEL_PROVIDERS`;
+`WHATSAPP_PROVIDERS` inalterado.
+
+**Ciclo 1: REPROVADA, retorno estreito** — migrations, `86` e `99` corretos;
+três asserções faltavam no `98`, e a primeira era ALTO: `fn_channel_readiness`
+dizendo "pronto" para um bot que o vigia nunca mediu passava verde em toda a
+suíte, porque a semente gravava a saúde antes de qualquer asserção. **Ciclo
+2:** as três entraram (bot sem saúde → `health_status` nulo e `not ready`;
+`z_api` + `telegram` com regra apontando para template `draft` →
+`rules_blocked = 0`; um `desligado` fora da soma), e as três mutações morrem
+nomeadas. Guardião dez de dez: coexistência **inserida** de verdade,
+`service_role` sem `delete`, as duas RPCs executadas como owner sem o `chat_id`
+de sonda na resposta, `fn_record_channel_health` fora do alcance do painel.
+
+**Decisões registradas:** "convidado, aguardando" é coluna nova (`invited`) se
+o C4 quiser — o `do $$` da migration 5 e o item 16 do `99` prendem o conjunto
+exato de colunas. `alert_queue.channel`/`alert_rule.channel` continuam sem
+`'telegram'` — é a representação do roteamento da §8, decisão da onda 2/C5.
+`fn_record_channel_health` grava `detail` literalmente: "nunca corpo do
+provedor" é dever do chamador, e a onda 2 precisa do teste. FKs de titular sem
+par `tenant_id` (estilo da base; registrado).
+
+### ⏳ C3, onda 2a — provedor, credencial por canal, Conexões com dois canais — despachada em 15/09/2026
+
+### ⏳ C3, onda 2 — frontend — despachada em 15/09/2026, em paralelo com a 2a
 
 ## C4 — Adesão
 

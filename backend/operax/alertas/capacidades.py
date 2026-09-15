@@ -1,4 +1,4 @@
-"""What each WhatsApp provider permits — the only place in the backend that knows.
+"""What each channel provider permits — the only place in the backend that knows.
 
 No feature asks *who* we are talking to. It asks *what the channel allows*, and
 that answer is data here instead of an `if` somewhere else. Today the difference
@@ -21,6 +21,16 @@ what it was authorised to say. That is a modelling mistake, not a new kind of
 channel, and `tests/test_capacidades.py` asserts it over the whole matrix rather
 than provider by provider — the first candidate to challenge it has *neither*,
 and *neither* is not *both*.
+
+THE THIRD FAMILY: RESTRICTION OF RECIPIENT (`requires_recipient_opt_in`)
+`telegram` has neither of the two above — no 24h window, no approved template,
+no ban for volume, no cost per message — and the naive reading of that is "the
+channel without rules", which is false (`docs/SPEC-CANAIS.md` §1.1). Its
+restriction is on another axis: it does not send to a phone number, it sends to
+a `chat_id` that only exists after the person opened the bot. WhatsApp restricts
+WHAT you say and WHEN; Telegram restricts TO WHOM. The consent lives in
+`app.messaging_identity`, and a recipient without a current identity is not
+reachable on that channel at all — the sender falls back to WhatsApp (SPEC §8).
 
 FAIL-CLOSED, AND THE ASSUMED ANSWER IS THE FEARFUL ONE
 `capabilities_for` raises on a provider it does not know instead of answering
@@ -65,6 +75,10 @@ class ProviderCapabilities:
     #: Self-restriction: the customer's own number can be banned, permanently and
     #: without appeal, for how much and how it speaks.
     ban_risk: bool
+    #: Restriction of recipient: the channel cannot address a phone number; the
+    #: person must have opened the bot first, and the resulting identity
+    #: (`app.messaging_identity`) is revocable. No current identity, no delivery.
+    requires_recipient_opt_in: bool
 
 
 #: What to assume when the provider is not resolved. See the module docstring:
@@ -73,6 +87,7 @@ CONSERVATIVE_DEFAULT = ProviderCapabilities(
     official=False,
     requires_templates=False,
     ban_risk=True,
+    requires_recipient_opt_in=False,
 )
 
 #: The providers that carry WhatsApp, and the same three the partial unique index
@@ -86,15 +101,35 @@ CONSERVATIVE_DEFAULT = ProviderCapabilities(
 #: is this tenant on?"*.
 WHATSAPP_PROVIDERS: tuple[str, ...] = ("meta_cloud", "z_api", "uazapi")
 
+#: Every provider that carries a channel — the WhatsApp three and Telegram. This
+#: is the list `public.fn_channel_readiness` (migration `ch_readiness_fn`) walks,
+#: one row per active integration; `WHATSAPP_PROVIDERS` is deliberately NOT
+#: widened to it (see above). `telegram` has its own exclusivity index,
+#: `integration_telegram_unico_ativo`, sibling of the WhatsApp one.
+CHANNEL_PROVIDERS: tuple[str, ...] = (*WHATSAPP_PROVIDERS, "telegram")
+
 #: ⛔ The one place in the backend that spells these names. Everything else asks.
 #:
 #: The two unofficial ones *are* the conservative assumption rather than a copy of
 #: it: the fearful answer and the QR-based answer are the same answer, and writing
 #: it twice is how they drift apart.
 _CAPABILITIES: dict[str, ProviderCapabilities] = {
-    "meta_cloud": ProviderCapabilities(official=True, requires_templates=True, ban_risk=False),
+    "meta_cloud": ProviderCapabilities(
+        official=True,
+        requires_templates=True,
+        ban_risk=False,
+        requires_recipient_opt_in=False,
+    ),
     "z_api": CONSERVATIVE_DEFAULT,
     "uazapi": CONSERVATIVE_DEFAULT,
+    # The third family: neither template nor ban, and the recipient must have
+    # opened the bot. Official — it is the platform's own Bot API.
+    "telegram": ProviderCapabilities(
+        official=True,
+        requires_templates=False,
+        ban_risk=False,
+        requires_recipient_opt_in=True,
+    ),
 }
 
 

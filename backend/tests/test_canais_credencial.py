@@ -357,7 +357,12 @@ def test_o_formulario_da_api_descreve_cada_campo_como_o_modulo_declara(
             "placeholder",
             "hint",
         }
-        assert set(form["capabilities"]) == {"official", "requires_templates", "ban_risk"}
+        assert set(form["capabilities"]) == {
+            "official",
+            "requires_templates",
+            "ban_risk",
+            "requires_recipient_opt_in",
+        }
 
 
 # ---------------------------------------------------------------------------

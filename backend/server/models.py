@@ -1444,15 +1444,19 @@ class AssistantQuestion(BaseModel):
 class ChannelCapabilities(BaseModel):
     """O que o canal permite. Cópia de `operax.alertas.capacidades`, nunca decisão daqui.
 
-    Os três campos existem para a tela dizer o que muda: `requires_templates`
+    Os campos existem para a tela dizer o que muda: `requires_templates`
     manda esperar a aprovação da Meta antes de ligar a regra; `ban_risk` manda
-    tratar o número do cliente como perecível. `null` no lugar deste objeto
-    significa "nenhum provedor de WhatsApp ativo" — não "sem restrição".
+    tratar o número do cliente como perecível; `requires_recipient_opt_in`
+    (Telegram) diz que o destinatário só existe depois de abrir o bot — sem
+    adesão, aquela pessoa não é alcançável por esse canal. `null` no lugar
+    deste objeto significa "nenhum provedor de WhatsApp ativo" — não "sem
+    restrição".
     """
 
     official: bool
     requires_templates: bool
     ban_risk: bool
+    requires_recipient_opt_in: bool
 
 
 class BlockedAlertRule(BaseModel):

@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito public.fn_dp_panel app.work_schedule_day app.messaging_identity -->
+<!-- verificar-docs: inexistentes-de-proposito public.fn_dp_panel app.work_schedule_day -->
 <!-- `app.work_schedule_day` continua aqui porque o Quadro REPORTA que ela não
      existe — e agora a SPEC diz o mesmo, então a contradição entre os dois
      documentos acabou. `app.schedule_rotation_map` SAIU desta lista: ela existe

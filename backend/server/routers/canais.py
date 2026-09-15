@@ -184,6 +184,7 @@ async def connections(tenant: CurrentTenant) -> ConnectionsScreen:
             official=capabilities.official,
             requires_templates=capabilities.requires_templates,
             ban_risk=capabilities.ban_risk,
+            requires_recipient_opt_in=capabilities.requires_recipient_opt_in,
         ),
         templates_total=readiness["templates_total"],
         templates_approved=readiness["templates_approved"],
@@ -304,6 +305,7 @@ def _form(provider: str) -> ProviderForm:
             official=capabilities.official,
             requires_templates=capabilities.requires_templates,
             ban_risk=capabilities.ban_risk,
+            requires_recipient_opt_in=capabilities.requires_recipient_opt_in,
         ),
         fields=[
             FieldForm(

@@ -436,8 +436,18 @@ def test_as_capacidades_vem_da_matriz_e_chegam_inteiras_na_resposta(
     answer(readiness(provider="uazapi", official=False, rules_blocked=0, ready=True))
     nao_oficial = client.get("/canais/conexoes", headers=cabecalho).json()["capabilities"]
 
-    assert oficial == {"official": True, "requires_templates": True, "ban_risk": False}
-    assert nao_oficial == {"official": False, "requires_templates": False, "ban_risk": True}
+    assert oficial == {
+        "official": True,
+        "requires_templates": True,
+        "ban_risk": False,
+        "requires_recipient_opt_in": False,
+    }
+    assert nao_oficial == {
+        "official": False,
+        "requires_templates": False,
+        "ban_risk": True,
+        "requires_recipient_opt_in": False,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -484,7 +494,12 @@ def test_a_resposta_tem_exatamente_os_campos_do_contrato(
         "ready",
         "blocked",
     }
-    assert set(corpo["capabilities"]) == {"official", "requires_templates", "ban_risk"}
+    assert set(corpo["capabilities"]) == {
+        "official",
+        "requires_templates",
+        "ban_risk",
+        "requires_recipient_opt_in",
+    }
     assert set(corpo["blocked"][0]) == {"rule_name", "template_code", "meta_status"}
 
 

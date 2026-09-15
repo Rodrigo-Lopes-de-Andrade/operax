@@ -1451,6 +1451,399 @@ do $$ begin
     (select count(*) from public.vw_unit), 0);
 end $$;
 
+-- ---------------------------------------------------------------------------
+\echo '--- Canais / C3 (Telegram): o chat_id que ninguém do painel lê, e a saúde que todos leem'
+-- ---------------------------------------------------------------------------
+-- Decisão do dono de 15/09/2026 (`docs/SPRINTS-CANAIS.md` §C3, "As duas paradas
+-- foram abertas"): `app.messaging_identity` e `app.messaging_invite` com RLS
+-- ligada e NENHUMA policy, sem grant a `authenticated` — a régua de
+-- `app.integration_secret`. `app.channel_health` lida por `util.has_tenant`,
+-- escrita só `service_role`. O que a tela precisa vem de duas RPCs definer.
+--
+-- ⛔ `permission denied`, E NÃO ZERO LINHAS
+-- Numa tabela sem grant, contar linhas como owner devolve erro, não zero. Se a
+-- asserção fosse "owner conta 0", ela ficaria verde de dois jeitos errados: a
+-- tabela vazia e um `grant select` esquecido com RLS recusando tudo. Aqui o que
+-- se afirma é o ERRO — `insufficient_privilege` — e ao lado dele, na MESMA
+-- transação, o mesmo papel lendo `employee_pii`: é o positivo que prova que a
+-- negação não é um banco onde ninguém lê nada.
+--
+-- A semente desta seção vive num savepoint: ela acrescenta dois colaboradores
+-- em A Centro, e as contagens do resto do arquivo ("owner A vê 2
+-- colaboradores") não podem ser tocadas.
+savepoint prova_c3;
+reset role;
+
+-- Dois canais ativos em A (a linha 1 da SPEC §2.2, vista pela RPC) e dois em
+-- B — em B o WhatsApp é `z_api`, NÃO oficial, de propósito: é o par que prova
+-- que a contagem de regra bloqueada é só do WhatsApp OFICIAL (ver abaixo).
+insert into app.integration (id, tenant_id, provider, active) values
+  ('c3a00000-0000-0000-0000-0000000000d1', 'aaaaaaaa-0000-0000-0000-000000000001', 'meta_cloud', true),
+  ('c3a00000-0000-0000-0000-0000000000d2', 'aaaaaaaa-0000-0000-0000-000000000001', 'telegram',   true),
+  ('c3b00000-0000-0000-0000-0000000000d1', 'bbbbbbbb-0000-0000-0000-000000000002', 'telegram',   true),
+  ('c3b00000-0000-0000-0000-0000000000d2', 'bbbbbbbb-0000-0000-0000-000000000002', 'z_api',      true);
+
+-- A saúde, gravada pela porta única — SÓ para o bot de A (connected).
+-- ⛔ O bot de B fica DELIBERADAMENTE sem medição até o bloco do owner de B: é
+--    ali que se afirma que bot sem medição NÃO está pronto. Gravar a saúde
+--    dos dois aqui deixava `coalesce(h.status = 'connected', true)` passar
+--    verde na suíte inteira — medido na revisão do ciclo 1 (mutação C7). O
+--    `disconnected` de B é gravado depois, no próprio bloco.
+do $$ begin
+  perform app.fn_record_channel_health('c3a00000-0000-0000-0000-0000000000d2', 'connected', 'getMe ok');
+end $$;
+
+-- Uma regra de WhatsApp ligada apontando para template `draft` em CADA tenant.
+-- Em A o WhatsApp é meta_cloud (oficial): a regra CONTA como bloqueada. Em B é
+-- z_api (não oficial): NÃO conta — e a linha telegram, que também é `official`,
+-- não pode ser a que faz a regra de B contar. Sem este par, a restrição
+-- `p.channel = 'whatsapp' and p.official` da CTE `blocked` só era presa por
+-- texto (mutação C6 da revisão).
+insert into app.message_template (tenant_id, code, variables, body, meta_status) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'deviation_summary', array['unit','occurrences'],
+   'OperaX: {{1}} com {{2}} ocorrencias.', 'draft'),
+  ('bbbbbbbb-0000-0000-0000-000000000002', 'deviation_summary', array['unit','occurrences'],
+   'OperaX: {{1}} com {{2}} ocorrencias.', 'draft');
+insert into app.alert_rule (tenant_id, name, content, channel, active, template_code) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'Resumo A, template rascunho', 'aggregate', 'whatsapp', true, 'deviation_summary'),
+  ('bbbbbbbb-0000-0000-0000-000000000002', 'Resumo B, template rascunho', 'aggregate', 'whatsapp', true, 'deviation_summary');
+
+-- Mais três colaboradores em A CENTRO: c1 aderiu, c3 tem convite em aberto,
+-- c4 revogou — e c5 é DESLIGADO, sem nada. A Norte fica só com c2, sem nada —
+-- que é `pending`.
+-- ⛔ O desligado existe para que `status <> 'desligado'` seja exercido, não
+--    lido: sem ele a soma 3 fica verde com o filtro apagado (mutação C11 da
+--    revisão). Com o filtro, c5 não entra em contagem nenhuma; sem ele, vira
+--    `pending` e a soma sobe para 4.
+insert into app.employee (id, tenant_id, company_id, unit_id, name, status) values
+  ('a0000000-0000-0000-0000-0000000000c3', 'aaaaaaaa-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000000e1', 'a0000000-0000-0000-0000-0000000000a1', 'Colab A Centro 3', 'active'),
+  ('a0000000-0000-0000-0000-0000000000c4', 'aaaaaaaa-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000000e1', 'a0000000-0000-0000-0000-0000000000a1', 'Colab A Centro 4', 'active'),
+  ('a0000000-0000-0000-0000-0000000000c5', 'aaaaaaaa-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000000e1', 'a0000000-0000-0000-0000-0000000000a1', 'Colab A Centro 5 (desligado)', 'desligado');
+
+insert into app.messaging_identity (tenant_id, channel, employee_id, external_id, revoked_at) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'telegram', 'a0000000-0000-0000-0000-0000000000c1', '9001', null),
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'telegram', 'a0000000-0000-0000-0000-0000000000c4', '9004', now() - interval '1 day');
+
+insert into app.messaging_invite (tenant_id, channel, employee_id, token_hash) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'telegram', 'a0000000-0000-0000-0000-0000000000c3', 'hash-c3');
+
+-- O RH com `pii`, como a matriz do PRODUTO (migration 02) o tem. A semente
+-- genérica deste arquivo não dá `pii` ao hr; aqui ele precisa LER `employee_pii`
+-- para que o `permission denied` dele em `messaging_identity` seja sobre a
+-- tabela, e não sobre um papel que não lê nada. Vale só dentro do savepoint.
+update app.domain_permission set allowed = true
+ where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001' and role = 'hr' and domain = 'pii';
+
+-- O anti-vácuo e a fronteira, conferidos como dono — sob `authenticated` a
+-- própria contagem seria permission denied.
+do $$
+declare v_tabela text;
+begin
+  perform pg_temp.assert_eq('as 2 identidades foram semeadas (o negativo não é vácuo)',
+    (select count(*) from app.messaging_identity), 2);
+  perform pg_temp.assert_eq('o convite foi semeado (idem)',
+    (select count(*) from app.messaging_invite), 1);
+  perform pg_temp.assert_eq('a saúde do bot de A foi gravada; a de B, de propósito, ainda não',
+    (select count(*) from app.channel_health), 1);
+  perform pg_temp.assert_eq('as 2 regras ligadas apontando para template rascunho foram semeadas (uma por tenant)',
+    (select count(*) from app.alert_rule r
+      join app.message_template m on m.tenant_id = r.tenant_id and m.code = r.template_code
+     where r.active and r.channel = 'whatsapp' and m.meta_status = 'draft'), 2);
+  perform pg_temp.assert_eq('o desligado de A Centro foi semeado (o filtro de ativos não é vácuo)',
+    (select count(*) from app.employee
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a1' and status = 'desligado'), 1);
+
+  foreach v_tabela in array array['messaging_identity','messaging_invite'] loop
+    perform pg_temp.assert_eq('authenticated não tem verbo nenhum em app.' || v_tabela,
+      (select count(*) from unnest(array['SELECT','INSERT','UPDATE','DELETE']) v
+        where has_table_privilege('authenticated', 'app.' || v_tabela, v)), 0);
+    perform pg_temp.assert_eq('anon idem em app.' || v_tabela,
+      (select count(*) from unnest(array['SELECT','INSERT','UPDATE','DELETE']) v
+        where has_table_privilege('anon', 'app.' || v_tabela, v)), 0);
+    -- Zero policy é a GARANTIA aqui, não a falta dela: uma policy seria uma
+    -- porta para authenticated, e ninguém do painel lê o chat_id.
+    perform pg_temp.assert_eq('app.' || v_tabela || ' tem ZERO policies (decisão do dono)',
+      (select count(*) from pg_policies where schemaname = 'app' and tablename = v_tabela), 0);
+    perform pg_temp.assert_eq('service_role LÊ app.' || v_tabela || ' (o Caminho 2 existe)',
+      case when has_table_privilege('service_role', 'app.' || v_tabela, 'SELECT')
+           then 1 else 0 end, 1);
+    perform pg_temp.assert_eq('e NÃO apaga app.' || v_tabela || ' (revogar é revoked_at)',
+      case when has_table_privilege('service_role', 'app.' || v_tabela, 'DELETE')
+           then 1 else 0 end, 0);
+    perform pg_temp.assert_eq('app.' || v_tabela || ' tem RLS ligada',
+      case when (select relrowsecurity from pg_class
+                  where oid = ('app.' || v_tabela)::regclass) then 1 else 0 end, 1);
+  end loop;
+end $$;
+
+-- --- owner de B, ANTES de o vigia medir o bot dele: sem medição NÃO está pronto --
+-- SPEC §4: para telegram, ready = integração ativa E channel_health.status =
+-- 'connected'. A metade "sem medição não está pronto" é o `coalesce(..., false)`
+-- da função, e é a única defesa contra um bot que ninguém testou aparecer
+-- verde na tela. Afirmada aqui, com o bot de B ativo e sem linha de saúde:
+-- a linha da RPC EXISTE (o positivo), a saúde vem nula, e ready é false.
+set local role authenticated;
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+
+do $$ begin
+  perform pg_temp.assert_eq('owner B ainda não vê saúde nenhuma (o vigia não mediu o bot dele)',
+    (select count(*) from app.channel_health), 0);
+  perform pg_temp.assert_eq('mas a linha telegram de B EXISTE na fn_channel_readiness',
+    (select count(*) from public.fn_channel_readiness() where provider = 'telegram'), 1);
+  perform pg_temp.assert_eq('e vem com health_status NULO',
+    (select count(*) from public.fn_channel_readiness()
+      where provider = 'telegram' and health_status is null and health_changed_at is null), 1);
+  perform pg_temp.assert_eq('e NÃO pronta: bot sem medição não está pronto (SPEC §4)',
+    (select count(*) from public.fn_channel_readiness()
+      where provider = 'telegram' and not ready), 1);
+end $$;
+
+-- Agora o vigia mede o bot de B: `disconnected`, valor DIFERENTE do de A para
+-- que "owner A não vê a linha de B" não seja indistinguível de "vê a dele
+-- duas vezes".
+reset role;
+do $$ begin
+  perform app.fn_record_channel_health('c3b00000-0000-0000-0000-0000000000d1', 'disconnected', '401');
+end $$;
+
+-- --- owner de A: permission denied nas duas, e LÊ PII ao lado -----------------
+set local role authenticated;
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+
+do $$
+declare v_negado boolean;
+begin
+  perform pg_temp.assert_eq('owner A LÊ employee_pii (o positivo: ele lê o que tem grant)',
+    (select count(*) from app.employee_pii), 1);
+
+  v_negado := false;
+  begin
+    perform 1 from app.messaging_identity;
+  exception when insufficient_privilege then v_negado := true; end;
+  perform pg_temp.assert_eq('owner A recebe permission denied em app.messaging_identity (não zero linhas)',
+    case when v_negado then 1 else 0 end, 1);
+
+  v_negado := false;
+  begin
+    perform 1 from app.messaging_invite;
+  exception when insufficient_privilege then v_negado := true; end;
+  perform pg_temp.assert_eq('owner A recebe permission denied em app.messaging_invite',
+    case when v_negado then 1 else 0 end, 1);
+
+  -- channel_health: a linha de A, e NÃO a de B. Os valores diferem, então o
+  -- 1 é de fato a linha dele e não uma duplicata.
+  perform pg_temp.assert_eq('owner A LÊ app.channel_health: 1 linha',
+    (select count(*) from app.channel_health), 1);
+  perform pg_temp.assert_eq('e é a do bot dele (connected), não a de B (disconnected)',
+    (select count(*) from app.channel_health where status = 'connected'
+       and integration_id = 'c3a00000-0000-0000-0000-0000000000d2'), 1);
+  perform pg_temp.assert_eq('owner A NÃO vê a saúde do bot de B',
+    (select count(*) from app.channel_health
+      where tenant_id = 'bbbbbbbb-0000-0000-0000-000000000002'), 0);
+
+  -- E não grava saúde: o vigia é service_role.
+  v_negado := false;
+  begin
+    insert into app.channel_health (integration_id, tenant_id, status)
+    values ('c3a00000-0000-0000-0000-0000000000d1', 'aaaaaaaa-0000-0000-0000-000000000001', 'connected');
+  exception when insufficient_privilege then v_negado := true; end;
+  perform pg_temp.assert_eq('owner A recebe permission denied ao INSERIR em app.channel_health',
+    case when v_negado then 1 else 0 end, 1);
+end $$;
+
+-- --- as duas RPCs, como owner de A --------------------------------------------
+do $$ begin
+  -- fn_channel_readiness: as DUAS linhas de A — meta_cloud e telegram lado a
+  -- lado. É a linha 1 da SPEC §2.2 vista pela RPC.
+  perform pg_temp.assert_eq('fn_channel_readiness: owner A vê 2 linhas',
+    (select count(*) from public.fn_channel_readiness()), 2);
+  perform pg_temp.assert_eq('e as duas são de A',
+    (select count(*) from public.fn_channel_readiness()
+      where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001'), 2);
+  perform pg_temp.assert_eq('uma é telegram (channel telegram, connected, ready)',
+    (select count(*) from public.fn_channel_readiness()
+      where provider = 'telegram' and channel = 'telegram'
+        and health_status = 'connected' and ready), 1);
+  perform pg_temp.assert_eq('a outra é meta_cloud (channel whatsapp)',
+    (select count(*) from public.fn_channel_readiness()
+      where provider = 'meta_cloud' and channel = 'whatsapp'), 1);
+  -- O POSITIVO da contagem de regra bloqueada: meta_cloud é oficial, a regra de
+  -- A aponta para template rascunho, e ela conta EXATAMENTE uma vez — não duas.
+  -- Sem a restrição `p.channel = 'whatsapp'` na CTE `blocked`, a regra casaria
+  -- também com a linha telegram (que é `official`) e viria 2 nas duas linhas.
+  perform pg_temp.assert_eq('a linha meta_cloud conta a regra bloqueada UMA vez (rules_blocked = 1) e não está pronta',
+    (select count(*) from public.fn_channel_readiness()
+      where provider = 'meta_cloud' and rules_blocked = 1 and not ready), 1);
+  -- Telegram não tem template a aprovar: os três contadores valem 0 nele.
+  perform pg_temp.assert_eq('a linha telegram traz templates_total = 0 e rules_blocked = 0',
+    (select count(*) from public.fn_channel_readiness()
+      where provider = 'telegram' and templates_total = 0
+        and templates_approved = 0 and rules_blocked = 0), 1);
+
+  -- fn_telegram_adhesion: A Centro = (1, 1, 1); A Norte = (0, 1, 0).
+  perform pg_temp.assert_eq('fn_telegram_adhesion: owner A vê as 2 unidades',
+    (select count(*) from public.fn_telegram_adhesion()), 2);
+  perform pg_temp.assert_eq('A Centro: joined = 1',
+    (select joined from public.fn_telegram_adhesion()
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a1'), 1);
+  perform pg_temp.assert_eq('A Centro: pending = 1 (o do convite em aberto)',
+    (select pending from public.fn_telegram_adhesion()
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a1'), 1);
+  perform pg_temp.assert_eq('A Centro: revoked = 1',
+    (select revoked from public.fn_telegram_adhesion()
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a1'), 1);
+  -- Os três somam os ativos da unidade: nenhum estado mudo fica de fora.
+  perform pg_temp.assert_eq('A Centro: joined + pending + revoked = 3 ativos',
+    (select joined + pending + revoked from public.fn_telegram_adhesion()
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a1'), 3);
+  -- ⛔ E são 4 na tabela: o quarto é o DESLIGADO, e ele fica fora da soma. Sem
+  --    o filtro `status <> 'desligado'` ele viraria `pending` e a soma daria 4.
+  perform pg_temp.assert_eq('A Centro tem 4 colaboradores na tabela (o owner os vê)',
+    (select count(*) from public.vw_employee
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a1'), 4);
+  perform pg_temp.assert_eq('e 1 deles é desligado — o que não entra em contagem nenhuma',
+    (select count(*) from public.vw_employee
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a1' and status = 'desligado'), 1);
+  perform pg_temp.assert_eq('A Norte: (0, 1, 0) — c2 nunca aderiu',
+    (select count(*) from public.fn_telegram_adhesion()
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a2'
+        and joined = 0 and pending = 1 and revoked = 0), 1);
+
+  -- ⛔ Nenhuma coluna da resposta nomeia pessoa. Afirmado no tipo de retorno
+  --    (os OUT args em pg_proc), por nome exato.
+  perform pg_temp.assert_eq('fn_telegram_adhesion não devolve external_id, chat_id, contact_id, employee_id nem name',
+    (select count(*)
+       from pg_proc p join pg_namespace n on n.oid = p.pronamespace,
+            unnest(p.proargnames, p.proargmodes) as a(nome, modo)
+      where n.nspname = 'public' and p.proname = 'fn_telegram_adhesion' and a.modo = 't'
+        and a.nome in ('external_id','chat_id','contact_id','employee_id','name')), 0);
+  perform pg_temp.assert_eq('e devolve exatamente as 5 colunas do contrato',
+    (select count(*)
+       from pg_proc p join pg_namespace n on n.oid = p.pronamespace,
+            unnest(p.proargnames, p.proargmodes) as a(nome, modo)
+      where n.nspname = 'public' and p.proname = 'fn_telegram_adhesion' and a.modo = 't'
+        and a.nome in ('unit_id','unit_name','joined','pending','revoked')), 5);
+end $$;
+
+-- --- personnel e hr: o mesmo par (permission denied + PII lida ao lado) --------
+set local request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+do $$
+declare v_negado boolean := false;
+begin
+  perform pg_temp.assert_eq('DP LÊ employee_pii (o positivo)',
+    (select count(*) from app.employee_pii), 1);
+  begin
+    perform 1 from app.messaging_identity;
+  exception when insufficient_privilege then v_negado := true; end;
+  perform pg_temp.assert_eq('DP tem pii e AINDA ASSIM recebe permission denied em app.messaging_identity',
+    case when v_negado then 1 else 0 end, 1);
+  v_negado := false;
+  begin
+    perform 1 from app.messaging_invite;
+  exception when insufficient_privilege then v_negado := true; end;
+  perform pg_temp.assert_eq('e em app.messaging_invite',
+    case when v_negado then 1 else 0 end, 1);
+end $$;
+
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$
+declare v_negado boolean := false;
+begin
+  perform pg_temp.assert_eq('RH LÊ employee_pii (o positivo — com pii, como na matriz do produto)',
+    (select count(*) from app.employee_pii), 1);
+  begin
+    perform 1 from app.messaging_identity;
+  exception when insufficient_privilege then v_negado := true; end;
+  perform pg_temp.assert_eq('RH recebe permission denied em app.messaging_identity',
+    case when v_negado then 1 else 0 end, 1);
+  v_negado := false;
+  begin
+    perform 1 from app.messaging_invite;
+  exception when insufficient_privilege then v_negado := true; end;
+  perform pg_temp.assert_eq('e em app.messaging_invite',
+    case when v_negado then 1 else 0 end, 1);
+end $$;
+
+-- --- supervisor de unidade de A: lê a saúde, e as RPCs só na unidade dele -----
+set local request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+do $$ begin
+  -- Estado do canal é do tenant (has_tenant): o supervisor lê.
+  perform pg_temp.assert_eq('supervisor LÊ app.channel_health (é estado do canal, has_tenant)',
+    (select count(*) from app.channel_health), 1);
+  -- A mesma régua de fn_whatsapp_readiness: a prontidão responde a ele.
+  perform pg_temp.assert_eq('fn_channel_readiness responde ao supervisor (2 linhas de A)',
+    (select count(*) from public.fn_channel_readiness()), 2);
+  -- E a adesão, só na unidade dele — A Centro, com os números certos.
+  perform pg_temp.assert_eq('fn_telegram_adhesion: supervisor vê SÓ a unidade dele',
+    (select count(*) from public.fn_telegram_adhesion()), 1);
+  perform pg_temp.assert_eq('e é A Centro, com (1, 1, 1)',
+    (select count(*) from public.fn_telegram_adhesion()
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a1'
+        and joined = 1 and pending = 1 and revoked = 1), 1);
+  perform pg_temp.assert_eq('supervisor NÃO vê A Norte na adesão',
+    (select count(*) from public.fn_telegram_adhesion()
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a2'), 0);
+end $$;
+
+-- --- owner de B: nada de A ----------------------------------------------------
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_eq('fn_channel_readiness: owner B vê as 2 linhas dele (z_api e telegram)',
+    (select count(*) from public.fn_channel_readiness()), 2);
+  -- O NEGATIVO do par: z_api NÃO é oficial, então a regra de B apontando para
+  -- template rascunho NÃO é bloqueio — nem na linha z_api, nem na telegram
+  -- (que é `official`, e sem `p.channel = 'whatsapp'` na CTE seria ela a fazer
+  -- a regra contar). z_api está pronta por existir.
+  perform pg_temp.assert_eq('a linha z_api tem rules_blocked = 0 e está pronta (não oficial: template não a trava)',
+    (select count(*) from public.fn_channel_readiness()
+      where provider = 'z_api' and channel = 'whatsapp' and rules_blocked = 0 and ready), 1);
+  perform pg_temp.assert_eq('e a linha telegram de B também tem rules_blocked = 0',
+    (select count(*) from public.fn_channel_readiness()
+      where provider = 'telegram' and rules_blocked = 0), 1);
+  perform pg_temp.assert_eq('e zero linhas de A',
+    (select count(*) from public.fn_channel_readiness()
+      where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001'), 0);
+  perform pg_temp.assert_eq('o bot de B está disconnected e NÃO pronto',
+    (select count(*) from public.fn_channel_readiness()
+      where provider = 'telegram' and health_status = 'disconnected' and not ready), 1);
+  perform pg_temp.assert_eq('owner B lê só a saúde do bot dele',
+    (select count(*) from app.channel_health), 1);
+  perform pg_temp.assert_eq('fn_telegram_adhesion: owner B vê só B Sul',
+    (select count(*) from public.fn_telegram_adhesion()), 1);
+  perform pg_temp.assert_eq('e B Sul é (0, 1, 0)',
+    (select count(*) from public.fn_telegram_adhesion()
+      where unit_id = 'b0000000-0000-0000-0000-0000000000a1'
+        and joined = 0 and pending = 1 and revoked = 0), 1);
+end $$;
+
+-- --- anon: permission denied nas três --------------------------------------
+reset request.jwt.claim.sub;
+set local role anon;
+do $$
+declare v_tabela text; v_negado boolean;
+begin
+  foreach v_tabela in array array['messaging_identity','messaging_invite','channel_health'] loop
+    v_negado := false;
+    begin
+      execute format('select 1 from app.%I', v_tabela);
+    exception when insufficient_privilege then v_negado := true; end;
+    perform pg_temp.assert_eq('anon recebe permission denied em app.' || v_tabela,
+      case when v_negado then 1 else 0 end, 1);
+  end loop;
+end $$;
+
+rollback to savepoint prova_c3;
+
+-- O savepoint não deixou rastro — nem os dois colaboradores extras.
+reset role;
+do $$ begin
+  perform pg_temp.assert_eq('a prova do C3 não deixou rastro (identidades)',
+    (select count(*) from app.messaging_identity), 0);
+  perform pg_temp.assert_eq('nem colaborador extra em A Centro',
+    (select count(*) from app.employee
+      where unit_id = 'a0000000-0000-0000-0000-0000000000a1'), 1);
+end $$;
+
 reset role;
 
 \echo ''

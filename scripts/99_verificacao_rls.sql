@@ -100,7 +100,7 @@ begin
     if r.n = 0 then aviso := aviso || r.tablename || ' '; end if;
   end loop;
   if aviso <> '' then
-    raise notice 'ATENÇÃO (esperado apenas para integration_secret e mv_*): sem policy -> %', aviso;
+    raise notice 'ATENÇÃO (esperado apenas para integration_secret, messaging_identity, messaging_invite e mv_*): sem policy -> %', aviso;
   end if;
 end $$;
 
@@ -269,6 +269,133 @@ begin
   if falhas <> '' then
     raise exception 'FALHA: rótulo de métrica com identificador em inglês no meio da frase -> %', falhas;
   end if;
+end $$;
+
+\echo '--- 14. Canais / C3: as duas tabelas do chat_id têm RLS ligada e ZERO policy'
+-- ⛔ AQUI O ZERO É A GARANTIA, NÃO A FALTA DELA. O item 7 avisa quando uma
+-- tabela de `app` não tem policy, porque em geral é esquecimento. Para
+-- `app.messaging_identity` e `app.messaging_invite` é decisão do dono
+-- (15/09/2026): a régua de `app.integration_secret` — nenhum papel do painel lê
+-- o chat_id, nem owner. Uma policy que aparecesse aqui seria uma porta aberta
+-- para `authenticated`, e é isso que este item barra. O grant é conferido em
+-- todos os verbos, e o positivo (`service_role` lê e escreve, e NÃO apaga)
+-- impede que o item fique verde numa tabela que ninguém alcança.
+do $$
+declare r record; v text; falhas text := '';
+begin
+  for r in select unnest(array['messaging_identity','messaging_invite']) as t loop
+    if not (select relrowsecurity from pg_class where oid = ('app.' || r.t)::regclass) then
+      falhas := falhas || format('%s(sem RLS) ', r.t);
+    end if;
+    if (select count(*) from pg_policies where schemaname = 'app' and tablename = r.t) <> 0 then
+      falhas := falhas || format('%s(tem policy — o dono autorizou nenhuma) ', r.t);
+    end if;
+    foreach v in array array['SELECT','INSERT','UPDATE','DELETE'] loop
+      if has_table_privilege('authenticated', 'app.' || r.t, v) then
+        falhas := falhas || format('%s(authenticated tem %s) ', r.t, v);
+      end if;
+      if has_table_privilege('anon', 'app.' || r.t, v) then
+        falhas := falhas || format('%s(anon tem %s) ', r.t, v);
+      end if;
+    end loop;
+    foreach v in array array['SELECT','INSERT','UPDATE'] loop
+      if not has_table_privilege('service_role', 'app.' || r.t, v) then
+        falhas := falhas || format('%s(service_role sem %s — o Caminho 2 não existiria) ', r.t, v);
+      end if;
+    end loop;
+    if has_table_privilege('service_role', 'app.' || r.t, 'DELETE') then
+      falhas := falhas || format('%s(service_role apaga — revogar é revoked_at) ', r.t);
+    end if;
+  end loop;
+  if falhas <> '' then raise exception 'FALHA: fronteira do chat_id -> %', falhas; end if;
+end $$;
+
+\echo '--- 15. Canais / C3: channel_health lida pelo tenant, escrita só por service_role'
+do $$
+declare v text; falhas text := ''; n int; q text;
+begin
+  if not (select relrowsecurity from pg_class where oid = 'app.channel_health'::regclass) then
+    falhas := falhas || 'sem RLS ';
+  end if;
+  select count(*) into n from pg_policies where schemaname = 'app' and tablename = 'channel_health';
+  if n <> 1 then falhas := falhas || format('%s policies, esperava 1 ', n); end if;
+  select qual into q from pg_policies
+   where schemaname = 'app' and tablename = 'channel_health' and policyname = 'channel_health_read';
+  if q is null or q not like '%has_tenant%' then
+    falhas := falhas || 'channel_health_read não é util.has_tenant ';
+  end if;
+  if exists (select 1 from pg_policies
+              where schemaname = 'app' and tablename = 'channel_health' and cmd <> 'SELECT') then
+    falhas := falhas || 'policy de escrita (a escrita é service_role) ';
+  end if;
+  if not has_table_privilege('authenticated', 'app.channel_health', 'SELECT') then
+    falhas := falhas || 'authenticated não lê (a tela nunca veria o estado do canal) ';
+  end if;
+  foreach v in array array['INSERT','UPDATE','DELETE'] loop
+    if has_table_privilege('authenticated', 'app.channel_health', v) then
+      falhas := falhas || format('authenticated tem %s ', v);
+    end if;
+  end loop;
+  foreach v in array array['SELECT','INSERT','UPDATE'] loop
+    if not has_table_privilege('service_role', 'app.channel_health', v) then
+      falhas := falhas || format('service_role sem %s (o vigia não gravaria) ', v);
+    end if;
+  end loop;
+  if has_table_privilege('service_role', 'app.channel_health', 'DELETE') then
+    falhas := falhas || 'service_role apaga saúde ';
+  end if;
+  -- A porta única de escrita: definer, travada, e só service_role a executa.
+  if not exists (
+    select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'app' and p.proname = 'fn_record_channel_health'
+       and p.prosecdef and p.proconfig::text like '%search_path=%'
+       and has_function_privilege('service_role', p.oid, 'EXECUTE')
+       and not has_function_privilege('authenticated', p.oid, 'EXECUTE')
+       and not has_function_privilege('anon', p.oid, 'EXECUTE')
+  ) then
+    falhas := falhas || 'app.fn_record_channel_health ausente, não definer, sem search_path, ou executável pelo painel ';
+  end if;
+  if falhas <> '' then raise exception 'FALHA: app.channel_health -> %', falhas; end if;
+end $$;
+
+\echo '--- 16. Canais / C3: as duas RPCs novas são definer travado, com grant a authenticated'
+-- O item 9 já varre todo definer de `public` por search_path, anon e retorno
+-- por pessoa. Este item acrescenta o POSITIVO que o 9 não pede — `grant execute`
+-- a `authenticated`, que `trg_lock_down_new_function` não escreve porque não
+-- cobre `public` — e, na de adesão, os cinco nomes que a SPEC §3.2 proíbe,
+-- conferidos por NOME EXATO nos OUT args (o 9 usa regex; `unit_name` passa lá
+-- e precisa passar aqui, `name` sozinho não).
+do $$
+declare r record; falhas text := ''; cols text[];
+begin
+  for r in
+    select p.oid, p.proname, p.prosecdef, p.proconfig, p.proargnames, p.proargmodes
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public'
+       and p.proname in ('fn_channel_readiness', 'fn_telegram_adhesion')
+  loop
+    if not r.prosecdef then falhas := falhas || r.proname || '(não é definer) '; end if;
+    if r.proconfig is null or not (r.proconfig::text like '%search_path=%') then
+      falhas := falhas || r.proname || '(sem search_path) ';
+    end if;
+    if not has_function_privilege('authenticated', r.oid, 'EXECUTE') then
+      falhas := falhas || r.proname || '(authenticated não executa — a tela não abre) ';
+    end if;
+    if has_function_privilege('anon', r.oid, 'EXECUTE') then
+      falhas := falhas || r.proname || '(anon executa) ';
+    end if;
+    select array_agg(a.n) into cols
+      from unnest(r.proargnames, r.proargmodes) as a(n, m) where a.m = 't';
+    if cols && array['external_id','chat_id','contact_id','employee_id','name'] then
+      falhas := falhas || r.proname || format('(devolve pessoa: %s) ', cols);
+    end if;
+  end loop;
+  if (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public'
+         and p.proname in ('fn_channel_readiness', 'fn_telegram_adhesion')) <> 2 then
+    falhas := falhas || 'faltou uma das duas RPCs ';
+  end if;
+  if falhas <> '' then raise exception 'FALHA: RPCs do C3 -> %', falhas; end if;
 end $$;
 
 \echo ''

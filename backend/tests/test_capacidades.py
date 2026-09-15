@@ -30,6 +30,7 @@ import pytest
 
 from operax.alertas import capacidades, outbox
 from operax.alertas.capacidades import (
+    CHANNEL_PROVIDERS,
     CONSERVATIVE_DEFAULT,
     WHATSAPP_PROVIDERS,
     ProviderCapabilities,
@@ -53,9 +54,10 @@ def test_provedor_desconhecido_levanta_excecao_nomeada() -> None:
     assert "evolution_api" in str(erro.value)
 
 
-def test_os_tres_conhecidos_resolvem() -> None:
+def test_os_quatro_conhecidos_resolvem() -> None:
     """O par do teste acima: "levanta sempre" também passaria sem ele."""
-    for provider in ("meta_cloud", "z_api", "uazapi"):
+    assert set(CHANNEL_PROVIDERS) == {"meta_cloud", "z_api", "uazapi", "telegram"}
+    for provider in CHANNEL_PROVIDERS:
         assert isinstance(capabilities_for(provider), ProviderCapabilities)
 
 
@@ -95,6 +97,23 @@ def test_as_duas_familias_nunca_coexistem_na_matriz_inteira() -> None:
         f"{ambas} declara auto-restrição e hetero-restrição ao mesmo tempo: "
         "seria um canal banível por dizer o que foi autorizado a dizer"
     )
+
+
+def test_o_telegram_e_a_terceira_familia_e_nenhum_whatsapp_esta_nela() -> None:
+    """SPEC-CANAIS §1.1: o Telegram não tem NENHUMA das duas — e "nenhuma" não é
+    "sem regra". A restrição dele é de destinatário: só alcança quem abriu o
+    bot. Os três de WhatsApp endereçam um número que o empregador já tem, e por
+    isso não carregam a terceira; se um dia carregarem, o sender passaria a
+    exigir adesão de quem nunca precisou aderir."""
+    telegram = capabilities_for("telegram")
+    assert telegram.requires_templates is False
+    assert telegram.ban_risk is False
+    assert telegram.requires_recipient_opt_in is True
+
+    for provider in WHATSAPP_PROVIDERS:
+        assert capabilities_for(provider).requires_recipient_opt_in is False, provider
+
+    assert "telegram" not in WHATSAPP_PROVIDERS
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +264,7 @@ def test_toda_capacidade_declarada_tem_consumidor(capability: str) -> None:
 # ---------------------------------------------------------------------------
 # A doutrina como teste, não como disciplina
 # ---------------------------------------------------------------------------
-_PROVIDER_NAMES = set(WHATSAPP_PROVIDERS)
+_PROVIDER_NAMES = set(CHANNEL_PROVIDERS)
 
 #: Onde os nomes podem aparecer como literal: a matriz, que é o dono, e os
 #: módulos de `provedores/` — cada um é dono do próprio `NAME`, como `base.py`
@@ -292,4 +311,4 @@ def test_o_sender_conhece_todo_provedor_de_whatsapp_da_matriz() -> None:
     "provedor não configurado" — degrada bem, e por isso ninguém vê."""
     from operax.alertas.sender import default_providers
 
-    assert _PROVIDER_NAMES <= set(default_providers())
+    assert set(WHATSAPP_PROVIDERS) <= set(default_providers())

@@ -143,7 +143,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 **Restrições**
 
-- `CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['meta_cloud'::text, 'z_api'::text, 'uazapi'::text, 'smtp'::text, 'resend'::text]))))`
+- `CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['meta_cloud'::text, 'z_api'::text, 'uazapi'::text, 'telegram'::text, 'smtp'::text, 'resend'::text]))))`
 - `CHECK ((channel = ANY (ARRAY['whatsapp'::text, 'email'::text])))`
 - `CHECK ((status = ANY (ARRAY['pending'::text, 'sending'::text, 'sent'::text, 'failed'::text, 'discarded'::text])))`
 
@@ -292,7 +292,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 **Restrições**
 
-- `CHECK ((provider = ANY (ARRAY['meta_cloud'::text, 'z_api'::text, 'uazapi'::text, 'smtp'::text, 'resend'::text])))`
+- `CHECK ((provider = ANY (ARRAY['meta_cloud'::text, 'z_api'::text, 'uazapi'::text, 'telegram'::text, 'smtp'::text, 'resend'::text])))`
 - `CHECK ((status = ANY (ARRAY['sent'::text, 'delivered'::text, 'read'::text, 'failed'::text])))`
 
 **Policies**
@@ -548,6 +548,38 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 <details><summary>Índices</summary>
 
 - `UNIQUE benefit_type_tenant_id_code_key` — `app.benefit_type USING btree (tenant_id, code)`
+
+</details>
+
+
+## `app.channel_health`
+
+> Saúde do canal, medida pelo vigia que PERGUNTA ao provedor (o webhook emudece justamente quando cai). Uma linha por integração. status_changed_at só avança quando o status muda — é a idade do estado, e a regra mora em app.fn_record_channel_health, não no Python. Leitura por util.has_tenant (estado do canal, não dado pessoal); escrita só service_role. O vigia nunca religa: reconectar número bloqueado transforma suspensão em banimento.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `integration_id` 🔑 | uuid | não |  | `app.integration` |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `status` | text | não |  |  |  |
+| `checked_at` | timestamp with time zone | não | `now()` |  |  |
+| `status_changed_at` | timestamp with time zone | não | `now()` |  | Só avança quando o status muda. Duas medições iguais seguidas mantêm o valor; é o que permite dizer "desconectado há 3 horas" em vez de "checado há 15 min". |
+| `detail` | text | sim |  |  |  |
+
+**Restrições**
+
+- `CHECK ((status = ANY (ARRAY['connected'::text, 'disconnected'::text, 'unknown'::text])))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `channel_health_read` | SELECT | `util.has_tenant(tenant_id)` | `-` |
+
+<details><summary>Índices</summary>
+
+- `channel_health_tenant_idx` — `app.channel_health USING btree (tenant_id)`
 
 </details>
 
@@ -1579,7 +1611,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 |---|---|---|---|---|---|
 | `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
 | `tenant_id` | uuid | não |  | `app.tenant` |  |
-| `provider` | text | não |  |  | meta_cloud = API oficial da Meta, exige template aprovado e verificação de negócio. z_api e uazapi = não oficiais, baseados em QR/WhatsApp Web: dispensam template, mas o número do cliente pode ser banido sem recurso. |
+| `provider` | text | não |  |  | meta_cloud = API oficial da Meta, exige template aprovado e verificação de negócio (hetero-restrição). z_api e uazapi = não oficiais, baseados em QR/WhatsApp Web: dispensam template, mas o número do cliente pode ser banido sem recurso (auto-restrição). telegram = terceira família, restrição de DESTINATÁRIO: não envia para número de telefone, só para o chat_id que passa a existir quando a pessoa inicia o bot — o vínculo vive em app.messaging_identity e é revogável. Um bot por tenant, token no Vault como o WhatsApp; coexiste com o provedor de WhatsApp ativo (índice irmão, nunca o mesmo índice). |
 | `alias` | text | sim |  |  |  |
 | `config` | jsonb | não | `'{}'::jsonb` |  |  |
 | `active` | boolean | não | `false` |  |  |
@@ -1587,7 +1619,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 **Restrições**
 
-- `CHECK ((provider = ANY (ARRAY['secullum'::text, 'domain'::text, 'spreadsheet'::text, 'meta_cloud'::text, 'z_api'::text, 'uazapi'::text, 'smtp'::text, 'resend'::text])))`
+- `CHECK ((provider = ANY (ARRAY['secullum'::text, 'domain'::text, 'spreadsheet'::text, 'meta_cloud'::text, 'z_api'::text, 'uazapi'::text, 'telegram'::text, 'smtp'::text, 'resend'::text])))`
 
 **Policies**
 
@@ -1597,6 +1629,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 <details><summary>Índices</summary>
 
+- `UNIQUE integration_telegram_unico_ativo` — `app.integration USING btree (tenant_id) WHERE (active AND (provider = 'telegram'::text))`
 - `UNIQUE integration_tenant_id_provider_alias_key` — `app.integration USING btree (tenant_id, provider, alias)`
 - `UNIQUE integration_whatsapp_unico_ativo` — `app.integration USING btree (tenant_id) WHERE (active AND (provider = ANY (ARRAY['meta_cloud'::text, 'z_api'::text, 'uazapi'::text])))`
 
@@ -1805,6 +1838,72 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 - `message_template_tenant_idx` — `app.message_template USING btree (tenant_id, code) WHERE active`
 - `UNIQUE message_template_tenant_id_code_language_key` — `app.message_template USING btree (tenant_id, code, language)`
+
+</details>
+
+
+## `app.messaging_identity`
+
+> Identidade de mensageria: o chat_id do Telegram como REGISTRO DE CONSENTIMENTO (tem data, origem e revogação), nunca coluna de cadastro. Exatamente um titular por linha — responsável (contact_id) ou colaborador (employee_id). Revogar é preencher revoked_at; nada aqui é apagado. ⛔ NENHUM papel do painel lê esta tabela, nem owner: RLS ligada, zero policy, sem grant a authenticated. Só service_role, pelo Caminho 2 — na prática só o sender e o webhook do /start. O chat_id nunca sai em tela, log, export ou resposta de API; a tela vê contagem por unidade em public.fn_telegram_adhesion.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `channel` | text | não |  |  |  |
+| `contact_id` | uuid | sim |  | `app.contact` |  |
+| `employee_id` | uuid | sim |  | `app.employee` |  |
+| `external_id` | text | não |  |  | O chat_id do Telegram. Dado pessoal (domínio pii): identifica a pessoa e a liga a uma conta. Nunca em view de public, nunca em log, nunca em JSON de resposta. |
+| `opted_in_at` | timestamp with time zone | não | `now()` |  |  |
+| `revoked_at` | timestamp with time zone | sim |  |  | Quando o vínculo deixou de valer (a pessoa bloqueou o bot, ou o DP desvinculou). A linha fica: quem saiu e voltou tem duas, e a história é legível. |
+| `revoked_reason` | text | sim |  |  |  |
+
+**Restrições**
+
+- `CHECK (((contact_id IS NULL) <> (employee_id IS NULL)))`
+- `CHECK ((channel = 'telegram'::text))`
+
+**Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
+
+<details><summary>Índices</summary>
+
+- `UNIQUE messaging_identity_vigente_contact_uk` — `app.messaging_identity USING btree (tenant_id, channel, contact_id) WHERE ((revoked_at IS NULL) AND (contact_id IS NOT NULL))`
+- `UNIQUE messaging_identity_vigente_employee_uk` — `app.messaging_identity USING btree (tenant_id, channel, employee_id) WHERE ((revoked_at IS NULL) AND (employee_id IS NOT NULL))`
+- `UNIQUE messaging_identity_vigente_external_uk` — `app.messaging_identity USING btree (tenant_id, channel, external_id) WHERE (revoked_at IS NULL)`
+
+</details>
+
+
+## `app.messaging_invite`
+
+> Convite de adesão ao canal. O link https://t.me/<bot>?start=<token> É a credencial: quem o abrir vira o destinatário dos alertas individuais daquela pessoa. Por isso: uso único (used_at), validade de 7 dias (decisão do dono, 15/09/2026), token_hash e nunca o token. ⛔ NENHUM papel do painel lê esta tabela, nem owner: RLS ligada, zero policy, sem grant a authenticated. Só service_role, pelo Caminho 2.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `channel` | text | não |  |  |  |
+| `contact_id` | uuid | sim |  | `app.contact` |  |
+| `employee_id` | uuid | sim |  | `app.employee` |  |
+| `token_hash` | text | não |  |  | Hash do token do deep link, nunca o token. Vazamento do banco não entrega vínculo. |
+| `expires_at` | timestamp with time zone | não | `(now() + '7 days'::interval)` |  | Validade curta — 7 dias por default. Convite velho circulando é o vetor. |
+| `used_at` | timestamp with time zone | sim |  |  | Preenchido no primeiro /start válido. Segundo clique não vincula. |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Restrições**
+
+- `CHECK (((contact_id IS NULL) <> (employee_id IS NULL)))`
+- `CHECK ((channel = 'telegram'::text))`
+
+**Sem policy** — nenhuma linha passa para `authenticated`. Só `service_role`. Intencional.
+
+<details><summary>Índices</summary>
+
+- `UNIQUE messaging_invite_token_uk` — `app.messaging_invite USING btree (token_hash)`
 
 </details>
 
@@ -3505,6 +3604,16 @@ que consulta continua valendo. `anon` não lê nada — o painel autentica antes
 Funções com período parametrizado. `security invoker`: herdam a RLS de quem chama.
 
 
+### `fn_channel_readiness`
+
+```sql
+public.fn_channel_readiness()
+  returns TABLE(tenant_id uuid, provider text, channel text, official boolean, templates_total integer, templates_approved integer, rules_blocked integer, health_status text, health_changed_at timestamp with time zone, ready boolean)
+```
+
+Uma linha por integração ativa de canal (meta_cloud, z_api, uazapi, telegram) dos tenants do chamador, com o canal (whatsapp|telegram) e a saúde medida pelo vigia. ready: WhatsApp = a conta de fn_whatsapp_readiness (oficial exige template aprovado e nenhuma regra apontando para template não aprovado); Telegram = existe bot ativo E channel_health.status = connected — sem medição não está pronto. Para telegram templates_* e rules_blocked valem 0: não há template a aprovar, o body local é o que sai. Substitui fn_whatsapp_readiness.
+
+
 ### `fn_data_freshness`
 
 ```sql
@@ -3580,6 +3689,16 @@ public.fn_recurrence(p_de date, p_ate date, p_min_dias integer DEFAULT 3, p_unit
   returns TABLE(employee_id uuid, employee_name text, unit_name text, dias_com_desvio bigint, eventos bigint)
 ```
 
+### `fn_telegram_adhesion`
+
+```sql
+public.fn_telegram_adhesion()
+  returns TABLE(unit_id uuid, unit_name text, joined integer, pending integer, revoked integer)
+```
+
+Adesão ao Telegram por unidade: colaboradores ATIVOS da unidade com identidade vigente (joined), sem identidade alguma (pending — convite em aberto não tira ninguém daqui) e com identidade revogada e nenhuma vigente (revoked). Os três somam os ativos da unidade. Nome nenhum, chat_id nenhum, contact_id nenhum: é a única superfície do painel sobre app.messaging_identity, que nenhum papel lê. Recorte por util.user_tenants() + util.can_see_unit: o supervisor vê só as unidades dele. Responsáveis (app.contact) ficam FORA desta contagem: não têm unidade única.
+
+
 ### `fn_whatsapp_readiness`
 
 ```sql
@@ -3587,7 +3706,7 @@ public.fn_whatsapp_readiness()
   returns TABLE(tenant_id uuid, provider text, official boolean, templates_total integer, templates_approved integer, rules_blocked integer, ready boolean)
 ```
 
-ready = false quando o tenant está no provedor oficial e existe regra ligada apontando para template não aprovado. Nesse estado o alerta falha calado.
+DEPRECIADA em 15/09/2026 em favor de public.fn_channel_readiness(), que devolve uma linha por canal (WhatsApp e Telegram) com a saúde do vigia. Esta só conhece WhatsApp e assume um provedor ativo por tenant. Remoção em migration posterior, depois de medir que ninguém a chama. ready = false quando o tenant está no provedor oficial e existe regra ligada apontando para template não aprovado.
 
 
 ## Helpers de RLS (`util`)
