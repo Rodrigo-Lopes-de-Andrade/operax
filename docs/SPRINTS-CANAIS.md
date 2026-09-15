@@ -215,6 +215,97 @@ ofender. **Os quatro restantes ficam nomeados:**
    falha no provedor e varre a saída de log procurando o valor. Provedor que
    ecoa o token no corpo do erro é o caso real; descartar o corpo é a defesa.
 
+### ✅ C2, metade de backend — aprovada em 14/09/2026, dois ciclos; guardião PASSA em 15/09
+
+**Ciclo 1: REPROVADO** (1 ALTO, 2 MÉDIO, 12 BAIXO). **Ciclo 2: APROVADO.**
+Portões medidos por mim: pytest **745** (baseline 675), ruff limpo, `db-test`
+`SUÍTE COMPLETA OK` com 64 asserções do bloco de canais contra o cofre real.
+
+**O que entrou:**
+- `backend/operax/core/vault.py` — o cofre por tenant, que o `CLAUDE.md` listava
+  e ninguém tinha escrito. `store_secret` cria ou atualiza (o nome no cofre é
+  determinístico por ponteiro; regravar não duplica — contado em
+  `vault.secrets`) **na transação do chamador**; `read_secret` só tem
+  consumidor no `97` — é do C5. Toda instrução liga `%(tenant_id)s` pelo `join`
+  com `app.integration`, porque a tabela de ponteiros não tem `tenant_id`.
+- `alertas/provedores/{meta_cloud,z_api,uazapi}.py` — **só a verificação**;
+  `enviar` continua sendo o C5. Cada módulo declara o formulário **como dados**
+  (`FieldSpec`: `pattern`, `autocomplete`, `inputmode`, `secret`, `hint`) — o
+  §5.4 num lugar só — e `verify(fields, http) -> str` devolve a identidade
+  legível. Falha é `InvalidCredentialError(code)`, levantada `from None`:
+  nunca corpo, nunca URL.
+- `GET /canais/provedores`, `GET /canais/credencial`, `POST /canais/credencial`
+  — a ordem do `POST` é a de `curadoria.py`: `util.is_admin` no `user_scope`;
+  formato de cada campo **antes** de qualquer HTTP; o provedor **fora** de
+  transação; uma transação de `service_role` que desliga o WhatsApp ativo,
+  faz upsert de `app.integration` (`alias = provider`, como o `secullum` de
+  produção), um segredo no cofre por campo secreto, e `audit_log` com as
+  **chaves**. `config` e as chaves do cofre são **derivados de
+  `FieldSpec.secret` na rota** — virar a flag move o campo de um lugar para o
+  outro, e há teste de partição por provedor.
+- Um handler de `RequestValidationError` em `server/main.py`, **fora das
+  entregas e aceito**: o 422 nativo do FastAPI devolvia o corpo inteiro em
+  `input` — token de volta na resposta antes de a rota rodar. Vale para RH e
+  DP pelo mesmo caminho.
+
+**Os três gates da SPEC §5, medidos:** (1) credencial inválida não grava —
+a transação nem abre; (2) nenhum `GET` devolve valor nem `vault_id` — a
+consulta real executada no ensaio, colunas afirmadas; (3) **o token não
+aparece no log nem no erro** — e o caso real é o `z_api`, que leva o token
+**no caminho da URL**: o `httpx` loga a URL inteira em INFO e a
+`HTTPStatusError` a carrega na mensagem. Duas defesas, as duas provadas por
+mutação: o logger do `httpx` silenciado onde o cliente nasce, e `from None`
+em toda recusa. O revisor escreveu um gate 3 próprio para os três provedores
+e, sem a defesa, o token apareceu na linha exata do `httpx`.
+
+📌 **O ALTO do ciclo 1 é a lição desta sprint:** `str(Jsonb(...))` do psycopg
+**trunca em 35 caracteres**. A "varredura inteira" dos parâmetros da transação
+não via dentro de `config`, `antes` nem `depois` — o token gravado na
+auditoria passava por 735 verdes e pelo `db-test`. Agora a varredura abre
+`Jsonb.obj` (mapeamentos, listas, chaves), e há uma sentinela que reprova o
+próprio harness se ele voltar a `str()`. E um segundo furo achado pelo
+implementador no caminho: uma asserção nova do `97` estava **dentro** do
+`begin … exception when others` da prova de atomicidade e era engolida — o
+sub-bloco passou a capturar só a falha injetada, por SQLSTATE próprio.
+
+**Premissas, não medições (a parada do dono é onde se descobrem):** os três
+endpoints de verificação. Endpoint errado falha para o lado seguro:
+`unauthorized`/`malformed`, nada gravado.
+
+**Guardião de superfície, dez de dez, medido em 15/09:** dicionário idêntico
+(nenhum objeto novo em `public`); `vault` sem grant nem privilégio de schema
+para `anon`/`authenticated`, e nenhuma view de `public` nem função de
+`util` cita o cofre; `app.integration_secret` sem policy, RLS ligada, e o
+**owner** do tenant toma `permission denied` ao ler — na mesma transação em
+que lê `app.integration`; o `GET` real devolve só `provider`, `public_identity`
+e `updated_at`, com o valor comprovado no cofre; ciphertext ≠ valor e
+`decrypted_secret` = valor; gate 3 sob `DEBUG` com zero ocorrências do token
+e, sem a defesa, o mesmo transporte loga a URL; 422 de RH e DP sem `input`
+(e com o handler padrão os três ecoam CPF e salário); nenhum literal de
+segredo fora de stub de teste; `.env` intocado. Duas notas que não mudam o
+veredito: o grep literal `HTTP Request:` é ambíguo com o `httpx2` do
+`TestClient` (filtrar por `^INFO +httpx:`), e o handler preserva `ctx` — um
+`field_validator` que interpole valor no `ValueError` reabre o eco por outra
+porta.
+
+**Dívida nomeada:** `base_url` do `uazapi` é host arbitrário (SSRF cego —
+`https` só, 10 s, corpo descartado, admin do tenant; denylist de faixas
+privadas é decisão futura); `setLevel` do `httpx` é global ao processo; o
+`97` não varre `config` (quem prende é o pytest com `.obj`); o scanner por
+`ast` de códigos de recusa só vê literal; `responses={422:…}` fora do OpenAPI;
+`Mapping[str, ModuleType]` sem `Protocol` até o C5; `updated_at` do ponteiro
+ao regravar sem asserção (`now()` é constante na transação).
+
+### ⏳ C2, metade de frontend — despachada em 14/09/2026, em paralelo com o ciclo 2 do backend
+
+O contrato (`ProviderForm`, `FieldForm`, `CredentialStatus`, `CredentialRequest`)
+está fixado em `models.py` e o ciclo de correção do backend não muda a forma —
+por isso as duas metades correm juntas, em arquivos disjuntos. **§5.4 é o gate
+desta metade:** o formulário é dirigido pelos dados de `GET /canais/provedores`
+(`autocomplete`, `inputmode`, `pattern`, `secret`, `hint` vêm da API), a
+validação Zod usa o mesmo `pattern` que o backend impõe, e o segredo nunca
+volta — campos secretos limpos após sucesso.
+
 ## C3 — Telegram como quarto provedor
 
 - Migrations `ch_telegram_provider`, `ch_messaging_identity`, `ch_channel_health`,

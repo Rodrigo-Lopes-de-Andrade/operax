@@ -1510,3 +1510,60 @@ class ConnectionsScreen(BaseModel):
     rules_blocked: int = 0
     ready: bool = False
     blocked: list[BlockedAlertRule] = []
+
+
+class FieldForm(BaseModel):
+    """Um campo do formulário de credencial, como o provedor o declara.
+
+    É a SPEC-CANAIS §5.4 num lugar só: `pattern` (o mesmo que a API impõe antes
+    de qualquer HTTP), `autocomplete` e `inputmode` (o que impede o navegador de
+    despejar e-mail em campo numérico), e `hint` — a frase *"isto não parece um
+    ID de número"* que a tela mostra quando `pattern` falha. `secret` diz onde o
+    valor vai parar: no Vault, ou em `app.integration.config`.
+    """
+
+    name: str
+    label: str
+    pattern: str
+    autocomplete: str
+    inputmode: str
+    secret: bool
+    placeholder: str
+    hint: str
+
+
+class ProviderForm(BaseModel):
+    """O que a tela precisa para desenhar o formulário de um provedor.
+
+    Sem rótulo humano do provedor: o frontend tem o dele em `lib/canais/labels.ts`,
+    e um segundo aqui seria uma cópia livre para divergir.
+    """
+
+    provider: str
+    capabilities: ChannelCapabilities
+    fields: list[FieldForm]
+
+
+class CredentialStatus(BaseModel):
+    """O que se diz sobre a credencial gravada: que existe, não qual é (SPEC §5.3).
+
+    `configured` é verdadeiro quando o tenant tem um provedor de WhatsApp ativo
+    **com** ponteiro em `app.integration_secret`. `updated_at` é o maior
+    `updated_at` dos ponteiros. `public_identity` é a confirmação legível que o
+    provedor devolveu na verificação (*"conectado como …"*).
+
+    ⛔ Nenhum campo deste modelo carrega valor de segredo nem `vault_id`, em
+    nenhum estado — `tests/test_canais_credencial.py` varre o JSON.
+    """
+
+    configured: bool
+    provider: str | None = None
+    updated_at: datetime | None = None
+    public_identity: str | None = None
+
+
+class CredentialRequest(BaseModel):
+    """A credencial a validar e gravar. `fields` segue `ProviderForm.fields`."""
+
+    provider: str
+    fields: dict[str, str]

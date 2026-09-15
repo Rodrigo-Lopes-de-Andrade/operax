@@ -10,8 +10,11 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from operax.core.config import get_settings
 from operax.core.db import get_pools
@@ -53,6 +56,24 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_without_echo(_: Request, exc: RequestValidationError) -> JSONResponse:
+    """The standard 422, minus the `input` echo.
+
+    FastAPI's default handler copies the offending value into each error — and
+    for a missing field, the *parent object*. Measured on `POST /canais/credencial`
+    without `provider`: the 422 carried the token back in `input`. A value that
+    is a secret, a CPF or a salary does not belong in a response because the
+    request around it was malformed, so `input` is dropped for every route;
+    `type`, `loc` and `msg` — what a client acts on — stay as they were.
+    """
+    errors = [{k: v for k, v in error.items() if k != "input"} for error in exc.errors()]
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        content={"detail": jsonable_encoder(errors)},
+    )
 
 
 app.include_router(assistente.router)

@@ -247,11 +247,14 @@ def test_toda_capacidade_declarada_tem_consumidor(capability: str) -> None:
 # ---------------------------------------------------------------------------
 _PROVIDER_NAMES = set(WHATSAPP_PROVIDERS)
 
-#: Os dois lugares em que os nomes podem aparecer como literal: a matriz, que é
-#: o dono, e o docstring do contrato de provedor, que os cita como exemplo.
+#: Onde os nomes podem aparecer como literal: a matriz, que é o dono, e os
+#: módulos de `provedores/` — cada um é dono do próprio `NAME`, como `base.py`
+#: já era do docstring que os cita. A contrapartida está em
+#: `tests/test_canais_credencial.py`: `set(PROVIDERS) == set(WHATSAPP_PROVIDERS)`
+#: nos dois sentidos, para que um módulo a mais ou a menos não passe calado.
 _LITERAL_ALLOWED = {
     _BACKEND / "operax" / "alertas" / "capacidades.py",
-    _BACKEND / "operax" / "alertas" / "provedores" / "base.py",
+    *(_BACKEND / "operax" / "alertas" / "provedores").glob("*.py"),
 }
 
 
