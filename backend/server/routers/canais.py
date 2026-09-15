@@ -47,30 +47,46 @@ Leitura do estado (`GET /canais/credencial`): qualquer membro do tenant, como
 `GET /canais/conexoes` — a tela diz que a credencial existe, não qual é (§5.3).
 Escrita (`POST`): administrador, pela mesma `util.is_admin` da policy
 `integration_admin`.
+
+OS TEMPLATES — SPEC-CANAIS §5.5, E O LAÇO QUE FECHA `ready = false`
+`app.message_template` está vazia em produção e não tinha escrita por
+superfície nenhuma. O catálogo (`GET`/`PUT /canais/templates`) é a primeira; o
+"Sincronizar" (`POST /canais/templates/sincronizar`) é o que traz `meta_status`
+da WABA. Dois juízes que a rota não substitui: o gatilho
+`util.validate_template_body` decide se o corpo usa as variáveis declaradas, e
+a frase dele é o `detail` — este arquivo não conhece a sintaxe de placeholder;
+e `meta_cloud.META_STATUS` decide o que cada status da Meta vale — **só
+`APPROVED` vira `approved`**, e o que o mapa não conhece é `rejected` com o
+literal registrado. O token da Cloud API é o primeiro uso real de
+`read_secret`: vive numa variável local entre a leitura e a chamada à Meta,
+fora de transação, e não vai para auditoria, log, resposta nem exceção.
 """
 
 from __future__ import annotations
 
 import logging
-from collections.abc import AsyncIterator
+import re
+from collections.abc import AsyncIterator, Mapping
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import JSONResponse
+from psycopg import errors
 from psycopg.rows import DictRow
 from psycopg.types.json import Jsonb
 
 from operax.alertas.capacidades import WHATSAPP_PROVIDERS, capabilities_for
-from operax.alertas.provedores import PROVIDERS
+from operax.alertas.provedores import PROVIDERS, meta_cloud
 from operax.alertas.provedores.base import (
     FieldError,
     InvalidCredentialError,
     check_fields,
     verification_client,
 )
-from operax.core.tenant import tenant_scope, user_scope
-from operax.core.vault import store_secret
+from operax.core.tenant import TenantContext, tenant_scope, user_scope
+from operax.core.vault import read_secret, store_secret
 from server.deps import CurrentTenant
 from server.models import (
     BlockedAlertRule,
@@ -80,6 +96,9 @@ from server.models import (
     CredentialStatus,
     FieldForm,
     ProviderForm,
+    TemplateRow,
+    TemplateSyncResult,
+    TemplateWrite,
 )
 
 logger = logging.getLogger(__name__)
@@ -178,6 +197,7 @@ async def connections(tenant: CurrentTenant) -> ConnectionsScreen:
 # A credencial — SPEC-CANAIS §5
 # ---------------------------------------------------------------------------
 _SEM_PERMISSAO = "Gravar a credencial do canal é do administrador do cliente."
+_SEM_PERMISSAO_TEMPLATE = "Gravar templates do canal é do administrador do cliente."
 
 #: A frase de cada recusa do provedor, por código. O código é o que vai para o
 #: log e para a resposta; o corpo do provedor não vai para lugar nenhum (§5.3).
@@ -189,6 +209,15 @@ _REFUSALS = {
     "unreachable": "Não foi possível falar com o provedor agora. Nada foi gravado.",
     "malformed": (
         "O provedor respondeu de um jeito que este sistema não reconhece. Nada foi gravado."
+    ),
+    # As duas da sincronização de templates, recusadas antes de qualquer HTTP.
+    "no_official_provider": (
+        "A sincronização de templates só existe para a Cloud API da Meta, "
+        "e este cliente não a tem ativa."
+    ),
+    "no_credential": (
+        "A credencial da Cloud API não está gravada com o ID da WABA. "
+        "Grave-a em Conexões antes de sincronizar."
     ),
 }
 
@@ -311,6 +340,18 @@ def _refuse(detail: str, code: str, **extra: Any) -> JSONResponse:
     )
 
 
+async def _require_admin(tenant: TenantContext, detail: str = _SEM_PERMISSAO) -> None:
+    """`util.is_admin` perguntada ao banco como o usuário — a mesma função das
+    policies `integration_admin` e `message_template_admin`. 403 antes de
+    qualquer HTTP e de qualquer transação de `service_role`. `detail` é a
+    frase que a tela mostra como veio — ela nomeia o que foi negado."""
+    async with user_scope(tenant) as scope:
+        await scope.execute(_PERMISSION_SQL, {"tenant_id": tenant.tenant_id})
+        row = await scope.fetchone()
+        if not (row and row["admin"]):
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
 @router.get("/provedores")
 async def provider_forms(tenant: CurrentTenant) -> list[ProviderForm]:
     """O formulário de cada provedor de WhatsApp, na ordem da matriz (o oficial
@@ -344,11 +385,7 @@ async def save_credential(
     (decidido por `FieldSpec.secret`, aqui), um segredo no cofre por campo
     secreto, e a auditoria com as **chaves** — nunca os valores.
     """
-    async with user_scope(tenant) as scope:
-        await scope.execute(_PERMISSION_SQL, {"tenant_id": tenant.tenant_id})
-        row = await scope.fetchone()
-        if not (row and row["admin"]):
-            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_SEM_PERMISSAO)
+    await _require_admin(tenant)
 
     module = PROVIDERS.get(request.provider)
     if module is None:
@@ -428,3 +465,331 @@ async def save_credential(
         row = await bound.fetchone()
 
     return _status(row)
+
+
+# ---------------------------------------------------------------------------
+# Os templates — SPEC-CANAIS §5.5
+# ---------------------------------------------------------------------------
+#: A forma que o banco não confere. O corpo fica de fora de propósito: quem sabe
+#: o que é placeholder é `util.validate_template_body`, e a asserção do revisor
+#: é que este arquivo não conhece a sintaxe dele.
+_CODE_PATTERN = re.compile(r"[a-z][a-z0-9_]{2,63}")
+_LANGUAGE_PATTERN = re.compile(r"[a-z]{2}(_[A-Z]{2})?")
+_VARIABLE_PATTERN = re.compile(r"[a-z][a-z0-9_]{0,63}")
+_META_NAME_PATTERN = re.compile(r"[a-z0-9_]{1,512}")
+_CATEGORIES = frozenset({"utility", "authentication", "marketing"})
+
+#: As colunas de `TemplateRow`: o que o catálogo devolve e o que a auditoria
+#: copia em `antes`/`depois`. `tests/test_canais_templates.py` confere que o
+#: `select` abaixo as nomeia todas — o SQL é literal para que o `97` o execute
+#: como está.
+_TEMPLATE_COLUMNS = (
+    "code",
+    "category",
+    "language",
+    "variables",
+    "body",
+    "meta_template_name",
+    "meta_status",
+    "meta_rejection",
+    "active",
+    "updated_at",
+)
+
+#: O catálogo inteiro, inativos inclusive: `active` é coluna e a tela decide.
+#: Roda como o usuário — `message_template_read` é `util.has_tenant`.
+_TEMPLATES_SQL = """
+    select code, category, language, variables, body, meta_template_name,
+           meta_status, meta_rejection, active, updated_at
+    from app.message_template
+    where tenant_id = %(tenant_id)s
+    order by code, language
+"""
+
+#: Um upsert por `(tenant_id, code, language)`. A CTE `before` lê a linha na
+#: mesma foto, antes da escrita: é o `antes` da auditoria, e `before is null` é
+#: o que diz se foi `insert` ou `update`. `meta_status` e `meta_rejection` não
+#: vêm do formulário: ficam como estão, salvo quando `meta_template_name` muda
+#: — aí voltam a `draft`/nulo, porque o nome novo não foi conferido na WABA.
+#: `updated_at` é do gatilho.
+_TEMPLATE_UPSERT_SQL = """
+    with before as (
+        select *
+        from app.message_template
+        where tenant_id = %(tenant_id)s
+          and code = %(code)s
+          and language = %(language)s
+    )
+    insert into app.message_template as t
+      (tenant_id, code, category, language, variables, body, meta_template_name, active)
+    values
+      (%(tenant_id)s, %(code)s, %(category)s, %(language)s, %(variables)s, %(body)s,
+       %(meta_template_name)s, %(active)s)
+    on conflict (tenant_id, code, language) do update
+       set category = excluded.category,
+           variables = excluded.variables,
+           body = excluded.body,
+           meta_template_name = excluded.meta_template_name,
+           active = excluded.active,
+           meta_status = case
+               when excluded.meta_template_name is distinct from t.meta_template_name
+               then 'draft' else t.meta_status end,
+           meta_rejection = case
+               when excluded.meta_template_name is distinct from t.meta_template_name
+               then null else t.meta_rejection end
+    returning t.*, (select to_jsonb(b) from before b) as before
+"""
+
+#: A integração oficial ativa e o `waba_id` que o C2b passou a gravar em
+#: `config`. Só ela tem templates para sincronizar.
+_OFFICIAL_INTEGRATION_SQL = """
+    select i.id, i.config ->> 'waba_id' as waba_id
+    from app.integration i
+    where i.tenant_id = %(tenant_id)s
+      and i.active
+      and i.provider = %(provider)s
+"""
+
+#: O que a sincronização compara: todo template com nome na WABA, ativo ou não.
+_NAMED_TEMPLATES_SQL = """
+    select id, code, language, meta_template_name
+    from app.message_template
+    where tenant_id = %(tenant_id)s
+      and meta_template_name is not null
+    order by code, language
+"""
+
+#: Só grava o que mudou: `is distinct from` compara o par inteiro, nulo
+#: incluído, e o `returning` é a lista `updated` da resposta. O nome entra na
+#: chave: o veredito da WABA é sobre o nome que foi consultado, e um `PUT` que
+#: o troque enquanto a Meta responde já pôs a linha em `draft` — gravar por
+#: `id` escreveria o status do nome velho sobre o nome novo.
+_SYNC_TEMPLATES_SQL = """
+    update app.message_template t
+       set meta_status = v.meta_status,
+           meta_rejection = v.meta_rejection
+      from unnest(%(ids)s::uuid[], %(names)s::text[],
+                  %(statuses)s::text[], %(rejections)s::text[])
+           as v(id, name, meta_status, meta_rejection)
+     where t.tenant_id = %(tenant_id)s
+       and t.id = v.id
+       and t.meta_template_name = v.name
+       and (t.meta_status, t.meta_rejection)
+           is distinct from (v.meta_status, v.meta_rejection)
+    returning t.code
+"""
+
+_TEMPLATE_AUDIT_SQL = """
+    insert into app.audit_log
+      (tenant_id, user_id, action, entity, entity_id, antes, depois)
+    values
+      (%(tenant_id)s, %(user_id)s, %(action)s, 'message_template',
+       %(entity_id)s, %(antes)s, %(depois)s)
+"""
+
+#: A chave do cofre em que `save_credential` guardou o token da Cloud API —
+#: derivada de `FieldSpec.secret`, como lá, e não escrita à mão aqui.
+[_META_TOKEN_KEY] = [spec.name for spec in meta_cloud.FIELDS if spec.secret]
+
+_UNMATCHED_REASON = "Não encontrado na WABA na última sincronização"
+_UNKNOWN_STATUS_REASON = "Status desconhecido na Meta: "
+
+
+class TemplateBodyRefusedError(ValueError):
+    """O gatilho recusou o corpo. A mensagem é a dele, já em pt-BR."""
+
+
+def _template_shape_error(code: str, request: TemplateWrite) -> tuple[str, str] | None:
+    """`(campo, frase)` do primeiro campo fora de forma, ou `None`."""
+    if not _CODE_PATTERN.fullmatch(code):
+        return (
+            "code",
+            "O código do template: letras minúsculas, dígitos e sublinhado, "
+            "começando por letra, de 3 a 64 caracteres.",
+        )
+    if request.category not in _CATEGORIES:
+        return ("category", "A categoria é utility, authentication ou marketing.")
+    if not _LANGUAGE_PATTERN.fullmatch(request.language):
+        return ("language", "O idioma segue a forma da Meta: pt_BR, en_US ou en.")
+    if (
+        not request.variables
+        or len(set(request.variables)) != len(request.variables)
+        or not all(_VARIABLE_PATTERN.fullmatch(v) for v in request.variables)
+    ):
+        return (
+            "variables",
+            "As variáveis: ao menos uma, sem repetição, cada uma com letras minúsculas, "
+            "dígitos e sublinhado, começando por letra.",
+        )
+    if request.meta_template_name is not None and not _META_NAME_PATTERN.fullmatch(
+        request.meta_template_name
+    ):
+        return (
+            "meta_template_name",
+            "O nome do template na Meta: só letras minúsculas, dígitos e sublinhado.",
+        )
+    return None
+
+
+def _template_row(row: Mapping[str, Any]) -> TemplateRow:
+    """Só as colunas do contrato: `t.*` e `to_jsonb(before)` trazem `id`,
+    `tenant_id` e `created_at`, que não saem nem vão para a trilha."""
+    return TemplateRow(**{column: row[column] for column in _TEMPLATE_COLUMNS})
+
+
+@router.get("/templates")
+async def templates(tenant: CurrentTenant) -> list[TemplateRow]:
+    """O catálogo do cliente, como o usuário: a policy recorta por tenant.
+    Qualquer membro — quem vê Conexões vê o catálogo; escrever é que exige admin."""
+    async with user_scope(tenant) as scope:
+        await scope.execute(_TEMPLATES_SQL, {"tenant_id": str(tenant.tenant_id)})
+        rows = await scope.fetchall()
+    return [_template_row(row) for row in rows]
+
+
+@router.put("/templates/{code}")
+async def save_template(tenant: CurrentTenant, code: str, request: TemplateWrite) -> TemplateRow:
+    """Cria ou edita um template; devolve o gravado, relido do `returning`.
+
+    (1) `util.is_admin` como o usuário; (2) a forma do que o banco não confere,
+    sem tocar o banco; (3) uma transação: o upsert — cujo corpo o gatilho
+    julga, e a frase dele volta como 422 — e a auditoria com a linha anterior
+    e a gravada. Nada aqui é segredo; o JSON inteiro vai para a trilha.
+    """
+    await _require_admin(tenant, _SEM_PERMISSAO_TEMPLATE)
+
+    shape = _template_shape_error(code, request)
+    if shape is not None:
+        field, detail = shape
+        return _refuse(detail, "invalid_format", field=field)
+
+    try:
+        async with tenant_scope(tenant) as bound:
+            try:
+                await bound.execute(
+                    _TEMPLATE_UPSERT_SQL,
+                    {
+                        "code": code,
+                        "category": request.category,
+                        "language": request.language,
+                        "variables": request.variables,
+                        "body": request.body,
+                        "meta_template_name": request.meta_template_name,
+                        "active": request.active,
+                    },
+                )
+            except errors.RaiseException as recusa:
+                # A frase do gatilho, e só ela: já é pt-BR e nomeia a variável
+                # e o placeholder. Sai pela transação, que é quem faz o rollback.
+                raise TemplateBodyRefusedError(
+                    recusa.diag.message_primary or "O corpo do template foi recusado."
+                ) from None
+            row = await bound.fetchone()
+            if row is None:
+                raise RuntimeError("o upsert de app.message_template não devolveu a linha gravada")
+            saved = _template_row(row)
+            await bound.execute(
+                _TEMPLATE_AUDIT_SQL,
+                {
+                    "user_id": tenant.user_id,
+                    "action": "insert" if row["before"] is None else "update",
+                    "entity_id": str(row["id"]),
+                    "antes": (
+                        Jsonb(_template_row(row["before"]).model_dump(mode="json"))
+                        if row["before"] is not None
+                        else None
+                    ),
+                    "depois": Jsonb(saved.model_dump(mode="json")),
+                },
+            )
+    except TemplateBodyRefusedError as recusa:
+        return _refuse(str(recusa), "template_body")
+
+    return saved
+
+
+@router.post("/templates/sincronizar")
+async def sync_templates(tenant: CurrentTenant, http: HttpDep) -> TemplateSyncResult:
+    """Traz `status` e `rejected_reason` da WABA para os templates com nome.
+
+    (1) `util.is_admin`; (2) a integração oficial ativa e o token do cofre,
+    numa transação que **fecha antes** de qualquer HTTP; (3) a Meta, fora de
+    transação; (4) uma transação: o mapa `meta_cloud.META_STATUS` decide o
+    status local de cada par — só `APPROVED` vira `approved`, o desconhecido é
+    `rejected` com o literal, o sem par é `draft` — e só o que mudou é gravado.
+    """
+    await _require_admin(tenant, _SEM_PERMISSAO_TEMPLATE)
+
+    async with tenant_scope(tenant) as bound:
+        await bound.execute(_OFFICIAL_INTEGRATION_SQL, {"provider": meta_cloud.NAME})
+        integration = await bound.fetchone()
+        if integration is None:
+            return _refuse(_REFUSALS["no_official_provider"], "no_official_provider")
+        waba_id = integration["waba_id"]
+        token = await read_secret(bound, integration["id"], _META_TOKEN_KEY) if waba_id else None
+        if token is None:
+            return _refuse(_REFUSALS["no_credential"], "no_credential")
+
+    try:
+        remote = await meta_cloud.list_templates({"waba_id": waba_id}, token, http)
+    except InvalidCredentialError as recusa:
+        logger.info(
+            "canais: sincronização de templates recusada para o tenant %s (%s)",
+            tenant.tenant_id,
+            recusa.code,
+        )
+        return _refuse(_REFUSALS[recusa.code], recusa.code)
+
+    by_key = {(t.name, t.language): t for t in remote}
+
+    async with tenant_scope(tenant) as bound:
+        await bound.execute(_NAMED_TEMPLATES_SQL, {})
+        local = await bound.fetchall()
+
+        ids: list[Any] = []
+        names: list[str] = []
+        statuses: list[str] = []
+        rejections: list[str | None] = []
+        unmatched: list[str] = []
+        for row in local:
+            pair = by_key.get((row["meta_template_name"], row["language"]))
+            if pair is None:
+                unmatched.append(row["code"])
+                desired, reason = "draft", _UNMATCHED_REASON
+            elif pair.status in meta_cloud.META_STATUS:
+                desired, reason = meta_cloud.META_STATUS[pair.status], pair.rejected_reason
+            else:
+                desired, reason = "rejected", _UNKNOWN_STATUS_REASON + pair.status
+            ids.append(row["id"])
+            names.append(row["meta_template_name"])
+            statuses.append(desired)
+            rejections.append(reason)
+
+        updated: list[str] = []
+        if ids:
+            await bound.execute(
+                _SYNC_TEMPLATES_SQL,
+                {"ids": ids, "names": names, "statuses": statuses, "rejections": rejections},
+            )
+            updated = [row["code"] for row in await bound.fetchall()]
+
+        await bound.execute(
+            _TEMPLATE_AUDIT_SQL,
+            {
+                "user_id": tenant.user_id,
+                "action": "update",
+                "entity_id": None,
+                "antes": None,
+                "depois": Jsonb(
+                    {"updated": updated, "unmatched": unmatched, "meta_total": len(remote)}
+                ),
+            },
+        )
+
+    return TemplateSyncResult(
+        provider=meta_cloud.NAME,
+        meta_total=len(remote),
+        updated=updated,
+        unmatched=unmatched,
+        synced_at=datetime.now(UTC),
+    )

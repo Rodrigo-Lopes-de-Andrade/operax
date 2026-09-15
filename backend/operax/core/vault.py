@@ -108,10 +108,14 @@ async def store_secret(scope: TenantScope, integration_id: UUID, key: str, value
 async def read_secret(scope: TenantScope, integration_id: UUID, key: str) -> str | None:
     """The value behind the pointer, or `None` when there is no pointer.
 
-    ⚠️ Nobody in the C2 sprint calls this but the round-trip proof in
-    `scripts/97_teste_canais.py`. Its consumer is the sender (C5), which needs
-    the token to deliver. The panel never does: `GET /canais/credencial` says
-    that a credential exists, not what it is.
+    Two consumers, and both use the value in one place and drop it: the
+    template sync (`POST /canais/templates/sincronizar`, C2b), which reads the
+    Cloud API token into a local, closes the scope, hands the token to the
+    Graph API call and never writes it — not to the audit line, not to the log,
+    not to the response; and, from C5 on, the sender, which needs the token to
+    deliver. The panel never reads it: `GET /canais/credencial` says that a
+    credential exists, not what it is. `scripts/97_teste_canais.py` proves the
+    round trip and the tenant cut against the real vault.
     """
     await scope.execute(_READ_SQL, {"integration_id": integration_id, "key": key})
     row = await scope.fetchone()

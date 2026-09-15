@@ -1567,3 +1567,58 @@ class CredentialRequest(BaseModel):
 
     provider: str
     fields: dict[str, str]
+
+
+class TemplateRow(BaseModel):
+    """Um template do catálogo do cliente, como está em `app.message_template`.
+
+    `meta_status` e `meta_rejection` não são editáveis à mão: quem os escreve é
+    a sincronização com a WABA (`TemplateSyncResult`), e uma troca de
+    `meta_template_name` os devolve a `draft`/nulo — o nome novo não foi
+    conferido. `active` é coluna; a lista traz inativos e a tela decide.
+    """
+
+    code: str
+    #: utility | authentication | marketing
+    category: str
+    language: str
+    variables: list[str]
+    body: str
+    meta_template_name: str | None
+    #: draft | pending | approved | rejected | paused
+    meta_status: str
+    meta_rejection: str | None
+    active: bool
+    updated_at: datetime
+
+
+class TemplateWrite(BaseModel):
+    """O que o administrador grava num template — o resto é da sincronização.
+
+    A forma dos campos é conferida na rota; o corpo é conferido pelo gatilho
+    `util.validate_template_body`, e a frase dele é a que chega como `detail`.
+    """
+
+    category: str = "utility"
+    language: str = "pt_BR"
+    variables: list[str]
+    body: str
+    meta_template_name: str | None = None
+    active: bool = True
+
+
+class TemplateSyncResult(BaseModel):
+    """O que a sincronização com a WABA fez.
+
+    `updated` são os `code` cujo `meta_status` ou `meta_rejection` mudou;
+    `unmatched` os que têm `meta_template_name` e não têm par na WABA — esses
+    voltam a `draft`, com a razão em `meta_rejection`.
+    """
+
+    #: O provedor oficial, único que tem templates para sincronizar.
+    provider: str
+    #: Quantos templates a WABA devolveu, todas as páginas.
+    meta_total: int
+    updated: list[str]
+    unmatched: list[str]
+    synced_at: datetime

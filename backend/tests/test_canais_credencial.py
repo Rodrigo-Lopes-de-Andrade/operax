@@ -64,8 +64,9 @@ TOKEN = "token-de-teste-nao-e-real"
 CLIENT_TOKEN = "client-token-de-teste-nao-e-real"
 
 #: Um formulário válido por provedor, com o segredo em cada campo secreto.
+WABA_ID = "102030405060708"
 VALID_FIELDS: dict[str, dict[str, str]] = {
-    meta_cloud.NAME: {"phone_number_id": "123456789012345", "token": TOKEN},
+    meta_cloud.NAME: {"phone_number_id": "123456789012345", "waba_id": WABA_ID, "token": TOKEN},
     z_api.NAME: {"instance_id": "3C4E5F6A7B8C9D0E", "token": TOKEN, "client_token": CLIENT_TOKEN},
     uazapi.NAME: {"base_url": "https://instancia.exemplo.test", "token": TOKEN},
 }
@@ -434,7 +435,11 @@ def test_check_fields_nomeia_o_campo_e_nao_carrega_o_valor() -> None:
 def test_check_fields_tira_o_espaco_em_volta_do_valor_colado() -> None:
     """Token colado vem com espaço e quebra de linha mais vezes do que não. Sem o
     `strip`, o padrão recusa um valor certo — e o operador não entende por quê."""
-    colado = {"phone_number_id": " 123456789012345 ", "token": f" {TOKEN}\n"}
+    colado = {
+        "phone_number_id": " 123456789012345 ",
+        "waba_id": f"{WABA_ID}\n",
+        "token": f" {TOKEN}\n",
+    }
 
     assert check_fields(meta_cloud.FIELDS, colado) == VALID_FIELDS[meta_cloud.NAME]
 
@@ -589,6 +594,11 @@ def test_todo_campo_enviado_cai_em_exatamente_um_dos_dois_lugares(
     assert em_config == esperado_config
     assert no_cofre.isdisjoint(em_config)
     assert no_cofre | em_config == set(VALID_FIELDS[provider])
+    if module is meta_cloud:
+        # O C2b acrescentou o `waba_id` como não-secreto: é de `config` que a
+        # sincronização de templates o lê, e do cofre que lê o token.
+        assert "waba_id" in em_config
+        assert upsert["config"].obj["waba_id"] == WABA_ID
 
 
 def test_a_identidade_publica_e_truncada_ao_montar(
@@ -817,7 +827,7 @@ async def test_cada_provedor_manda_o_segredo_por_onde_a_premissa_diz() -> None:
     seen: dict[str, httpx.Request] = {}
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen[request.url.host] = request
+        seen.setdefault(request.url.host, request)  # a primeira por host
         if request.url.host == "graph.facebook.com":
             return httpx.Response(200, json=_accepts(meta_cloud))
         if request.url.host == "api.z-api.io":
@@ -844,6 +854,52 @@ async def test_cada_provedor_manda_o_segredo_por_onde_a_premissa_diz() -> None:
     assert u.url.path == "/instance/status"
     assert u.headers["token"] == TOKEN
     assert uaz == "5521999990000 conectado"
+
+
+def test_meta_cloud_token_que_alcanca_o_numero_mas_nao_a_waba_e_recusado_sem_gravar(
+    client: TestClient, cabecalho: dict[str, str], db: Any, transport: Recorder
+) -> None:
+    """C2b: validar antes de gravar (§5.2) vale para o `waba_id`. O transporte é
+    roteado por caminho — o número responde 200, a WABA 400 — e a rota recusa
+    com `unauthorized` sem abrir a transação. ⛔ Mutação: tirar a segunda
+    requisição de `verify` deixa isto vermelho (o número sozinho aceita)."""
+    _, bound, bound_ctx = db()
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith(f"/{WABA_ID}"):
+            return httpx.Response(400, json={"error": {"code": 100, "token": TOKEN}})
+        return httpx.Response(200, json=_accepts(meta_cloud))
+
+    transport.respond = respond
+
+    resposta = _post(client, cabecalho, meta_cloud.NAME, VALID_FIELDS[meta_cloud.NAME])
+
+    assert resposta.status_code == 422
+    assert resposta.json()["code"] == "unauthorized"
+    assert TOKEN not in resposta.text
+    assert len(transport.requests) == 2
+    assert bound_ctx.opened == 0
+    assert bound.statements == []
+
+
+async def test_meta_cloud_verify_le_o_numero_e_depois_a_waba_com_o_mesmo_bearer() -> None:
+    """O positivo: duas leituras, nesta ordem, as duas com o token no header, e a
+    identidade continua sendo a do número."""
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=_accepts(meta_cloud))
+
+    async with verification_client(transport=httpx.MockTransport(handler)) as http:
+        identidade = await meta_cloud.verify(VALID_FIELDS[meta_cloud.NAME], http)
+
+    assert identidade == "FastPark (+55 21 99999-0000)"
+    numero, waba = seen
+    assert numero.url.path.endswith("/123456789012345")
+    assert waba.url.path.endswith(f"/{WABA_ID}")
+    assert waba.url.params["fields"] == "id"
+    assert waba.headers["Authorization"] == numero.headers["Authorization"] == f"Bearer {TOKEN}"
 
 
 async def test_a_defesa_do_log_e_reaplicada_a_cada_cliente() -> None:
@@ -959,7 +1015,8 @@ def test_a_verificacao_acontece_fora_da_transacao(
 
     _post(client, cabecalho, meta_cloud.NAME, VALID_FIELDS[meta_cloud.NAME])
 
-    assert opened_when_verified == [0]
+    # Duas requisições no meta_cloud (o número e a WABA), as duas antes da transação.
+    assert opened_when_verified == [0, 0]
     assert bound_ctx.opened == 1
 
 

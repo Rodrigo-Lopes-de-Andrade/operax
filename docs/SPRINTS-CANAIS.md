@@ -339,6 +339,139 @@ dialeto — o atributo é descartado em silêncio (o form é `noValidate` e quem
 valida é o Zod, então não há efeito de comportamento). Corrigido em commit
 próprio, com o teste que prende o dialeto.
 
+## C2b — Aba de templates: o catálogo, e o "Sincronizar" da WABA
+
+O item que o C1 adiou para *"depois do C2"*, mais o que ele pressupõe e ninguém
+tinha escrito: `app.message_template` está **vazia em produção** e **não tem
+escrita por superfície nenhuma**. Sincronizar `meta_status` de uma tabela vazia
+não tira ninguém de `ready = false`. Então a aba são duas coisas, e a segunda
+não existe sem a primeira:
+
+1. **O catálogo** — listar, criar e editar o template do tenant pelo Caminho 2:
+   `code`, `category`, `language`, `variables`, `body`, `meta_template_name`,
+   `active`. `meta_status` e `meta_rejection` **não são editáveis à mão**: quem
+   os escreve é a sincronização. O gatilho `util.validate_template_body` continua
+   sendo o juiz do corpo, e a mensagem dele é a que o operador vê.
+2. **O "Sincronizar"** — `POST /canais/templates/sincronizar` lê o token da Cloud
+   API do cofre (`read_secret`, o primeiro consumidor real), lista os templates
+   da WABA na Graph API e traz `status` e `rejected_reason` para as linhas que
+   têm `meta_template_name`. **Só `APPROVED` vira `approved`** — qualquer outro
+   status, conhecido ou não, bloqueia. Template local sem par na WABA volta a
+   `draft`, com a razão registrada em `meta_rejection`.
+
+**Uma consequência no C2, e é por isso que ela entra aqui:** listar templates
+exige o **id da WABA**, que o formulário do `meta_cloud` não pedia. `waba_id`
+entra como campo não-secreto (§5.4, como dado), e a verificação do C2 passa a
+conferir também que o token alcança essa WABA — validar antes de gravar (§5.2)
+vale para o campo novo. A primeira credencial real ainda não foi gravada, então
+não há linha para migrar.
+
+⛔ **Sem parada do dono:** nenhuma migration, nenhuma policy, nenhum objeto em
+`public`. Guardião obrigatório mesmo assim — `core/vault.py` é tocado.
+
+**Premissas, não medições:** `GET /v21.0/{waba_id}/message_templates?fields=name,status,language,category,rejected_reason` com Bearer, paginado por `paging.next`; os status da Meta (`APPROVED`, `IN_APPEAL`, `PENDING`, `REJECTED`, `PENDING_DELETION`, `DELETED`, `DISABLED`, `PAUSED`, `LIMIT_EXCEEDED`). Endpoint errado falha para o lado seguro: nada muda de status e o operador vê a recusa.
+
+**Gate — quatro, e o quarto é o que costuma escapar:**
+
+1. quem não é admin do tenant não cria, não edita e não sincroniza — **e o admin
+   cria** (o positivo);
+2. corpo que não usa uma variável declarada é recusado **pelo gatilho**, e a
+   frase do gatilho chega ao operador como `detail` — não uma cópia dela no
+   Python;
+3. da sincronização, **só `APPROVED` produz `approved`**; um status novo da Meta
+   que ninguém previu não abre a entrega;
+4. **o token não aparece no log nem no erro** da sincronização — o mesmo gate 3
+   do C2, com a mesma varredura sob `DEBUG`.
+
+### ✅ C2b, metade de backend — aprovada em 15/09/2026, um ciclo; guardião PASSA no mesmo dia
+
+**O que entrou:**
+- `waba_id` no formulário do `meta_cloud` (não-secreto, `[0-9]{5,32}`), e a
+  verificação do C2 passou a fazer **duas** leituras com o mesmo Bearer — o
+  número e `GET /{waba_id}?fields=id`. Token que alcança o número e não a WABA
+  é `unauthorized`, nada gravado.
+- `meta_cloud.list_templates` — `GET /{waba_id}/message_templates` paginado
+  por `paging.next` com teto de 10 páginas, e o `next` só é seguido em
+  `https://graph.facebook.com`: sem a checagem, o Bearer sairia nove vezes
+  para um host que veio no corpo. `META_STATUS` como dado, nove status, e **só
+  `APPROVED → approved`**.
+- `GET /canais/templates` (como o usuário, sob RLS), `PUT /canais/templates/{code}`
+  (admin; forma só do que o banco não confere; **um** upsert cujo `case … is
+  distinct from` volta o status a `draft` quando `meta_template_name` muda; o
+  `P0001` do gatilho vira 422 `template_body` com `diag.message_primary` — **zero
+  `{{` no router**), `POST /canais/templates/sincronizar` (admin; a integração
+  oficial e o token do cofre numa transação que **fecha antes** do HTTP; o
+  mapa decide; **um** `update … from unnest` grava só o que mudou; uma linha de
+  auditoria com `updated`/`unmatched`/`meta_total`). `read_secret` ganhou o
+  primeiro consumidor real.
+
+**Revisão, ciclo 1: APROVADA** — pytest **820** (baseline 749), ruff limpo,
+`db-test` `SUÍTE COMPLETA OK` com o `97` compilando 13 instruções e o cenário
+de templates contra o gatilho real e a RLS real; as seis instruções executadas
+via psycopg contra o ensaio. Nenhuma mutação sobreviveu às duas suítes
+juntas. Fechados antes do commit:
+- **A corrida que o revisor achou:** um `PUT` que troca `meta_template_name`
+  enquanto a Meta responde já pôs a linha em `draft`; gravar por `id` escreveria
+  o veredito do nome velho sobre o nome novo. O nome entrou na chave do
+  `update` (`and t.meta_template_name = v.name`), com teste no pytest (o stub
+  vê estados diferentes no `select` e no `update`) e no `97` (grava 0, a linha
+  segue `draft`).
+- **O `97` não prendia o null-safe** do `is distinct from` da sync — `<>` no
+  lugar passava inteiro, porque nenhum passo mudava só a razão de valor para
+  nulo. Agora muda, e a mutação falha nomeada ("esperado 1, obtido 0").
+- O 403 de template dizia "gravar a credencial"; tem frase própria.
+
+**Guardião de superfície, dez de dez:** dicionário idêntico; `vault.py` mudou
+só o docstring, e o cofre segue sem grant nem privilégio de schema para
+`anon`/`authenticated`; a `_TEMPLATES_SQL` real sob RLS — owner de A vê os 2
+dele e 0 de B, owner de B vê o 1 dele, `anon` toma `permission denied`, nas
+**duas grafias de claim**; o `GET /canais/credencial` real com `waba_id` em
+`config` continua devolvendo só `provider, public_identity, updated_at`; o token
+da sync fora do log sob `DEBUG` (e o positivo: sem a defesa, a URL com o token
+aparece); as três auditorias reexecutadas com os params exatos da rota, sem
+segredo; o `paging.next` recusado em seis variantes hostis com uma requisição
+só, e a checagem é `scheme == https and host == graph.facebook.com`, não
+`startswith`.
+
+**Dívida nomeada:** `diag.message_primary` é preso contra o driver só por
+medição manual (duas, idênticas) — o `97` roda por `psql` e a suíte de banco
+não tem psycopg; a costura é semântica da libpq, não deste código.
+`VERIFY_TIMEOUT_SECONDS × MAX_PAGES` = até 100 s atrás de um botão. A grafia de
+`language` (`pt_BR`) e a checagem de host do `next` são premissas sobre a Meta
+— as duas falham para o lado seguro. Sentry e variáveis locais (herdada do C2;
+`sentry_sdk` não é dependência hoje). `variables` que o ciclo não sabe
+responder só é descoberto no `outbox`, no enfileiramento.
+
+### ✅ C2b, metade de frontend — aprovada em 15/09/2026, um ciclo
+
+O contrato (`TemplateRow`, `TemplateWrite`, `TemplateSyncResult`) foi fixado no
+despacho; as duas metades correram em arquivos disjuntos, como no C2.
+
+**O que entrou:** a página `administracao/templates` no molde de Conexões
+(`isAdmin` → 404 antes de qualquer leitura; `loadTemplates` e
+`loadConnections` em paralelo); `components/canais/template-catalog.tsx` — a
+lista com badge por `meta_status`, o formulário de criar/editar com **um input
+por variável** e a ajuda `{{n}}` viva lida da ordem deles, `meta_template_name`
+com a nota do rascunho, e **nenhum input** para `meta_status`/`meta_rejection`;
+o Zod só de forma (zero regra de `{{n}}` — quem recusa o corpo é o gatilho do
+banco, e a frase dele é mostrada como veio); "Sincronizar com a Meta" **pelas
+flags** (`requires_templates`), nunca por nome; o item "Templates" na navegação
+e o link "ver templates" em cada regra presa de Conexões. Vazio em branco vai
+como `null` — o backend recusa `""`.
+
+**Revisão, ciclo 1: APROVADA** — Vitest **777** (baseline 716), prettier, `tsc`
+e lint limpos; 12/12 mutações obrigatórias mortas (mais 15 variantes). Dois
+MÉDIOs de cobertura fechados antes do commit, com as mutações que sobreviviam
+reaplicadas e mortas: o item "Templates" na sidebar não tinha tranca (aparecer
+para `executive` ou `unit_supervisor`, ou sumir, passava 11/11) e o link "ver
+templates" não tinha teste. E um BAIXO: o `aria-describedby` do corpo apontava
+só para a ajuda, nunca para a frase de erro.
+
+**Decisão registrada pelo implementador, aceita:** sem cópia local da lista
+após gravar — a linha vem pelo `router.refresh()`, porque uma sincronização no
+meio deixaria a cópia mais velha que a prop (a tela diria `draft` onde o banco
+já diz `approved`).
+
 ## C3 — Telegram como quarto provedor
 
 - Migrations `ch_telegram_provider`, `ch_messaging_identity`, `ch_channel_health`,
@@ -396,9 +529,9 @@ pode ser banido sem recurso.
 ## Ordem
 
 ```
-C0 ── C1 ── C2 ──┬── C3 ── C4 ── C5
-                 │
-                 └─ (C1+C2 já entregam sozinhos)
+C0 ── C1 ── C2 ── C2b ──┬── C3 ── C4 ── C5
+                        │
+                        └─ (C1+C2+C2b já entregam sozinhos)
 ```
 
 ## O que fecha a etapa

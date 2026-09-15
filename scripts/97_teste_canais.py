@@ -43,6 +43,21 @@ o SQL real dos dois módulos, em `begin … rollback`:
   ponteiro e linha do cofre;
 * **auditoria**: a linha leva as chaves, e o `depois::text` não contém o valor.
 
+TERCEIRA PARTE — OS TEMPLATES (C2b), CONTRA O GATILHO E A POLICY DE VERDADE
+As seis instruções novas de `canais.py` compilam e executam aqui:
+
+* **o gatilho de verdade**: o upsert com corpo sem `{{2}}` levanta `P0001` com a
+  frase que a rota devolve como `detail` — e a linha não muda;
+* **trocar o nome na Meta volta a `draft`**: o upsert que mantém
+  `meta_template_name` preserva `approved` (e depois `rejected` + razão); o que
+  o troca leva `meta_status` a `draft` e `meta_rejection` a nulo, e `before`
+  traz a linha anterior;
+* **só o que mudou**: a instrução da sincronização grava 1 na primeira vez e 0
+  na segunda com os mesmos valores; e com o id do outro tenant no array, o
+  `tenant_id` ligado deixa a linha dele intacta;
+* **a leitura sob RLS**: como o owner do tenant A, o `select` do catálogo vê o
+  próprio e não vê o do tenant B — nem ligado ao tenant B.
+
 O valor de teste é uma string óbvia; nenhum segredo real passa por aqui.
 """
 
@@ -77,6 +92,12 @@ C_HR = "7c000000-0000-0000-0000-0000000000c2"
 C_SUPERVISOR = "7c000000-0000-0000-0000-0000000000c3"
 C_EXECUTIVE = "7c000000-0000-0000-0000-0000000000c4"
 C_OUTRO_OWNER = "7c000000-0000-0000-0000-0000000000d1"
+# Os templates: mais um par de tenants, um owner em cada.
+T_TENANT = "7ca70000-0000-0000-0000-0000000000e1"
+T_OUTRO = "7ca70000-0000-0000-0000-0000000000f1"
+T_OWNER = "7c000000-0000-0000-0000-0000000000e1"
+T_OUTRO_OWNER = "7c000000-0000-0000-0000-0000000000f1"
+T_WABA = "102030405060708"
 #: Valores de teste, óbvios de propósito. Nenhum é real.
 VALOR = "valor-de-teste-nao-e-real"
 VALOR2 = "segundo-valor-de-teste-nao-e-real"
@@ -567,6 +588,329 @@ rollback;
 """
 
 
+CENARIO_TEMPLATES = """
+begin;
+
+create or replace function pg_temp.assert_eq(rotulo text, obtido text, esperado text)
+returns void language plpgsql as $$
+begin
+  if obtido is distinct from esperado then
+    raise exception 'FALHA [%]: esperado %, obtido %', rotulo, esperado, obtido;
+  end if;
+  raise notice '  ok  % (%)', rotulo, obtido;
+end $$;
+
+insert into auth.users (id, email) values
+  ('{T_OWNER}',       'owner@templates'),
+  ('{T_OUTRO_OWNER}', 'owner@templates-outro');
+
+insert into app.tenant (id, slug, name) values
+  ('{T_TENANT}', 'templates-teste', 'Templates'),
+  ('{T_OUTRO}',  'templates-outro', 'Outro');
+
+insert into app.tenant_member (tenant_id, user_id, role) values
+  ('{T_TENANT}', '{T_OWNER}',       'owner'),
+  ('{T_OUTRO}',  '{T_OUTRO_OWNER}', 'owner');
+
+-- O primeiro no oficial, com o `waba_id` que o C2b grava em `config`; o
+-- segundo num não-oficial — para o `select` da integração oficial não o achar.
+insert into app.integration (tenant_id, provider, alias, config, active) values
+  ('{T_TENANT}', 'meta_cloud', 'meta_cloud',
+   '{"phone_number_id": "123456789012345", "waba_id": "{T_WABA}", "public_identity": "FastPark"}', true),
+  ('{T_OUTRO}',  'z_api', 'z_api', '{"instance_id": "X"}', true);
+
+-- O tenant B já tem um template aprovado, com nome na WABA.
+insert into app.message_template
+  (tenant_id, code, variables, body, meta_template_name, meta_status)
+values
+  ('{T_OUTRO}', 'deviation_summary', array['unit','occurrences'],
+   'Outro: {{1}} com {{2}}.', 'outro_v1', 'approved');
+
+-- ---------------------------------------------------------------------------
+-- A integração oficial: só a ativa do provedor oficial, com o waba_id
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  linha record;
+  n int;
+begin
+  select * into linha from ({OFFICIAL}) x;
+  perform pg_temp.assert_eq('a integração oficial do tenant A é achada', (linha.id is not null)::text, 'true');
+  perform pg_temp.assert_eq('com o waba_id de config', linha.waba_id, '{T_WABA}');
+  select count(*) into n from ({OFFICIAL_OUTRO}) x;
+  perform pg_temp.assert_eq('o tenant B, no z_api, não tem integração oficial', n::text, '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- O upsert: insert, e o gatilho de verdade
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  rec record;
+  falhou boolean := false;
+  mensagem text;
+begin
+  execute $q${UPSERT_V1}$q$ into rec;
+  perform pg_temp.assert_eq('insert: before é nulo', (rec.before is null)::text, 'true');
+  perform pg_temp.assert_eq('insert: nasce draft', rec.meta_status, 'draft');
+  perform pg_temp.assert_eq('insert: o gatilho carimbou updated_at', (rec.updated_at is not null)::text, 'true');
+
+  -- Corpo sem {{2}}: só o upsert dentro do sub-bloco, e só o P0001 é capturado.
+  -- A asserção fica FORA, para não ser engolida pelo handler.
+  begin
+    execute $q${UPSERT_SEM_2}$q$;
+  exception when raise_exception then
+    falhou := true;
+    mensagem := sqlerrm;
+  end;
+  perform pg_temp.assert_eq('gatilho: o corpo sem {{2}} é recusado com P0001', falhou::text, 'true');
+  perform pg_temp.assert_eq('gatilho: a frase é a que a rota devolve como detail', mensagem,
+    'Template deviation_summary declara a variável 2 (occurrences) mas o corpo não usa {{2}}.');
+  perform pg_temp.assert_eq('gatilho: a linha não mudou',
+    (select body from app.message_template where tenant_id = '{T_TENANT}' and code = 'deviation_summary'),
+    'FastPark: {{1}} com {{2}} ocorrencias.');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- A sincronização: só grava o que mudou, e só no tenant ligado
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  n int;
+  codigo text;
+begin
+  execute $q${SYNC_APPROVED}$q$ into codigo;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('sync: approved grava 1', n::text, '1');
+  perform pg_temp.assert_eq('sync: e devolve o code', codigo, 'deviation_summary');
+
+  execute $q${SYNC_APPROVED}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('sync: o mesmo par de novo grava 0 (is distinct from)', n::text, '0');
+
+  -- O id do tenant B no array, ligado ao tenant A: a linha dele fica intacta.
+  execute $q${SYNC_CROSS}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('sync: com o id do outro tenant no array, só o próprio muda', n::text, '1');
+  perform pg_temp.assert_eq('sync: o tenant B continua approved',
+    (select meta_status from app.message_template where tenant_id = '{T_OUTRO}'), 'approved');
+  perform pg_temp.assert_eq('sync: e o tenant A foi a pending',
+    (select meta_status from app.message_template where tenant_id = '{T_TENANT}' and code = 'deviation_summary'),
+    'pending');
+
+  execute $q${SYNC_APPROVED}$q$;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- Trocar o nome na Meta volta a draft; manter preserva
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  rec record;
+  n int;
+begin
+  execute $q${UPSERT_V1}$q$ into rec;
+  perform pg_temp.assert_eq('mesmo nome: update, before vem preenchido', (rec.before ->> 'meta_status'), 'approved');
+  perform pg_temp.assert_eq('mesmo nome: meta_status preservado', rec.meta_status, 'approved');
+
+  execute $q${SYNC_REJECTED}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('sync: rejected com razão grava 1', n::text, '1');
+  execute $q${UPSERT_V1}$q$ into rec;
+  perform pg_temp.assert_eq('mesmo nome: rejected preservado', rec.meta_status, 'rejected');
+  perform pg_temp.assert_eq('mesmo nome: a razão preservada', rec.meta_rejection, 'INVALID_FORMAT');
+
+  -- Só a razão muda, de valor para nulo, com o mesmo status. `<>` diria
+  -- "nada mudou" (nulo não é diferente de nada); `is distinct from` grava.
+  execute $q${SYNC_REJECTED_SEM_RAZAO}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('sync: mesmo status e razão indo a nulo grava 1 (null-safe)', n::text, '1');
+  execute $q${SYNC_REJECTED_SEM_RAZAO}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('sync: e de novo grava 0', n::text, '0');
+  perform pg_temp.assert_eq('sync: a razão foi limpa de fato',
+    coalesce((select meta_rejection from app.message_template where tenant_id = '{T_TENANT}' and code = 'deviation_summary'), '(nulo)'),
+    '(nulo)');
+
+  execute $q${UPSERT_V2}$q$ into rec;
+  perform pg_temp.assert_eq('nome novo: volta a draft', rec.meta_status, 'draft');
+  perform pg_temp.assert_eq('nome novo: a razão é limpa', coalesce(rec.meta_rejection, '(nulo)'), '(nulo)');
+  perform pg_temp.assert_eq('nome novo: before traz a linha anterior', (rec.before ->> 'meta_template_name'), 'deviation_summary_v1');
+  perform pg_temp.assert_eq('nome novo: e o status anterior', (rec.before ->> 'meta_status'), 'rejected');
+
+  -- A corrida: o veredito da WABA sobre o nome velho chega depois do PUT.
+  execute $q${SYNC_NOME_VELHO}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('sync: veredito do nome velho depois do rename grava 0', n::text, '0');
+  perform pg_temp.assert_eq('sync: e a linha segue draft, como o PUT a deixou',
+    (select meta_status from app.message_template where tenant_id = '{T_TENANT}' and code = 'deviation_summary'),
+    'draft');
+
+  execute $q${UPSERT_SEM_NOME}$q$ into rec;
+  perform pg_temp.assert_eq('nome removido (nulo): também é distinto, volta a draft', rec.meta_status, 'draft');
+  perform pg_temp.assert_eq('uma linha só por (tenant, code, language)',
+    (select count(*) from app.message_template where tenant_id = '{T_TENANT}' and code = 'deviation_summary')::text, '1');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- Os nomeados: com nome, ativo ou não; sem nome, não
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  rec record;
+  codigos text;
+begin
+  execute $q${UPSERT_INATIVO}$q$ into rec;
+  perform pg_temp.assert_eq('inativo com nome: gravado inativo', rec.active::text, 'false');
+  select string_agg(code, ',' order by code) into codigos from ({NAMED}) x;
+  perform pg_temp.assert_eq('nomeados: o inativo entra, o sem nome não, o do tenant B não',
+    codigos, 'deviation_inactive');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- A auditoria: as duas formas da rota
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  trilha record;
+begin
+  execute $q${AUDIT_SYNC}$q$;
+  execute $q${AUDIT_INSERT}$q$;
+  select * into trilha from app.audit_log
+   where tenant_id = '{T_TENANT}' and entity = 'message_template' and entity_id is null;
+  perform pg_temp.assert_eq('auditoria da sync: resumo em depois', (trilha.depois ->> 'meta_total'), '1');
+  perform pg_temp.assert_eq('auditoria da sync: action update', trilha.action, 'update');
+  perform pg_temp.assert_eq('auditoria do insert: entity_id é o id',
+    (select count(*) from app.audit_log where tenant_id = '{T_TENANT}' and entity = 'message_template'
+       and action = 'insert' and entity_id is not null)::text, '1');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- A leitura sob RLS: o owner do tenant A vê o próprio e não vê o do B
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  codigos_a text;
+  n_b int;
+begin
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{T_OWNER}';
+  select string_agg(code, ',' order by code) into codigos_a from ({TEMPLATES}) x;
+  select count(*) into n_b from ({TEMPLATES_OUTRO}) x;
+  reset role;
+  perform pg_temp.assert_eq('RLS: o owner de A vê os dois de A (o inativo inclusive)', codigos_a,
+    'deviation_inactive,deviation_summary');
+  perform pg_temp.assert_eq('RLS: ligado ao tenant B, o owner de A vê zero', n_b::text, '0');
+
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{T_OUTRO_OWNER}';
+  select count(*) into n_b from ({TEMPLATES_OUTRO}) x;
+  reset role;
+  perform pg_temp.assert_eq('RLS: e o owner de B vê o dele', n_b::text, '1');
+end $$;
+
+rollback;
+"""
+
+
+def templates(fixas: dict[str, str]) -> str:
+    """O cenário dos templates, com o SQL real de `canais.py` ligado aos valores."""
+    corpo_ok = "FastPark: {{1}} com {{2}} ocorrencias."
+    id_a = "(select id from app.message_template where tenant_id = '{T_TENANT}' and code = 'deviation_summary')"
+    id_b = "(select id from app.message_template where tenant_id = '{T_OUTRO}')"
+
+    def upsert(code: str, body: str, name: str | None, active: str = "true") -> str:
+        return (
+            ligar(
+                fixas["_TEMPLATE_UPSERT_SQL"],
+                tenant_id=T_TENANT,
+                code=code,
+                category="utility",
+                language="pt_BR",
+                body=body,
+            )
+            .replace("%(variables)s", "array['unit','occurrences']")
+            .replace("%(meta_template_name)s", "null" if name is None else f"'{name}'")
+            .replace("%(active)s", active)
+        )
+
+    def sync(ids: str, names: str, statuses: str, rejections: str) -> str:
+        return (
+            ligar(fixas["_SYNC_TEMPLATES_SQL"], tenant_id=T_TENANT)
+            .replace("%(ids)s", ids)
+            .replace("%(names)s", names)
+            .replace("%(statuses)s", statuses)
+            .replace("%(rejections)s", rejections)
+        )
+
+    def audit(action: str, entity_id: str, depois: str) -> str:
+        return (
+            ligar(
+                fixas["_TEMPLATE_AUDIT_SQL"],
+                tenant_id=T_TENANT,
+                user_id=T_OWNER,
+                action=action,
+                depois=depois,
+            )
+            .replace("%(entity_id)s", entity_id)
+            .replace("%(antes)s", "null")
+        )
+
+    substituicoes = {
+        "{OFFICIAL}": ligar(fixas["_OFFICIAL_INTEGRATION_SQL"], tenant_id=T_TENANT, provider="meta_cloud"),
+        "{OFFICIAL_OUTRO}": ligar(fixas["_OFFICIAL_INTEGRATION_SQL"], tenant_id=T_OUTRO, provider="meta_cloud"),
+        "{TEMPLATES}": ligar(fixas["_TEMPLATES_SQL"], tenant_id=T_TENANT),
+        "{TEMPLATES_OUTRO}": ligar(fixas["_TEMPLATES_SQL"], tenant_id=T_OUTRO),
+        "{NAMED}": ligar(fixas["_NAMED_TEMPLATES_SQL"], tenant_id=T_TENANT),
+        "{UPSERT_V1}": upsert("deviation_summary", corpo_ok, "deviation_summary_v1"),
+        "{UPSERT_V2}": upsert("deviation_summary", corpo_ok, "deviation_summary_v2"),
+        "{UPSERT_SEM_NOME}": upsert("deviation_summary", corpo_ok, None),
+        "{UPSERT_SEM_2}": upsert("deviation_summary", "so {{1}}", "deviation_summary_v1"),
+        "{UPSERT_INATIVO}": upsert("deviation_inactive", corpo_ok, "inactive_v1", active="false"),
+        "{SYNC_APPROVED}": sync(
+            f"array[{id_a}]::uuid[]", "array['deviation_summary_v1']", "array['approved']", "array[null]"
+        ),
+        "{SYNC_REJECTED}": sync(
+            f"array[{id_a}]::uuid[]",
+            "array['deviation_summary_v1']",
+            "array['rejected']",
+            "array['INVALID_FORMAT']",
+        ),
+        # O mesmo status, só a razão indo de valor para nulo: é o caso que separa
+        # `is distinct from` de `<>` — com `<>`, nulo nunca é "diferente".
+        "{SYNC_REJECTED_SEM_RAZAO}": sync(
+            f"array[{id_a}]::uuid[]", "array['deviation_summary_v1']", "array['rejected']", "array[null]"
+        ),
+        # O veredito da WABA sobre o nome velho, chegando depois de um PUT que
+        # renomeou: o nome está na chave do update, e nada é gravado.
+        "{SYNC_NOME_VELHO}": sync(
+            f"array[{id_a}]::uuid[]", "array['deviation_summary_v1']", "array['approved']", "array[null]"
+        ),
+        "{SYNC_CROSS}": sync(
+            f"array[{id_a}, {id_b}]::uuid[]",
+            "array['deviation_summary_v1','outro_v1']",
+            "array['pending','pending']",
+            "array[null,null]",
+        ),
+        "{AUDIT_SYNC}": audit(
+            "update", "null", '{"updated": ["deviation_summary"], "unmatched": [], "meta_total": 1}'
+        ),
+        "{AUDIT_INSERT}": audit("insert", id_a + "::text", '{"code": "deviation_summary"}'),
+    }
+    script = CENARIO_TEMPLATES
+    for marcador, texto in substituicoes.items():
+        script = script.replace(marcador, texto)
+    for nome, valor in {
+        "{T_TENANT}": T_TENANT,
+        "{T_OUTRO}": T_OUTRO,
+        "{T_OWNER}": T_OWNER,
+        "{T_OUTRO_OWNER}": T_OUTRO_OWNER,
+        "{T_WABA}": T_WABA,
+    }.items():
+        script = script.replace(nome, valor)
+    return script
+
+
 def rodar(script: str) -> None:
     r = psql([], script)
     saida = "\n".join(
@@ -666,6 +1010,12 @@ def main() -> None:
         "_DEACTIVATE_SQL",
         "_UPSERT_INTEGRATION_SQL",
         "_AUDIT_SQL",
+        "_TEMPLATES_SQL",
+        "_TEMPLATE_UPSERT_SQL",
+        "_OFFICIAL_INTEGRATION_SQL",
+        "_NAMED_TEMPLATES_SQL",
+        "_SYNC_TEMPLATES_SQL",
+        "_TEMPLATE_AUDIT_SQL",
     }
     if set(fixas) != esperadas:
         print(f"  ✖ esperava as instruções {sorted(esperadas)} em canais.py, achei {sorted(fixas)}")
@@ -700,8 +1050,11 @@ def main() -> None:
     print("\n--- a credencial, contra o cofre de verdade")
     rodar(credencial(fixas, cofre))
 
+    print("\n--- os templates, contra o gatilho, o upsert e a policy de verdade")
+    rodar(templates(fixas))
+
     print("\n================================================")
-    print(" TELA DE CONEXÕES E CREDENCIAL: TODOS OS TESTES OK")
+    print(" TELA DE CONEXÕES, CREDENCIAL E TEMPLATES: TODOS OS TESTES OK")
     print("================================================")
 
 
