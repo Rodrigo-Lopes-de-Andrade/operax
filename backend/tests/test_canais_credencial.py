@@ -295,6 +295,40 @@ def test_todo_formulario_tem_um_segredo_e_um_nao_segredo(provider: str) -> None:
             assert spec.autocomplete in {"one-time-code", "new-password"}
 
 
+# O navegador compila o atributo `pattern` como regex JavaScript com a flag `v`
+# (HTML, "compiled pattern regular expression"), e nesse dialeto estes caracteres
+# só entram numa classe `[...]` escapados — `-` inclusive, fora de um intervalo
+# `a-z`. O `re` do Python e o `new RegExp` sem flag do Zod aceitam os dois
+# jeitos; só o atributo é descartado, em silêncio, e a tela perde a dica nativa.
+_V_CLASS_SYNTAX = frozenset("()[]{}/-|")
+
+
+def _v_flag_violations(pattern: str) -> set[str]:
+    """Os caracteres que a flag `v` recusaria dentro das classes de `pattern`."""
+    violations: set[str] = set()
+    for body in re.findall(r"(?<!\\)\[((?:\\.|[^\]])*)\]", pattern):
+        bare = re.sub(r"\\.", "", body)  # escapes are always fine
+        bare = re.sub(r"[^-]-[^-]", "", bare)  # ranges are the one bare `-`
+        violations |= set(bare) & _V_CLASS_SYNTAX
+    return violations
+
+
+def test_a_sonda_do_dialeto_v_distingue_o_hifen_solto_do_escapado() -> None:
+    """A sentinela do teste abaixo: cega a `-` solto, ele passaria com o padrão
+    velho, que o Chrome descartava com um aviso no console."""
+    assert _v_flag_violations(r"[A-Za-z0-9._-]+") == {"-"}
+    assert _v_flag_violations(r"https://[A-Za-z0-9.-]+(/[a-z-]+)*") == {"-"}
+    assert _v_flag_violations(r"[a-z/]") == {"/"}
+    assert _v_flag_violations(r"[A-Za-z0-9._\-]+") == set()
+    assert _v_flag_violations(r"[0-9]{5,32}") == set()
+
+
+@pytest.mark.parametrize("provider", WHATSAPP_PROVIDERS)
+def test_todo_pattern_compila_no_dialeto_v_do_navegador(provider: str) -> None:
+    for spec in PROVIDERS[provider].FIELDS:
+        assert _v_flag_violations(spec.pattern) == set(), spec.name
+
+
 def test_os_valores_validos_passam_pelo_padrao_de_cada_campo() -> None:
     """O positivo do critério 1: um padrão que recusa tudo passaria no negativo."""
     for provider, fields in VALID_FIELDS.items():

@@ -16,7 +16,8 @@ provider both would be the token. Two defences, both tested by mutation in
 `tests/test_canais_credencial.py`: the client comes from
 `verification_client()`, which mutes the `httpx` logger, and every failure is
 raised `from None` so the chain never reaches a log or Sentry. `pattern` is the
-third: `[A-Za-z0-9._-]+` cannot smuggle a `/` or `?` into the path.
+third: the token class (letters, digits, `.`, `_`, `-`) cannot smuggle a `/`
+or `?` into the path.
 """
 
 from __future__ import annotations
@@ -45,7 +46,7 @@ FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec(
         name="token",
         label_pt="Token da instância",
-        pattern=r"[A-Za-z0-9._-]+",
+        pattern=r"[A-Za-z0-9._\-]+",
         autocomplete="one-time-code",
         inputmode="text",
         secret=True,
@@ -55,7 +56,7 @@ FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec(
         name="client_token",
         label_pt="Client-Token da conta",
-        pattern=r"[A-Za-z0-9._-]+",
+        pattern=r"[A-Za-z0-9._\-]+",
         autocomplete="one-time-code",
         inputmode="text",
         secret=True,

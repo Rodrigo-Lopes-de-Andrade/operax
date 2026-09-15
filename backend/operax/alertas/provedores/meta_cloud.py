@@ -42,7 +42,7 @@ FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec(
         name="token",
         label_pt="Token de acesso permanente",
-        pattern=r"[A-Za-z0-9._-]+",
+        pattern=r"[A-Za-z0-9._\-]+",
         autocomplete="one-time-code",
         inputmode="text",
         secret=True,

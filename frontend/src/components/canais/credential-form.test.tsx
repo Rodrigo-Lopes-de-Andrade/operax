@@ -57,7 +57,7 @@ const NUMBER_ID: CredentialField = {
 const TOKEN: CredentialField = {
   name: "token",
   label: "Token de acesso permanente",
-  pattern: "[A-Za-z0-9._-]+",
+  pattern: "[A-Za-z0-9._\\-]+",
   autocomplete: "one-time-code",
   inputmode: "text",
   secret: true,
@@ -185,7 +185,16 @@ describe("critério 2 — SPEC §5.4: autocomplete, inputmode e pattern vêm da 
 
     expect(token().getAttribute("autocomplete")).toBe("one-time-code");
     expect(token().getAttribute("inputmode")).toBe("text");
-    expect(token().getAttribute("pattern")).toBe("[A-Za-z0-9._-]+");
+    expect(token().getAttribute("pattern")).toBe("[A-Za-z0-9._\\-]+");
+  });
+
+  it("o pattern do fixture compila com a flag `v`, que é como o navegador compila o atributo", () => {
+    // `[A-Za-z0-9._-]+` compila sem flag (o Zod) e não compila com `v` (o
+    // atributo, descartado em silêncio). O fixture copia o que o backend
+    // declara; se o backend regredir, quem prende é `test_canais_credencial.py`.
+    for (const field of [NUMBER_ID, TOKEN, INSTANCE_ID]) {
+      expect(() => new RegExp(field.pattern, "v")).not.toThrow();
+    }
   });
 
   it("⛔ os atributos são repassados, não escolhidos: valores fora do comum chegam ao DOM iguais", () => {

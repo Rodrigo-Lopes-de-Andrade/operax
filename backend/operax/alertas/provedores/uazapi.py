@@ -30,7 +30,7 @@ FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec(
         name="base_url",
         label_pt="Endereço do servidor",
-        pattern=r"https://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~-]+)*",
+        pattern=r"https://[A-Za-z0-9.\-]+(:[0-9]{1,5})?(/[A-Za-z0-9._~\-]+)*",
         autocomplete="url",
         inputmode="url",
         secret=False,
@@ -40,7 +40,7 @@ FIELDS: tuple[FieldSpec, ...] = (
     FieldSpec(
         name="token",
         label_pt="Token da instância",
-        pattern=r"[A-Za-z0-9._-]+",
+        pattern=r"[A-Za-z0-9._\-]+",
         autocomplete="one-time-code",
         inputmode="text",
         secret=True,

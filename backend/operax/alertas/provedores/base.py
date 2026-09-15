@@ -135,7 +135,7 @@ class FieldSpec:
     label_pt: str
     #: Anchored by `fullmatch`. Besides catching the wrong value early, it keeps
     #: the value URL- and header-safe: a token goes into a path or a header, and
-    #: `[A-Za-z0-9._-]+` cannot carry a `/`, a `?` or a line break there.
+    #: `[A-Za-z0-9._\-]+` cannot carry a `/`, a `?` or a line break there.
     pattern: str
     autocomplete: str
     inputmode: str
