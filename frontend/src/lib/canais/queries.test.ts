@@ -1,7 +1,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "@/lib/api";
-import { loadConnections, type ConnectionsScreen } from "@/lib/canais/queries";
+import {
+  loadConnections,
+  loadCredential,
+  loadProviderForms,
+  type ConnectionsScreen,
+  type CredentialStatus,
+  type ProviderForm,
+} from "@/lib/canais/queries";
 
 // `server-only` existe para explodir num bundle de cliente; aqui o módulo é
 // exercitado fora do Next, e o stub é o que permite testar a leitura em si.
@@ -94,6 +101,110 @@ describe("a tela de Conexões — caminho 2", () => {
     getSession.mockResolvedValueOnce({ data: { session: null } });
 
     expect(await loadConnections()).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+const CREDENTIAL: CredentialStatus = {
+  configured: true,
+  provider: "meta_cloud",
+  updated_at: "2026-09-14T13:05:00Z",
+  public_identity: "+55 11 99999-0000",
+};
+
+const FORMS: ProviderForm[] = [
+  {
+    provider: "meta_cloud",
+    capabilities: { official: true, requires_templates: true, ban_risk: false },
+    fields: [
+      {
+        name: "phone_number_id",
+        label: "ID do número de telefone",
+        pattern: "[0-9]{5,32}",
+        autocomplete: "off",
+        inputmode: "numeric",
+        secret: false,
+        placeholder: "123456789012345",
+        hint: "isto não parece um ID de número: a Meta usa só dígitos",
+      },
+    ],
+  },
+];
+
+describe("a credencial — o estado, nunca o valor (caminho 2)", () => {
+  it("200 devolve o estado como veio, com o token no header e sem tenant na URL", async () => {
+    fetchMock.mockResolvedValue(answer(200, CREDENTIAL));
+
+    const status = await loadCredential();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/canais\/credencial$/);
+    expect(url).not.toMatch(/tenant/i);
+    expect(init.headers.Authorization).toBe("Bearer token-de-teste");
+    expect(status).toEqual(CREDENTIAL);
+  });
+
+  it("401 vira null", async () => {
+    fetchMock.mockResolvedValue(answer(401, { detail: "…" }));
+
+    expect(await loadCredential()).toBeNull();
+  });
+
+  it("403 vira null", async () => {
+    fetchMock.mockResolvedValue(
+      answer(403, { detail: "Sem vínculo ativo com este cliente." }),
+    );
+
+    expect(await loadCredential()).toBeNull();
+  });
+
+  it("⛔ 500 relança — a API fora do ar não é 'sem credencial'", async () => {
+    fetchMock.mockResolvedValue(answer(500, { detail: "boom" }));
+
+    await expect(loadCredential()).rejects.toMatchObject({ status: 500 });
+  });
+});
+
+describe("os formulários dos provedores (caminho 2)", () => {
+  it("200 devolve a lista na ordem da API, com o token no header e sem tenant na URL", async () => {
+    fetchMock.mockResolvedValue(answer(200, FORMS));
+
+    const forms = await loadProviderForms();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/canais\/provedores$/);
+    expect(url).not.toMatch(/tenant/i);
+    expect(init.headers.Authorization).toBe("Bearer token-de-teste");
+    expect(forms).toEqual(FORMS);
+  });
+
+  it("401 vira null", async () => {
+    fetchMock.mockResolvedValue(answer(401, { detail: "…" }));
+
+    expect(await loadProviderForms()).toBeNull();
+  });
+
+  it("403 vira null", async () => {
+    fetchMock.mockResolvedValue(
+      answer(403, { detail: "Sem vínculo ativo com este cliente." }),
+    );
+
+    expect(await loadProviderForms()).toBeNull();
+  });
+
+  it("⛔ 500 relança", async () => {
+    fetchMock.mockResolvedValue(answer(500, { detail: "boom" }));
+
+    await expect(loadProviderForms()).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("sem sessão nenhuma das duas chega a chamar a API", async () => {
+    getSession
+      .mockResolvedValueOnce({ data: { session: null } })
+      .mockResolvedValueOnce({ data: { session: null } });
+
+    expect(await loadCredential()).toBeNull();
+    expect(await loadProviderForms()).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

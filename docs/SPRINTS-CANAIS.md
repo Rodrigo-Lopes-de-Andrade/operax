@@ -296,15 +296,48 @@ privadas é decisão futura); `setLevel` do `httpx` é global ao processo; o
 `Mapping[str, ModuleType]` sem `Protocol` até o C5; `updated_at` do ponteiro
 ao regravar sem asserção (`now()` é constante na transação).
 
-### ⏳ C2, metade de frontend — despachada em 14/09/2026, em paralelo com o ciclo 2 do backend
+### ✅ C2, metade de frontend — aprovada em 15/09/2026, um ciclo
 
 O contrato (`ProviderForm`, `FieldForm`, `CredentialStatus`, `CredentialRequest`)
 está fixado em `models.py` e o ciclo de correção do backend não muda a forma —
-por isso as duas metades correm juntas, em arquivos disjuntos. **§5.4 é o gate
-desta metade:** o formulário é dirigido pelos dados de `GET /canais/provedores`
-(`autocomplete`, `inputmode`, `pattern`, `secret`, `hint` vêm da API), a
-validação Zod usa o mesmo `pattern` que o backend impõe, e o segredo nunca
-volta — campos secretos limpos após sucesso.
+por isso as duas metades correram juntas, em arquivos disjuntos. **§5.4 foi o
+gate desta metade:** o formulário é dirigido pelos dados de
+`GET /canais/provedores` (`autocomplete`, `inputmode`, `pattern`, `secret`,
+`hint` vêm da API), a validação Zod usa o mesmo `pattern` que o backend impõe,
+ancorado como o `fullmatch` de lá, e o segredo nunca volta — campos secretos
+limpos após sucesso.
+
+**O que entrou:** `components/canais/credential-form.tsx` (um `useForm` por
+provedor, remontado pelo `key` na troca; `secret` decide `type="password"`;
+`<Requirements>` compartilhado com a tela, pelas flags); `lib/canais/queries.ts`
+ganha `loadCredential` e `loadProviderForms` sobre um `readOrNull` só (401/403
+→ `null`, 500 relança); a página de Conexões carrega as três leituras em
+paralelo e renderiza o formulário abaixo do diagnóstico.
+
+**Revisão, ciclo 1: APROVADA** — Vitest **716** (baseline 675), prettier e
+`tsc` limpos; 23 mutações aplicadas (8 do contrato + 15 do revisor), **zero
+sobreviventes**; §5.3 varrido no DOM inteiro (`innerHTML`, `textContent`,
+todo atributo de todo elemento, `.value` de todo `input`) após 200, após 422
+e no erro de formato do próprio campo secreto: depois de gravar, o segredo
+não está em lugar nenhum. Um MÉDIO corrigido antes do commit: a frase de
+sucesso nunca era limpa — um 422 na tentativa seguinte a deixava ao lado do
+alerta vermelho, e trocar o provedor a mantinha sobre o outro formulário.
+Agora o desfecho do envio é um estado só (sucesso *ou* erro, nunca os dois),
+zerado ao trocar de provedor, separado do que está gravado — que é fato e
+segura o "Configurada" até o `refresh` trazer a prop nova. Duas mutações
+próprias provam os dois testes novos.
+
+**Decisão registrada:** a identidade pública aparece duas vezes logo após
+gravar (no estado e na linha `role="status"`). Fica: a linha viva é o que a
+tecnologia assistiva anuncia, e "conectado como …" é a confirmação que o
+provedor deu — tirá-la dali silencia o anúncio para poupar uma repetição
+visual.
+
+**Achado do revisor que é do backend:** o navegador compila o atributo
+`pattern` com a flag `v`, e `-` sem escape dentro de classe não compila nesse
+dialeto — o atributo é descartado em silêncio (o form é `noValidate` e quem
+valida é o Zod, então não há efeito de comportamento). Corrigido em commit
+próprio, com o teste que prende o dialeto.
 
 ## C3 — Telegram como quarto provedor
 

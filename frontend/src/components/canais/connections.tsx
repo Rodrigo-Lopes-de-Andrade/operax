@@ -59,7 +59,11 @@ function BlockedRule({ rule }: { rule: BlockedAlertRule }) {
  * matriz garante que nunca coexistem; aqui cada uma é lida por si, e se um dia
  * as duas chegarem juntas a tela mostra as duas em vez de esconder uma.
  */
-function Requirements({ capabilities }: { capabilities: ChannelCapabilities }) {
+export function Requirements({
+  capabilities,
+}: {
+  capabilities: ChannelCapabilities;
+}) {
   return (
     <ul className="text-ink-muted flex flex-col gap-1 text-sm text-pretty">
       {capabilities.requires_templates ? (
@@ -90,9 +94,10 @@ function rulesPhrase(count: number): string {
  *
  * 1. **Canal** — o rótulo do provedor e o que ele exige, derivado de
  *    `capabilities`. Sem provedor, a tela inteira é o estado vazio: produção
- *    não tem canal nenhum, e é isso que ela tem a dizer no primeiro dia. Sem
- *    botão de configurar — a escrita de credencial é outra etapa, com parada
- *    obrigatória do dono, e um botão que leva a nada é pior que nenhum.
+ *    não tem canal nenhum, e é isso que ela tem a dizer no primeiro dia. Quem
+ *    grava a credencial é o `<CredentialForm>`, logo abaixo na mesma página —
+ *    este componente só lê, e o `<Requirements>` é compartilhado com ele para
+ *    que o que cada canal exige seja dito de um jeito só.
  * 2. **Saúde** — `ready` como badge; quando não está pronto, os templates
  *    aprovados e a contagem de regras bloqueadas **como a API a deu**. Pronto
  *    é pronto e nada mais: `fn_whatsapp_readiness` define `ready` como zero
