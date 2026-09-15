@@ -5,9 +5,11 @@ import {
   loadConnections,
   loadCredential,
   loadProviderForms,
+  loadTemplates,
   type ConnectionsScreen,
   type CredentialStatus,
   type ProviderForm,
+  type TemplateRow,
 } from "@/lib/canais/queries";
 
 // `server-only` existe para explodir num bundle de cliente; aqui o módulo é
@@ -205,6 +207,79 @@ describe("os formulários dos provedores (caminho 2)", () => {
 
     expect(await loadCredential()).toBeNull();
     expect(await loadProviderForms()).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/** Códigos que nenhum template real tem: a leitura devolve o que a API mandou. */
+const TEMPLATES: TemplateRow[] = [
+  {
+    code: "zz_teste_alfa",
+    category: "utility",
+    language: "pt_BR",
+    variables: ["data_observada", "horario"],
+    body: "Em {{1}} às {{2}}.",
+    meta_template_name: null,
+    meta_status: "draft",
+    meta_rejection: null,
+    active: true,
+    updated_at: "2026-09-15T13:05:00Z",
+  },
+  {
+    code: "zz_teste_beta",
+    category: "marketing",
+    language: "en_US",
+    variables: ["unit"],
+    body: "{{1}}",
+    meta_template_name: "zz_teste_beta_v1",
+    meta_status: "rejected",
+    meta_rejection: "INVALID_FORMAT",
+    active: false,
+    updated_at: "2026-09-14T09:00:00Z",
+  },
+];
+
+describe("o catálogo de templates (caminho 2)", () => {
+  it("200 devolve a lista como veio, com o token no header e sem tenant na URL", async () => {
+    fetchMock.mockResolvedValue(answer(200, TEMPLATES));
+
+    const templates = await loadTemplates();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/canais\/templates$/);
+    expect(url).not.toMatch(/tenant/i);
+    expect(init.headers.Authorization).toBe("Bearer token-de-teste");
+    expect(init.method).toBe("GET");
+    expect(templates).toEqual(TEMPLATES);
+  });
+
+  it("401 vira null", async () => {
+    fetchMock.mockResolvedValue(answer(401, { detail: "…" }));
+
+    expect(await loadTemplates()).toBeNull();
+  });
+
+  it("403 vira null", async () => {
+    fetchMock.mockResolvedValue(
+      answer(403, { detail: "Sem vínculo ativo com este cliente." }),
+    );
+
+    expect(await loadTemplates()).toBeNull();
+  });
+
+  it("⛔ 500 relança — a API fora do ar não é 'nenhum template'", async () => {
+    // Produção está vazia de verdade; engolir o 500 em null é o que deixaria
+    // a queda da API indistinguível da tela do primeiro dia.
+    fetchMock.mockResolvedValue(answer(500, { detail: "boom" }));
+
+    await expect(loadTemplates()).rejects.toBeInstanceOf(ApiError);
+    await expect(loadTemplates()).rejects.toMatchObject({ status: 500 });
+  });
+
+  it("sem sessão não chega a chamar a API", async () => {
+    getSession.mockResolvedValueOnce({ data: { session: null } });
+
+    expect(await loadTemplates()).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

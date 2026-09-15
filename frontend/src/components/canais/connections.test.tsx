@@ -2,6 +2,7 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 
 import { Connections } from "@/components/canais/connections";
+import { TEMPLATES_PATH } from "@/lib/canais/url";
 import type {
   BlockedAlertRule,
   ChannelCapabilities,
@@ -271,6 +272,15 @@ describe("bloco 3 — o que está preso", () => {
     expect(within(linha).getByText("Desvio individual")).toBeVisible();
     expect(within(linha).getByText("deviation_individual")).toBeVisible();
     expect(within(linha).getByText("pendente")).toBeVisible();
+  });
+
+  it("cada regra presa leva à ação que a solta: o link para a aba de templates", () => {
+    render(<Connections screen={official()} />);
+
+    const [linha] = linhas();
+    expect(
+      within(linha).getByRole("link", { name: "ver templates" }),
+    ).toHaveAttribute("href", TEMPLATES_PATH);
   });
 
   it("estado que ninguém traduziu aparece cru, não some", () => {

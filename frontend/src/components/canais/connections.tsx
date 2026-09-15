@@ -1,4 +1,5 @@
 import { MessageSquareOff } from "lucide-react";
+import Link from "next/link";
 
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -9,6 +10,7 @@ import type {
   ChannelCapabilities,
   ConnectionsScreen,
 } from "@/lib/canais/queries";
+import { TEMPLATES_PATH } from "@/lib/canais/url";
 import { formatNumber } from "@/lib/ponto/format";
 
 /**
@@ -192,7 +194,13 @@ export function Connections({ screen }: { screen: ConnectionsScreen }) {
                   <li
                     key={`${rule.rule_name}:${rule.template_code ?? ""}:${index}`}
                   >
-                    <BlockedRule rule={rule} />
+                    <BlockedRule rule={rule} />{" "}
+                    <Link
+                      href={TEMPLATES_PATH}
+                      className="text-brand-strong font-bold underline"
+                    >
+                      ver templates
+                    </Link>
                   </li>
                 ))}
               </ul>

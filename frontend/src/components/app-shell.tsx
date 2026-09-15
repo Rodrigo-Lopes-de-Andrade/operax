@@ -7,7 +7,7 @@ import { NavLink } from "@/components/nav-link";
 import { SignOutButton } from "@/components/sign-out-button";
 import { UserBadge } from "@/components/user-badge";
 import { ASSISTENTE_PATH } from "@/lib/assistente/url";
-import { CONEXOES_PATH } from "@/lib/canais/url";
+import { CONEXOES_PATH, TEMPLATES_PATH } from "@/lib/canais/url";
 import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
@@ -156,6 +156,7 @@ export function AppShell({
                 <NavLink href={RUBRICAS_PATH} label="Rubricas" />
                 <NavLink href={ROTACOES_PATH} label="Escalas" />
                 <NavLink href={CONEXOES_PATH} label="Conexões" />
+                <NavLink href={TEMPLATES_PATH} label="Templates" />
               </>
             ) : null}
           </nav>

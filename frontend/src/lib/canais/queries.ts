@@ -112,6 +112,56 @@ export type CredentialStatus = {
   public_identity: string | null;
 };
 
+/**
+ * Uma linha de `app.message_template`, como `GET /canais/templates` a entrega
+ * (`TemplateRow` em `models.py`).
+ *
+ * `meta_status` e `meta_rejection` são o que a Meta disse do template e chegam
+ * aqui só para leitura: quem os escreve é a sincronização, nunca o formulário.
+ * `variables` é a ordem dos `{{n}}` do corpo — a posição na lista é o número
+ * do placeholder — e o juiz do corpo é o gatilho do banco, não a tela.
+ */
+export type TemplateRow = {
+  code: string;
+  category: "utility" | "authentication" | "marketing";
+  language: string;
+  variables: string[];
+  body: string;
+  meta_template_name: string | null;
+  meta_status: "draft" | "pending" | "approved" | "rejected" | "paused";
+  meta_rejection: string | null;
+  active: boolean;
+  updated_at: string;
+};
+
+/**
+ * O que o formulário grava em `PUT /canais/templates/{code}` (`TemplateWrite`).
+ * Sem `meta_status` e sem `meta_rejection` de propósito: o backend recusa a
+ * mão no estado da Meta, e trocar `meta_template_name` volta o status a
+ * `draft` lá — a tela avisa e não simula.
+ */
+export type TemplateWrite = {
+  category: TemplateRow["category"];
+  language: string;
+  variables: string[];
+  body: string;
+  meta_template_name: string | null;
+  active: boolean;
+};
+
+/**
+ * O resultado de `POST /canais/templates/sincronizar` (`TemplateSyncResult`):
+ * quantos templates a WABA tem, quais linhas locais mudaram de estado e quais
+ * ficaram sem par lá — estas voltam a `draft` no banco.
+ */
+export type TemplateSyncResult = {
+  provider: string;
+  meta_total: number;
+  updated: string[];
+  unmatched: string[];
+  synced_at: string;
+};
+
 async function accessToken(): Promise<string | null> {
   const supabase = await getServerSupabase();
   const { data } = await supabase.auth.getSession();
@@ -154,4 +204,9 @@ export function loadCredential(): Promise<CredentialStatus | null> {
 /** Os formulários, na ordem da API — o oficial primeiro. */
 export function loadProviderForms(): Promise<ProviderForm[] | null> {
   return readOrNull<ProviderForm[]>("/canais/provedores");
+}
+
+/** O catálogo do cliente, ordenado por `code` como a API o entrega. */
+export function loadTemplates(): Promise<TemplateRow[] | null> {
+  return readOrNull<TemplateRow[]>("/canais/templates");
 }
