@@ -31,6 +31,7 @@ from server.routers import (
     monitor,
     rh,
     rh_employees,
+    webhooks,
 )
 
 settings = get_settings()
@@ -86,6 +87,10 @@ app.include_router(justificativas.router)
 app.include_router(monitor.router)
 app.include_router(rh.router)
 app.include_router(rh_employees.router)
+# The Telegram webhook: no JWT dependency, out of the OpenAPI schema, and a
+# server-to-server POST that never carries an `Origin` — so the CORS middleware
+# above has nothing to say about it (SPEC-CANAIS §6).
+app.include_router(webhooks.router)
 
 
 @app.get("/health")

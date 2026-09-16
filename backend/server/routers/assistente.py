@@ -26,10 +26,7 @@ import asyncio
 import contextlib
 import json
 import logging
-from collections import deque
 from collections.abc import AsyncIterator
-from dataclasses import dataclass, field
-from time import monotonic
 from typing import Any
 from uuid import UUID
 
@@ -48,6 +45,7 @@ from operax.agente.agente import (
 from operax.core.tenant import TenantContext, tenant_scope
 from server.deps import CurrentTenant
 from server.models import AssistantQuestion
+from server.ratelimit import RateLimiter
 
 logger = logging.getLogger(__name__)
 
@@ -57,42 +55,9 @@ router = APIRouter(prefix="/assistente", tags=["assistente"])
 #: fica ocioso o tempo inteiro em que o modelo está pensando.
 _PING_SECONDS = 15.0
 
-#: Doze perguntas por minuto por pessoa. Não é proteção contra abuso de terceiro
-#: (o token é válido): é o teto que impede um laço no frontend, ou uma pessoa
-#: impaciente segurando o Enter, de virar uma conta de provider. Uma pergunta
-#: leva segundos, então doze por minuto não alcança nenhum uso legítimo.
-_LIMIT = 12
-_WINDOW_SECONDS = 60.0
-
-
-@dataclass(slots=True)
-class RateLimiter:
-    """Janela deslizante por usuário, em memória.
-
-    Em memória porque a topologia é instância única no Railway — está escrito no
-    CLAUDE.md, e é a mesma premissa do resto do processo. Quando houver segunda
-    instância isto vira um contador no banco, e o lugar de descobrir isso é aqui.
-    """
-
-    limit: int = _LIMIT
-    window: float = _WINDOW_SECONDS
-    _hits: dict[UUID, deque[float]] = field(default_factory=dict)
-
-    def check(self, user_id: UUID) -> None:
-        agora = monotonic()
-        marcas = self._hits.setdefault(user_id, deque())
-        while marcas and agora - marcas[0] > self.window:
-            marcas.popleft()
-        if len(marcas) >= self.limit:
-            espera = int(self.window - (agora - marcas[0])) + 1
-            raise HTTPException(
-                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                detail=f"Muitas perguntas em sequência. Tente de novo em {espera}s.",
-                headers={"Retry-After": str(espera)},
-            )
-        marcas.append(agora)
-
-
+#: Doze perguntas por minuto por pessoa — o default de `RateLimiter`, que nasceu
+#: aqui e mora em `server/ratelimit.py` desde que o webhook do Telegram passou a
+#: precisar dele com outra chave e sem corpo no 429.
 _limiter = RateLimiter()
 
 

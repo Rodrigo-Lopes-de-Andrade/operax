@@ -1,5 +1,6 @@
-"""Telegram Bot API — the fourth provider, official, third family. Verification
-and webhook registration; `enviar` and the webhook endpoint are wave 2b.
+"""Telegram Bot API — the fourth provider, official, third family. Verification,
+webhook registration, and `TelegramProvider.enviar`; the webhook endpoint that
+receives `/start` is `server/routers/webhooks.py`.
 
 ⏳ ENDPOINTS AS PREMISE, NOT AS MEASUREMENT
 Never called from this repository. The documented Bot API surface used here:
@@ -9,6 +10,8 @@ Never called from this repository. The documented Bot API surface used here:
          {url, secret_token, allowed_updates, drop_pending_updates}
     POST https://api.telegram.org/bot{token}/deleteWebhook {drop_pending_updates}
     GET  https://api.telegram.org/bot{token}/getWebhookInfo
+    POST https://api.telegram.org/bot{token}/sendMessage {chat_id, text}
+         → 403 "Forbidden: bot was blocked by the user" when the person blocked it
 
 Every answer is `{"ok": bool, "result": …}`; an invalid token is a 401 with
 `ok: false`. Three refusals, the same three as the WhatsApp providers: `ok`
@@ -42,7 +45,13 @@ from typing import Any
 
 import httpx
 
-from operax.alertas.provedores.base import FieldSpec, InvalidCredentialError
+from operax.alertas.provedores.base import (
+    Delivery,
+    FieldSpec,
+    InvalidCredentialError,
+    Message,
+    render,
+)
 
 NAME = "telegram"
 
@@ -189,3 +198,64 @@ async def webhook_info(token: str, http: httpx.AsyncClient) -> WebhookInfo:
         last_error_date=last_error_date,
         last_error_message=_mask(str(error_message)) if error_message is not None else None,
     )
+
+
+# ---------------------------------------------------------------------------
+# Delivery — under the template contract (SPEC-CANAIS §2)
+# ---------------------------------------------------------------------------
+#: What the Bot API answers when the person blocked the bot. The status code is
+#: the signal; the description is not read.
+_BLOCKED_STATUS = 403
+
+
+@dataclass(frozen=True, slots=True)
+class TelegramProvider:
+    """The bot as an outbound channel: `sendMessage` to a `chat_id`.
+
+    The text is `render(message.body, message)` — the same renderer the
+    unofficial WhatsApp providers use over the same `app.message_template.body`,
+    which is what makes the two copies of one alert identical by construction
+    (§2, item 3). No `parse_mode`: text only, until a template declares
+    formatting. `body` absent is refused before any HTTP — this provider has no
+    other source of a sentence, on purpose.
+
+    `http` must come from `verification_client()`: the token is in the URL path
+    (gate 3), and that client is where the `httpx` log is muted. The sender that
+    wires this in (C5) owns the token's journey from the vault to here.
+
+    A `403` is `Delivery("failed", error="blocked")`: the person blocked the
+    bot, and the identity is no longer a place alerts reach. Revoking it is the
+    caller's decision (C4), not this method's — a provider that writes to the
+    database is a provider that can be pointed at one.
+    """
+
+    token: str
+    http: httpx.AsyncClient
+    name: str = NAME
+
+    async def enviar(self, message: Message) -> Delivery:
+        if message.body is None:
+            return Delivery(status="failed", error="no_body")
+        payload = {"chat_id": message.destination, "text": render(message.body, message)}
+        try:
+            response = await self.http.post(f"{_BASE}/bot{self.token}/sendMessage", json=payload)
+        except httpx.HTTPError:
+            # No exception leaves here: the httpx message names the URL, and
+            # the URL is the token.
+            return Delivery(status="failed", error="unreachable")
+
+        if response.status_code == _BLOCKED_STATUS:
+            return Delivery(status="failed", error="blocked")
+        if response.status_code >= 500 or response.status_code == 429:
+            return Delivery(status="failed", error="unreachable")
+        if response.status_code != 200:
+            # The code and nothing else: `description` is the platform's body.
+            return Delivery(status="failed", error=f"http_{response.status_code}")
+        try:
+            body = response.json()
+            if not body["ok"]:
+                return Delivery(status="failed", error="malformed")
+            message_id = str(int(body["result"]["message_id"]))
+        except (ValueError, KeyError, TypeError):
+            return Delivery(status="failed", error="malformed")
+        return Delivery(status="sent", provider_message_id=message_id)

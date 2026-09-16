@@ -42,6 +42,10 @@ class Message:
     variables: tuple[str, ...]
     #: Os fatos, por nome. O provedor escolhe o que fazer com eles.
     facts: dict[str, str]
+    #: `app.message_template.body`, para quem renderiza localmente (`z_api`,
+    #: `uazapi`, `telegram`). É dado do template, não frase montada: o provedor
+    #: só o passa por `render`. `None` para o oficial, cuja frase vive na WABA.
+    body: str | None = None
 
     def ordered(self) -> list[str]:
         """Os valores na ordem em que o template os declarou."""

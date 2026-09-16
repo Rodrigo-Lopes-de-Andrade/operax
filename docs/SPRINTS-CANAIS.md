@@ -652,6 +652,78 @@ acessibilidade: o "copiado" do botão de copiar não chegava ao leitor de tela,
 porque o `aria-label` fixo é o nome do botão — ganhou região viva própria,
 que só existe quando há desfecho.
 
+### ✅ C3, onda 2b — o webhook `/start`, o vigia, o `enviar` — aprovada em 16/09/2026, um ciclo; guardião PASSA
+
+**O que entrou:** `context_for_webhook` em `core/tenant.py` — o **segundo** SQL
+sancionado a atravessar tenants (quem chama é o Telegram, sem tenant; a
+cauda rotativa da URL é o único jeito de saber qual), de tenant **ativo**, e
+um teste enumera exatamente os três SQL de `tenant.py` que atravessam.
+`POST /webhooks/telegram/{path_token}` fora do OpenAPI, sem JWT, com a
+**ordem como contrato**: rate limit por IP → resolução (forma do token antes
+do banco; desconhecido → 404 seco e um contador, nenhum log) → rate limit por
+token → header `X-Telegram-Bot-Api-Secret-Token` contra o cofre por
+`hmac.compare_digest` **antes de ler o corpo** (errado → 404, não 401: não se
+confirma o endpoint a quem não tem o segredo) → só então o parse:
+`chat.type == 'private'` obrigatório (um `/start` num grupo traria o `chat_id`
+do grupo, e o alerta individual iria ao grupo pela porta que
+`validate_alert_target` não vigia — regra 7), `/start <token>`, e tudo o mais
+é 200 vazio com o **tipo** no log, nunca o texto, nunca o `chat_id`. A adesão:
+`sha256` do token, `for update`, três recusas distinguíveis no log
+(`invite_unknown`/`invite_used`/`invite_expired`) com o convite intacto;
+válida → consome, **revoga a vigente anterior do mesmo titular** (`novo /start`),
+insere, audita sem `chat_id`; `chat_id` já de outra pessoa → `chat_in_use`
+pelo índice, e a subtransação desfaz o consumo. `RateLimiter` movido para
+`server/ratelimit.py` com chave genérica, o assistente inalterado. O vigia
+(`python -m operax.alertas.vigia`) pergunta `getWebhookInfo` fora de
+transação e grava por `alertas/saude.py`: `connected`, ou `disconnected` com
+frase **sua** (webhook ausente / apontando para outro endereço / erro de
+entrega nas últimas 24 h / updates acumulados), ou `unknown` — e **não nomeia
+`set_webhook`**. `TelegramProvider.enviar`: `sendMessage` com
+`render(body, message)`, sem `parse_mode`, 403 → `blocked` sem revogar nada
+(é o C4 quem revoga); `Message.body` opcional, `sender.py` intacto.
+
+pytest **990** (baseline 889); suíte de banco verde com o `97` compilando 25
+instruções e a quinta parte — o webhook, 49 asserções contra o banco real
+(resolução por `path_token`, `/start` válido/expirado/usado, `chat_in_use`
+nomeado pelo índice, a segunda adesão revogando a primeira).
+
+**Revisão, ciclo 1: APROVADA** — 37 mutações, 35 mortas, mais duas medições
+do revisor contra banco e cofre **reais** (o `_bind` do webhook por psycopg,
+26/26; a app inteira fim a fim, 19/19). Fechados antes do commit os três
+MÉDIOs: o vigia afirmava "HTTP com a transação fechada" sem asserção (a
+linha do tempo passou a ver o `http` entre os dois escopos, e a mutação que
+o move para dentro morre); "sem segredo no cofre" era testado só **com**
+header — sem header, `compare_digest(b"", b"")` é verdadeiro, e um `secret or
+""` antes da comparação abriria o endpoint a quem não manda header nenhum
+(agora parametrizado, e a mutação morre); e o limitador nunca despejava
+chaves — 50 mil IPs eram 50 mil entradas para sempre (chave que envelheceu
+inteira sai do mapa, com teste). Mais o `RecursionError` de JSON aninhado até
+o limite, que virava 500 em vez de "corpo inválido". **Guardião dez de dez:**
+404 seco em token inventado e em header errado, 200 vazio com corpo lixo,
+fora do OpenAPI, `GET` 405; 47 registros do webhook em `DEBUG` dizendo só o
+tipo e nenhum com `chat_id`; auditoria com `invite_id` e `channel` e nada
+mais; o único caminho novo que atravessa tenants é `context_for_webhook`, e
+tenant inativo com token válido devolve zero; `set_webhook` ausente do vigia
+em código.
+
+**Lição de processo (memória):** o revisor mutou a árvore compartilhada
+enquanto o guardião media; o gate só não fotografou o mutante porque tirou
+hash antes e depois de cada item. Daqui em diante, mutação só em cópia.
+
+**Duas ações do dono que esta onda cria:** agendar o vigia como terceiro
+cron no Railway (mesma branch e root, variáveis por referência ao
+`operax-api`, `python -m operax.alertas.vigia`, sugestão `*/15 * * * *` —
+sem ele, `connected` é afirmação sem idade) e o `API_PUBLIC_URL` pendente da
+2a. **Detalhe de deploy:** atrás do proxy do Railway `request.client.host` é
+o IP do edge salvo `FORWARDED_ALLOW_IPS` — o limitador por IP fica global
+(300/min); hoje há um tenant, e o de token (120/min) é o que separa.
+
+**Premissas, não medições:** a forma do update real (`/start <token>`,
+`chat.type`, `chat.id`); o Telegram limita o `start` a 64 caracteres, e o C4
+deve gerar tokens ≤ 64; a URL que `getWebhookInfo` devolve é comparada como
+string — se a plataforma normalizar, um webhook certo fica `disconnected` até
+alguém medir o primeiro real.
+
 ## C4 — Adesão
 
 **Isolado de propósito, e não bloqueia nada.** É projeto de campo, não código:

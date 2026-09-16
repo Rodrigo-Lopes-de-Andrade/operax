@@ -340,9 +340,10 @@ async def resolve_membership(user_id: UUID) -> TenantContext:
     )
 
 
-# The second — and last — statement in the backend that runs without a tenant
-# filter. It is what a scheduled task uses to learn which tenants exist before
-# binding itself to one of them, and it reads nothing but ids of active tenants.
+# The second statement in the backend that runs without a tenant filter (the
+# third, `_WEBHOOK_INTEGRATION_SQL`, is below). It is what a scheduled task uses
+# to learn which tenants exist before binding itself to one of them, and it
+# reads nothing but ids of active tenants.
 # Keeping it in this file, beside `resolve_membership`, is deliberate: an auditor
 # looking for "what runs unfiltered?" should find every answer in one place.
 _ACTIVE_TENANTS_SQL = """
@@ -361,3 +362,60 @@ async def active_tenants(task: str) -> list[SystemContext]:
             await cursor.execute(_ACTIVE_TENANTS_SQL)
             rows = await cursor.fetchall()
     return [SystemContext(tenant_id=row["id"], task=task) for row in rows]
+
+
+class AmbiguousWebhookTokenError(TenantError):
+    """A webhook path token resolves to more than one active integration."""
+
+
+# The third — and, with the two above, last — statement that runs without a
+# tenant filter, and the second that crosses tenants. It exists because the
+# Telegram platform calls `POST /webhooks/telegram/{path_token}` with no token,
+# no user and no tenant: the only thing in the request that says which customer
+# it is for is the rotating tail of the URL, which `POST /canais/telegram/conectar`
+# wrote into `app.integration.config ->> 'webhook_path_token'` for exactly one
+# integration. So the tail is looked up here, across every tenant, and what
+# comes back is the `SystemContext` the webhook binds to for everything else.
+#
+# It cannot go through `bind_tenant`: that helper injects the tenant from a
+# context that, at this point, does not exist yet — this is the query that
+# produces it. Reading nothing but `id` and `tenant_id` of ONE active
+# integration of ONE active tenant is the whole of what it is allowed to do.
+# `tests/test_canais_webhook.py` asserts, from the source, that no other
+# statement in this file reaches an `app.` table without `%(tenant_id)s`.
+_WEBHOOK_INTEGRATION_SQL = """
+    select i.id, i.tenant_id
+    from app.integration i
+    join app.tenant t on t.id = i.tenant_id and t.active
+    where i.provider = %(provider)s
+      and i.active
+      and i.config ->> 'webhook_path_token' = %(path_token)s
+"""
+
+
+async def context_for_webhook(
+    *, provider: str, path_token: str, task: str
+) -> tuple[SystemContext, UUID] | None:
+    """The tenant behind a webhook path token, and the integration it belongs to.
+
+    `None` when no active integration of an active tenant carries `path_token`
+    — the caller answers a bare 404 and must not say why. Two matches is not a
+    tenant to pick from: a token that resolves to two customers would bind a
+    person to the wrong one, so it raises instead.
+    """
+    pool = get_pools().pool("app")
+    async with pool.connection() as connection:
+        async with connection.cursor(row_factory=dict_row) as cursor:
+            await cursor.execute(
+                _WEBHOOK_INTEGRATION_SQL, {"provider": provider, "path_token": path_token}
+            )
+            rows = await cursor.fetchall()
+
+    if not rows:
+        return None
+    if len(rows) > 1:
+        raise AmbiguousWebhookTokenError(
+            f"webhook path token of {provider} resolves to {len(rows)} integrations"
+        )
+    row = rows[0]
+    return SystemContext(tenant_id=row["tenant_id"], task=task), row["id"]

@@ -123,6 +123,7 @@ from operax.alertas.provedores.base import (
     check_fields,
     verification_client,
 )
+from operax.alertas.saude import HEALTH_CONNECTED, HEALTH_DISCONNECTED, record_health
 from operax.core.config import get_settings
 from operax.core.tenant import TenantContext, TenantScope, tenant_scope, user_scope
 from operax.core.vault import read_secret, store_secret
@@ -594,7 +595,7 @@ async def save_credential(
             # tela diria "pronto" ao lado de "Conectar bot". O Telegram segue
             # entregando no caminho antigo, que o banco não conhece mais; até
             # o administrador reconectar, o canal está fora, e a saúde diz.
-            await _record_health(
+            await record_health(
                 bound,
                 integration_id,
                 "disconnected",
@@ -638,11 +639,6 @@ _SEM_PERMISSAO_DESCONECTAR = "Desconectar o bot é do administrador do cliente."
 #: `secrets.token_urlsafe`, e rotaciona a cada desconexão.
 _WEBHOOK_SECRET_KEY = "webhook_secret"
 
-#: `app.channel_health.status`, os dois que esta rota escreve. A terceira
-#: (`unknown`) é do vigia.
-_HEALTH_CONNECTED = "connected"
-_HEALTH_DISCONNECTED = "disconnected"
-
 #: `config` ganha (ou troca) as duas chaves do webhook. `||` com o patch, em vez
 #: de reescrever `config`: `public_identity` e o que mais o formulário gravou
 #: ficam. `%(patch)s` é `Jsonb`, com `webhook_url` nulo na desconexão.
@@ -654,35 +650,10 @@ _TELEGRAM_WEBHOOK_SQL = """
     returning id
 """
 
-#: A medição, gravada pela porta única (`app.fn_record_channel_health`, migration
-#: `ch_channel_health`), que é quem segura a regra da §7 — `status_changed_at`
-#: só avança quando o status muda. O `from app.integration … tenant_id` é o que
-#: liga o tenant: integração de outro cliente é zero linhas e função nunca
-#: avaliada. ⛔ `%(detail)s` é sempre uma frase DESTA rota — no máximo com o
-#: código da recusa —, nunca corpo nem mensagem do provedor: a função grava o
-#: que recebe (achado do guardião da onda 1).
-_RECORD_HEALTH_SQL = """
-    select app.fn_record_channel_health(i.id, %(status)s, %(detail)s)
-    from app.integration i
-    where i.tenant_id = %(tenant_id)s
-      and i.id = %(integration_id)s
-"""
-
 
 async def _bot_state(bound: TenantScope) -> DictRow | None:
     await bound.execute(_TELEGRAM_STATE_SQL, {"provider": telegram.NAME})
     return await bound.fetchone()
-
-
-async def _record_health(
-    bound: TenantScope, integration_id: Any, status_: str, detail: str
-) -> None:
-    await bound.execute(
-        _RECORD_HEALTH_SQL,
-        {"integration_id": integration_id, "status": status_, "detail": detail},
-    )
-    if await bound.fetchone() is None:
-        raise RuntimeError("app.fn_record_channel_health não alcançou a integração do tenant")
 
 
 async def _rotate_webhook(
@@ -784,13 +755,13 @@ async def connect_bot(tenant: CurrentTenant, http: HttpDep) -> TelegramChannel:
             "canais: setWebhook recusado para o tenant %s (%s)", tenant.tenant_id, recusa.code
         )
         async with tenant_scope(tenant) as bound:
-            await _record_health(
-                bound, state["id"], _HEALTH_DISCONNECTED, f"setWebhook recusado: {recusa.code}"
+            await record_health(
+                bound, state["id"], HEALTH_DISCONNECTED, f"setWebhook recusado: {recusa.code}"
             )
         return _refuse(_WEBHOOK_REFUSALS[recusa.code], recusa.code)
 
     async with tenant_scope(tenant) as bound:
-        await _record_health(bound, state["id"], _HEALTH_CONNECTED, "webhook registrado")
+        await record_health(bound, state["id"], HEALTH_CONNECTED, "webhook registrado")
 
     return await _telegram_channel(tenant)
 
@@ -831,8 +802,8 @@ async def disconnect_bot(tenant: CurrentTenant, http: HttpDep) -> TelegramChanne
             path_token=secrets.token_urlsafe(24),
             webhook_secret=secrets.token_urlsafe(32),
         )
-        await _record_health(
-            bound, state["id"], _HEALTH_DISCONNECTED, "desconectado pelo administrador"
+        await record_health(
+            bound, state["id"], HEALTH_DISCONNECTED, "desconectado pelo administrador"
         )
 
     return await _telegram_channel(tenant)

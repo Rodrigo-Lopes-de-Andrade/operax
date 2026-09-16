@@ -14,7 +14,10 @@ Cinco portões (SPRINTS-CANAIS, C3, onda 2a):
 4. **desconectar chama antes de gravar, e rotaciona** — o `path_token` muda, o
    `webhook_url` zera, e reconectar não devolve o endereço antigo;
 5. **o `webhook_secret` não sai por lugar nenhum** — nem resposta, nem log, nem
-   auditoria, nem instrução: só `params["value"]` da gravação no cofre.
+   auditoria, nem instrução: só `params["value"]` da gravação no cofre;
+6. **`enviar` renderiza o template, e só** (onda 2b) — o texto que vai ao
+   `sendMessage` é exatamente `render(body, message)`, sem `parse_mode`; `403`
+   é `blocked` e ninguém revoga aqui; o token está na URL (gate 3 de novo).
 
 ⚠️ O QUE ESTA SUÍTE NÃO PODE PROVAR
 Nada aqui toca banco nem rede. `fn_channel_readiness` de verdade com dois canais
@@ -42,6 +45,7 @@ import pytest
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
 
+from operax.alertas import saude
 from operax.alertas.capacidades import (
     CHANNEL_PROVIDERS,
     CHANNELS,
@@ -53,9 +57,12 @@ from operax.alertas.capacidades import (
 )
 from operax.alertas.provedores import PROVIDERS, meta_cloud, telegram, z_api
 from operax.alertas.provedores.base import (
+    Delivery,
     FieldError,
     InvalidCredentialError,
+    Message,
     check_fields,
+    render,
     verification_client,
 )
 from operax.core.config import Settings
@@ -1284,20 +1291,22 @@ def test_conexoes_o_bot_tem_exatamente_os_campos_do_contrato_e_nenhum_segredo(
 
 
 def test_as_instrucoes_do_bot_ligam_o_tenant_pela_integracao() -> None:
-    """`_TELEGRAM_STATE_SQL`, `_TELEGRAM_WEBHOOK_SQL` e `_RECORD_HEALTH_SQL`
-    passam por `bind_tenant` e recortam por `tenant_id` da integração — a
-    função de saúde só é avaliada se a integração for do tenant (zero linhas do
-    `from … where` é zero chamadas). Só as três chaves públicas de `config` saem."""
+    """`_TELEGRAM_STATE_SQL`, `_TELEGRAM_WEBHOOK_SQL` e `saude.RECORD_HEALTH_SQL`
+    (a porta única, compartilhada com o vigia) passam por `bind_tenant` e
+    recortam por `tenant_id` da integração — a função de saúde só é avaliada se
+    a integração for do tenant (zero linhas do `from … where` é zero chamadas).
+    Só as três chaves públicas de `config` saem."""
     context = SystemContext(tenant_id=TENANT_ID, task="test")
     for sql in (
         canais._TELEGRAM_STATE_SQL,
         canais._TELEGRAM_WEBHOOK_SQL,
-        canais._RECORD_HEALTH_SQL,
+        saude.RECORD_HEALTH_SQL,
     ):
         assert bind_tenant(sql, {}, context)["tenant_id"] == TENANT_ID
         assert "tenant_id = %(tenant_id)s" in sql
-    assert "from app.integration i" in canais._RECORD_HEALTH_SQL
-    assert "app.fn_record_channel_health(i.id" in canais._RECORD_HEALTH_SQL
+    assert "from app.integration i" in saude.RECORD_HEALTH_SQL
+    assert "app.fn_record_channel_health(i.id" in saude.RECORD_HEALTH_SQL
+    assert canais.record_health is saude.record_health  # uma porta, não uma cópia
     state = canais._TELEGRAM_STATE_SQL.lower()
     assert "vault_id" not in state and "select *" not in state
     assert state.count("config ->>") == 3
@@ -1308,14 +1317,192 @@ def test_as_instrucoes_do_bot_ligam_o_tenant_pela_integracao() -> None:
 
 def test_o_bot_nao_e_provedor_de_whatsapp_no_sender() -> None:
     """O par de `test_o_sender_conhece_todo_provedor_de_whatsapp_da_matriz`:
-    `enviar` do bot é a onda 2b, e enquanto não existe o sender não pode achar
-    que conhece um provedor que não entrega. `PROVIDERS` (verificação) é quatro;
-    o mapa do sender continua nos três."""
+    `TelegramProvider.enviar` existe desde a onda 2b, mas quem o liga ao sender
+    — Telegram se houver identidade vigente, WhatsApp se não (SPEC §8) — é o
+    C5. Até lá `PROVIDERS` (verificação) é quatro e o mapa do sender continua
+    nos três: um provedor no mapa sem roteamento entregaria a um `chat_id`
+    que ninguém resolveu."""
     from operax.alertas.sender import default_providers
 
     assert telegram.NAME in PROVIDERS
     assert telegram.NAME not in default_providers()
-    assert not hasattr(telegram, "enviar")
+    assert callable(telegram.TelegramProvider.enviar)
+
+
+# ---------------------------------------------------------------------------
+# `TelegramProvider.enviar` — sob o contrato de template (SPEC-CANAIS §2)
+# ---------------------------------------------------------------------------
+TEMPLATE_BODY = "FastPark: {{1}} teve {{2}} indício(s) em {{3}}. Detalhe: {{4}}"
+CHAT_ID = "987654321012"
+
+
+def _message(body: str | None = TEMPLATE_BODY) -> Message:
+    return Message(
+        destination=CHAT_ID,
+        template="deviation_individual",
+        variables=("employee", "total", "unit", "link"),
+        facts={
+            "employee": "Colab Sonda",
+            "total": "2",
+            "unit": "Shopping Norte",
+            "link": "https://app.exemplo.test/?u=1",
+        },
+        body=body,
+    )
+
+
+def _send_ok(request: httpx.Request) -> httpx.Response:
+    return httpx.Response(
+        200,
+        json={"ok": True, "result": {"message_id": 4242, "chat": {"id": int(CHAT_ID)}}},
+    )
+
+
+async def _enviar(
+    respond: Callable[[httpx.Request], httpx.Response], message: Message | None = None
+) -> tuple[Delivery, list[httpx.Request]]:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return respond(request)
+
+    async with verification_client(transport=httpx.MockTransport(handler)) as http:
+        provider = telegram.TelegramProvider(BOT_TOKEN, http)
+        return await provider.enviar(message or _message()), seen
+
+
+async def test_enviar_manda_exatamente_o_render_do_template_sem_parse_mode() -> None:
+    """O gate "texto idêntico a partir de um template só": o `text` do
+    `sendMessage` é `render(body, message)` byte a byte — a mesma função que o
+    `z_api`/`uazapi` usarão sobre o mesmo `body`. Sem `parse_mode`, sem botão:
+    entram quando o template os declarar (§2)."""
+    entrega, seen = await _enviar(_send_ok)
+
+    assert entrega == Delivery(status="sent", provider_message_id="4242")
+    [request] = seen
+    assert request.method == "POST"
+    assert request.url.host == "api.telegram.org"
+    assert request.url.path == f"/bot{BOT_TOKEN}/sendMessage"
+    enviado = _sent(request)
+    assert enviado == {"chat_id": CHAT_ID, "text": render(TEMPLATE_BODY, _message())}
+    assert enviado["text"] == (
+        "FastPark: Colab Sonda teve 2 indício(s) em Shopping Norte. "
+        "Detalhe: https://app.exemplo.test/?u=1"
+    )
+    assert "{{" not in enviado["text"]
+    assert "parse_mode" not in enviado
+    assert telegram.TelegramProvider(BOT_TOKEN, httpx.AsyncClient()).name == telegram.NAME
+
+
+async def test_enviar_sem_body_recusa_antes_de_qualquer_http() -> None:
+    """Sem `body` não há de onde tirar a frase — e este provedor não a inventa.
+    É a fronteira assistente → sender da §2, item 2: nenhum caminho leva texto
+    livre a `sendMessage`."""
+    entrega, seen = await _enviar(_send_ok, _message(body=None))
+
+    assert entrega == Delivery(status="failed", error="no_body")
+    assert seen == []
+
+
+async def test_403_e_blocked_e_o_provedor_nao_revoga() -> None:
+    """A pessoa bloqueou o bot. `blocked` é o que o C4 usa para revogar a
+    identidade — aqui só se informa. O corpo do 403 (com o `description` da
+    plataforma) não chega ao `error`."""
+
+    def blocked(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            403,
+            json={
+                "ok": False,
+                "error_code": 403,
+                "description": "Forbidden: bot was blocked by the user",
+            },
+        )
+
+    entrega, _ = await _enviar(blocked)
+
+    assert entrega == Delivery(status="failed", error="blocked")
+    assert "Forbidden" not in (entrega.error or "")
+
+
+@pytest.mark.parametrize(
+    ("respond", "error"),
+    [
+        (
+            lambda _: httpx.Response(400, json={"ok": False, "description": "chat not found"}),
+            "http_400",
+        ),
+        (lambda _: httpx.Response(401, json={"ok": False, "token": BOT_TOKEN}), "http_401"),
+        (lambda _: httpx.Response(429, json={"ok": False}), "unreachable"),
+        (lambda _: httpx.Response(502, text=BOT_TOKEN), "unreachable"),
+        (lambda _: httpx.Response(200, content=b"<html>"), "malformed"),
+        (lambda _: httpx.Response(200, json={"ok": False}), "malformed"),
+        (lambda _: httpx.Response(200, json={"ok": True, "result": {}}), "malformed"),
+        (
+            lambda _: httpx.Response(200, json={"ok": True, "result": {"message_id": "x"}}),
+            "malformed",
+        ),
+    ],
+)
+async def test_outras_recusas_sao_failed_com_o_codigo_e_nunca_o_corpo(
+    respond: Callable[[httpx.Request], httpx.Response], error: str
+) -> None:
+    entrega, _ = await _enviar(respond)
+
+    assert entrega.status == "failed"
+    assert entrega.error == error
+    assert entrega.provider_message_id is None
+    assert BOT_TOKEN not in (entrega.error or "")
+    assert "chat not found" not in (entrega.error or "")
+
+
+async def test_enviar_com_a_rede_fora_e_unreachable_e_nenhuma_excecao_sai() -> None:
+    """Nenhuma exceção sai de `enviar`: a do `httpx` nomeia a URL, e a URL é o
+    token. O sender grava `error`, não um traceback."""
+
+    def falls(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError(f"refused {request.url}", request=request)
+
+    entrega, _ = await _enviar(falls)
+
+    assert entrega == Delivery(status="failed", error="unreachable")
+
+
+async def test_gate_3_no_enviar_o_token_nao_aparece_no_log_em_debug(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Positivo primeiro (cliente cru loga a URL), depois a defesa."""
+    _reset_http_loggers()
+    with caplog.at_level(logging.DEBUG):
+        async with httpx.AsyncClient(transport=httpx.MockTransport(_refuses_echoing)) as raw:
+            await telegram.TelegramProvider(BOT_TOKEN, raw).enviar(_message())
+    assert BOT_TOKEN in caplog.text
+
+    caplog.clear()
+    with caplog.at_level(logging.DEBUG):
+        entrega, seen = await _enviar(_refuses_echoing)
+    assert entrega.status == "failed" and entrega.error == "http_401"
+    assert BOT_TOKEN in str(seen[0].url)  # a premissa
+    assert BOT_TOKEN not in caplog.text
+    assert CHAT_ID not in caplog.text
+    _reset_http_loggers()
+
+
+def test_enviar_devolve_delivery_e_nunca_levanta_invalid_credential() -> None:
+    """`_codes_raised(telegram)` continua nos três de `verify`: `enviar` não
+    recusa por exceção, devolve `Delivery` — o sender não trata exceção de
+    provedor, grava `error`."""
+    assert _codes_raised(telegram) == {"unauthorized", "unreachable", "malformed"}
+    assert "blocked" not in _codes_raised(telegram)
+
+
+def test_message_body_e_opcional_e_o_null_provider_continua_igual() -> None:
+    """`Message` ganhou `body` com default: o sender de hoje, que não o passa,
+    continua compilando, e o `NullProvider` não olha para ele."""
+    sem = Message(destination="+55", template="t", variables=(), facts={})
+    assert sem.body is None
+    assert _message().body == TEMPLATE_BODY
 
 
 # ---------------------------------------------------------------------------

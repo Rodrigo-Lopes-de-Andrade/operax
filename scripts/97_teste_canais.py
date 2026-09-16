@@ -75,9 +75,31 @@ Um tenant com `meta_cloud` **e** `telegram` ativos, e o SQL real de `canais.py`:
   desliga o `meta_cloud` e **não** o bot; `_CREDENTIAL_STATUS_SQL` responde por
   canal.
 
+QUINTA PARTE — O WEBHOOK `/start` (C3, onda 2b), O SQL DO PASSO 6 CONTRA O BANCO
+`context_for_webhook` (`core/tenant.py`) e as cinco instruções de
+`server/routers/webhooks.py`, executadas como o webhook as executa:
+
+* **a resolução pelo `path_token`**: acha o tenant dono e a integração dele;
+  o token do outro tenant acha o outro; token inventado, tenant inativo e
+  integração inativa são zero linhas;
+* **`/start` válido**: o convite é achado pelo hash (nunca pelo token), não
+  está expirado nem usado, é consumido (1 linha), a identidade nasce vigente
+  com o `chat_id`, a auditoria leva canal e convite e **não** o `chat_id`; o
+  mesmo convite relido está usado e o consumo de novo é 0 linhas;
+* **expirado e usado não vinculam**: o banco diz `expired = true` para o
+  vencido e `used_at` preenchido para o usado; o hash inventado e o hash do
+  outro tenant ligado a este são zero linhas;
+* **`chat_in_use`**: o convite do gestor com o `chat_id` do colaborador — o
+  índice `messaging_identity_vigente_external_uk` recusa **nomeado**, e a
+  subtransação desfaz o consumo: o convite do gestor continua inteiro;
+* **a segunda adesão**: o segundo convite do mesmo colaborador com outro
+  `chat_id` revoga a vigente anterior (`novo /start`), deixa exatamente uma
+  vigente, e nada é apagado; e o `chat_id` antigo, agora livre, vincula o gestor.
+
 O valor de teste é uma string óbvia; nenhum segredo real passa por aqui.
 """
 
+import hashlib
 import importlib.util
 import os
 import pathlib
@@ -96,6 +118,9 @@ ENV = {
 
 MODULO = RAIZ / "backend" / "server" / "routers" / "canais.py"
 COFRE = RAIZ / "backend" / "operax" / "core" / "vault.py"
+SAUDE = RAIZ / "backend" / "operax" / "alertas" / "saude.py"
+WEBHOOK = RAIZ / "backend" / "server" / "routers" / "webhooks.py"
+TENANT_PY = RAIZ / "backend" / "operax" / "core" / "tenant.py"
 
 USUARIO = "7c000000-0000-0000-0000-000000000001"
 TENANT = "7ca70000-0000-0000-0000-0000000000a1"
@@ -122,6 +147,44 @@ B_OUTRO = "7ca70000-0000-0000-0000-000000000102"
 B_OWNER = "7c000000-0000-0000-0000-000000000101"
 B_PATH_TOKEN = "cauda-publica-de-teste-000000000"
 B_WEBHOOK_URL = "https://api.exemplo.test/webhooks/telegram/" + B_PATH_TOKEN
+# O webhook: um tenant com colaborador e gestor, um segundo tenant com o próprio
+# bot, um tenant inativo — e os tokens do convite, que só entram como hash.
+W_TENANT = "7ca70000-0000-0000-0000-000000000201"
+W_OUTRO = "7ca70000-0000-0000-0000-000000000202"
+W_INATIVO = "7ca70000-0000-0000-0000-000000000203"
+W_COMPANY = "7ca70000-0000-0000-0000-0000000002e1"
+W_UNIT = "7ca70000-0000-0000-0000-0000000002c1"
+W_EMPLOYEE = "7ca70000-0000-0000-0000-0000000002b1"
+W_CONTACT = "7ca70000-0000-0000-0000-00000000f201"
+W_OUTRO_CONTACT = "7ca70000-0000-0000-0000-00000000f202"
+W_PATH = "cauda-do-webhook-de-teste-000000"
+W_PATH_OUTRO = "cauda-do-outro-tenant-0000000000"
+W_PATH_INATIVO = "cauda-do-tenant-inativo-00000000"
+W_PATH_ANTIGO = "cauda-da-integracao-inativa-0000"
+INV_VALIDO = "7ca70000-0000-0000-0000-0000000002a1"
+INV_EXPIRADO = "7ca70000-0000-0000-0000-0000000002a2"
+INV_USADO = "7ca70000-0000-0000-0000-0000000002a3"
+INV_GESTOR = "7ca70000-0000-0000-0000-0000000002a4"
+INV_SEGUNDO = "7ca70000-0000-0000-0000-0000000002a5"
+INV_OUTRO = "7ca70000-0000-0000-0000-0000000002a6"
+W_CHAT1 = "987654321012"
+W_CHAT2 = "987654321013"
+
+
+def _hash(token: str) -> str:
+    """O que o webhook grava e procura: `sha256(token)`, nunca o token."""
+    return hashlib.sha256(token.encode("ascii")).hexdigest()
+
+
+#: Os tokens dos convites — só o hash chega ao SQL abaixo.
+HASH_VALIDO = _hash("convite-valido-de-teste-000000000000")
+HASH_EXPIRADO = _hash("convite-expirado-de-teste-0000000000")
+HASH_USADO = _hash("convite-usado-de-teste-0000000000000")
+HASH_GESTOR = _hash("convite-do-gestor-de-teste-000000000")
+HASH_SEGUNDO = _hash("segundo-convite-de-teste-00000000000")
+HASH_OUTRO = _hash("convite-do-outro-tenant-000000000000")
+HASH_INVENTADO = _hash("convite-que-ninguem-gerou-00000000000")
+
 #: Valores de teste, óbvios de propósito. Nenhum é real.
 VALOR = "valor-de-teste-nao-e-real"
 VALOR2 = "segundo-valor-de-teste-nao-e-real"
@@ -1040,8 +1103,350 @@ rollback;
 """
 
 
-def telegram_bot(fixas: dict[str, str], fixas_tg: dict[str, str], cofre: dict[str, str]) -> str:
-    """O cenário do bot, com as duas renderizações e o SQL real do cofre."""
+CENARIO_WEBHOOK = """
+begin;
+
+create or replace function pg_temp.assert_eq(rotulo text, obtido text, esperado text)
+returns void language plpgsql as $$
+begin
+  if obtido is distinct from esperado then
+    raise exception 'FALHA [%]: esperado %, obtido %', rotulo, esperado, obtido;
+  end if;
+  raise notice '  ok  % (%)', rotulo, obtido;
+end $$;
+
+create or replace function pg_temp.assert_not_in(rotulo text, palheiro text, agulha text)
+returns void language plpgsql as $$
+begin
+  if position(agulha in palheiro) > 0 then
+    raise exception 'FALHA [%]: o valor apareceu', rotulo;
+  end if;
+  raise notice '  ok  %', rotulo;
+end $$;
+
+insert into app.tenant (id, slug, name) values
+  ('{W_TENANT}',  'webhook-teste',   'Webhook'),
+  ('{W_OUTRO}',   'webhook-outro',   'Outro'),
+  ('{W_INATIVO}', 'webhook-inativo', 'Inativo');
+update app.tenant set active = false where id = '{W_INATIVO}';
+
+insert into app.company (id, tenant_id, legal_name) values
+  ('{W_COMPANY}', '{W_TENANT}', 'Empresa Webhook LTDA');
+insert into app.unit (id, tenant_id, company_id, code, name) values
+  ('{W_UNIT}', '{W_TENANT}', '{W_COMPANY}', 'WH-1', 'Unidade Webhook');
+insert into app.employee (id, tenant_id, company_id, unit_id, name) values
+  ('{W_EMPLOYEE}', '{W_TENANT}', '{W_COMPANY}', '{W_UNIT}', 'Colab Webhook');
+insert into app.contact (id, tenant_id, name, type, whatsapp) values
+  ('{W_CONTACT}',       '{W_TENANT}', 'Gestor Webhook', 'person', '+5511999990202'),
+  ('{W_OUTRO_CONTACT}', '{W_OUTRO}',  'Gestor Outro',   'person', '+5511999990203');
+
+-- Quatro bots: o do tenant, o do outro, o de um tenant inativo, e um inativo
+-- do próprio tenant (o `alias` diferente é o que o índice irmão permite).
+insert into app.integration (tenant_id, provider, alias, config, active) values
+  ('{W_TENANT}',  'telegram', 'telegram',
+   '{"public_identity": "@WebhookBot", "webhook_path_token": "{W_PATH}"}', true),
+  ('{W_OUTRO}',   'telegram', 'telegram',
+   '{"public_identity": "@OutroBot", "webhook_path_token": "{W_PATH_OUTRO}"}', true),
+  ('{W_INATIVO}', 'telegram', 'telegram',
+   '{"webhook_path_token": "{W_PATH_INATIVO}"}', true),
+  ('{W_TENANT}',  'telegram', 'antigo',
+   '{"webhook_path_token": "{W_PATH_ANTIGO}"}', false);
+
+-- Os convites. Só o hash: o token nunca passa por aqui.
+insert into app.messaging_invite (id, tenant_id, channel, employee_id, contact_id, token_hash, expires_at, used_at)
+values
+  ('{INV_VALIDO}',   '{W_TENANT}', 'telegram', '{W_EMPLOYEE}', null, '{HASH_VALIDO}',   now() + interval '7 days', null),
+  ('{INV_EXPIRADO}', '{W_TENANT}', 'telegram', '{W_EMPLOYEE}', null, '{HASH_EXPIRADO}', now() - interval '1 day',  null),
+  ('{INV_USADO}',    '{W_TENANT}', 'telegram', '{W_EMPLOYEE}', null, '{HASH_USADO}',    now() + interval '7 days', now() - interval '1 hour'),
+  ('{INV_GESTOR}',   '{W_TENANT}', 'telegram', null, '{W_CONTACT}',  '{HASH_GESTOR}',   now() + interval '7 days', null),
+  ('{INV_SEGUNDO}',  '{W_TENANT}', 'telegram', '{W_EMPLOYEE}', null, '{HASH_SEGUNDO}',  now() + interval '7 days', null),
+  ('{INV_OUTRO}',    '{W_OUTRO}',  'telegram', null, '{W_OUTRO_CONTACT}', '{HASH_OUTRO}', now() + interval '7 days', null);
+
+-- ---------------------------------------------------------------------------
+-- context_for_webhook: o path_token acha o tenant dono, e só ele
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  r record;
+  n int;
+begin
+  select * into r from ({RESOLVE}) x;
+  perform pg_temp.assert_eq('o path_token acha o tenant dono', r.tenant_id::text, '{W_TENANT}');
+  perform pg_temp.assert_eq('e a integração ativa dele', r.id::text,
+    (select id::text from app.integration where tenant_id = '{W_TENANT}' and alias = 'telegram'));
+  select count(*) into n from ({RESOLVE}) x;
+  perform pg_temp.assert_eq('uma linha só', n::text, '1');
+
+  select * into r from ({RESOLVE_OUTRO}) x;
+  perform pg_temp.assert_eq('o token do outro tenant acha o outro', r.tenant_id::text, '{W_OUTRO}');
+
+  select count(*) into n from ({RESOLVE_INVENTADO}) x;
+  perform pg_temp.assert_eq('token inventado: zero linhas', n::text, '0');
+  select count(*) into n from ({RESOLVE_INATIVO}) x;
+  perform pg_temp.assert_eq('token de tenant inativo: zero linhas', n::text, '0');
+  select count(*) into n from ({RESOLVE_ANTIGO}) x;
+  perform pg_temp.assert_eq('token de integração inativa: zero linhas', n::text, '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- /start válido: acha pelo hash, consome, vincula, audita sem chat_id
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  inv record;
+  n int;
+  trilha record;
+begin
+  select * into inv from ({INVITE_VALIDO}) x;
+  perform pg_temp.assert_eq('o convite válido é achado pelo hash', inv.id::text, '{INV_VALIDO}');
+  perform pg_temp.assert_eq('não expirado', inv.expired::text, 'false');
+  perform pg_temp.assert_eq('não usado', (inv.used_at is null)::text, 'true');
+  perform pg_temp.assert_eq('titular: o colaborador', inv.employee_id::text, '{W_EMPLOYEE}');
+
+  execute $q${CONSUME_VALIDO}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('consumido: 1 linha', n::text, '1');
+
+  execute $q$with x as ({REVOKE_EMPLOYEE}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('primeira adesão: nada a revogar', n::text, '0');
+
+  execute $q${INSERT_EMPLOYEE_CHAT1}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('a identidade entrou', n::text, '1');
+  perform pg_temp.assert_eq('e nasceu vigente, com o chat_id',
+    (select count(*) from app.messaging_identity
+      where tenant_id = '{W_TENANT}' and employee_id = '{W_EMPLOYEE}'
+        and revoked_at is null and external_id = '{W_CHAT1}')::text, '1');
+
+  execute $q${AUDIT_EMPLOYEE_CHAT1}$q$;
+  select * into trilha from app.audit_log
+   where tenant_id = '{W_TENANT}' and entity = 'messaging_identity';
+  perform pg_temp.assert_eq('auditoria: action insert', trilha.action, 'insert');
+  perform pg_temp.assert_eq('auditoria: sem usuário (quem agiu foi o titular, pelo bot)',
+    (trilha.user_id is null)::text, 'true');
+  perform pg_temp.assert_eq('auditoria: o convite', trilha.depois ->> 'invite_id', '{INV_VALIDO}');
+  perform pg_temp.assert_eq('auditoria: o canal', trilha.depois ->> 'channel', 'telegram');
+  perform pg_temp.assert_eq('auditoria: entity_id é a identidade nova', trilha.entity_id,
+    (select id::text from app.messaging_identity where tenant_id = '{W_TENANT}' and external_id = '{W_CHAT1}'));
+  perform pg_temp.assert_not_in('auditoria: SEM o chat_id',
+    coalesce(trilha.depois::text, '') || coalesce(trilha.antes::text, '') || coalesce(trilha.entity_id, ''),
+    '{W_CHAT1}');
+
+  -- O mesmo link, clicado de novo: o banco diz "usado", e o consumo é 0.
+  select * into inv from ({INVITE_VALIDO}) x;
+  perform pg_temp.assert_eq('relido: agora está usado', (inv.used_at is not null)::text, 'true');
+  execute $q${CONSUME_VALIDO}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('consumir de novo: 0 linhas (used_at is null no where)', n::text, '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- Expirado e usado: o veredito do banco; inventado e de outro tenant: nada
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  inv record;
+  n int;
+begin
+  select * into inv from ({INVITE_EXPIRADO}) x;
+  perform pg_temp.assert_eq('expirado: o banco diz expired', inv.expired::text, 'true');
+  perform pg_temp.assert_eq('expirado: e não está usado', (inv.used_at is null)::text, 'true');
+
+  select * into inv from ({INVITE_USADO}) x;
+  perform pg_temp.assert_eq('usado: used_at preenchido', (inv.used_at is not null)::text, 'true');
+  perform pg_temp.assert_eq('usado: não expirou', inv.expired::text, 'false');
+
+  select count(*) into n from ({INVITE_INVENTADO}) x;
+  perform pg_temp.assert_eq('hash inventado: zero linhas', n::text, '0');
+  select count(*) into n from ({INVITE_OUTRO_LIGADO_A_ESTE}) x;
+  perform pg_temp.assert_eq('hash do outro tenant, ligado a este: zero linhas', n::text, '0');
+  select count(*) into n from ({INVITE_OUTRO}) x;
+  perform pg_temp.assert_eq('e ligado ao outro, uma', n::text, '1');
+
+  perform pg_temp.assert_eq('nenhuma identidade além da primeira',
+    (select count(*) from app.messaging_identity where tenant_id = '{W_TENANT}')::text, '1');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- chat_in_use: o índice recusa nomeado, e a subtransação desfaz o consumo
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  falhou boolean := false;
+  nome text;
+  n int;
+begin
+  begin
+    execute $q${CONSUME_GESTOR}$q$;
+    get diagnostics n = row_count;
+    perform pg_temp.assert_eq('chat_in_use: o consumo aconteceu dentro da transação', n::text, '1');
+    execute $q$with x as ({REVOKE_CONTACT}) select count(*) from x$q$ into n;
+    execute $q${INSERT_CONTACT_CHAT1}$q$;
+    raise exception 'FALHA [chat_in_use]: o mesmo chat_id vigente entrou para duas pessoas';
+  exception when unique_violation then
+    falhou := true;
+    get stacked diagnostics nome = constraint_name;
+  end;
+  perform pg_temp.assert_eq('chat_in_use: o índice recusou', falhou::text, 'true');
+  perform pg_temp.assert_eq('e é o índice do external_id vigente', nome,
+    'messaging_identity_vigente_external_uk');
+  perform pg_temp.assert_eq('chat_in_use: o convite do gestor NÃO foi consumido',
+    (select (used_at is null)::text from app.messaging_invite where id = '{INV_GESTOR}'), 'true');
+  perform pg_temp.assert_eq('chat_in_use: o gestor segue sem identidade',
+    (select count(*) from app.messaging_identity where contact_id = '{W_CONTACT}')::text, '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- Segunda adesão: a anterior revogada, uma vigente só, nada apagado
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  inv record;
+  n int;
+  antiga record;
+begin
+  select * into inv from ({INVITE_SEGUNDO}) x;
+  perform pg_temp.assert_eq('segundo convite: válido', (inv.expired or inv.used_at is not null)::text, 'false');
+  execute $q${CONSUME_SEGUNDO}$q$;
+  execute $q$with x as ({REVOKE_EMPLOYEE}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('segunda adesão: a vigente anterior foi revogada', n::text, '1');
+  execute $q${INSERT_EMPLOYEE_CHAT2}$q$;
+
+  perform pg_temp.assert_eq('exatamente UMA vigente para o colaborador',
+    (select count(*) from app.messaging_identity
+      where tenant_id = '{W_TENANT}' and employee_id = '{W_EMPLOYEE}' and revoked_at is null)::text, '1');
+  perform pg_temp.assert_eq('e é a do chat novo',
+    (select external_id from app.messaging_identity
+      where tenant_id = '{W_TENANT}' and employee_id = '{W_EMPLOYEE}' and revoked_at is null), '{W_CHAT2}');
+  select * into antiga from app.messaging_identity
+   where tenant_id = '{W_TENANT}' and employee_id = '{W_EMPLOYEE}' and external_id = '{W_CHAT1}';
+  perform pg_temp.assert_eq('a antiga ficou (nada é apagado)', (antiga.id is not null)::text, 'true');
+  perform pg_temp.assert_eq('revogada', (antiga.revoked_at is not null)::text, 'true');
+  perform pg_temp.assert_eq('pelo motivo do webhook', antiga.revoked_reason, 'novo /start');
+  perform pg_temp.assert_eq('duas linhas na história do colaborador',
+    (select count(*) from app.messaging_identity where employee_id = '{W_EMPLOYEE}')::text, '2');
+
+  -- O chat antigo ficou livre: agora o gestor vincula com ele.
+  execute $q${CONSUME_GESTOR}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('o convite do gestor, intacto, agora é consumido', n::text, '1');
+  execute $q$with x as ({REVOKE_CONTACT}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('gestor: nada a revogar', n::text, '0');
+  execute $q${INSERT_CONTACT_CHAT1}$q$;
+  perform pg_temp.assert_eq('o chat_id liberado pela revogação vincula o gestor',
+    (select count(*) from app.messaging_identity
+      where contact_id = '{W_CONTACT}' and external_id = '{W_CHAT1}' and revoked_at is null)::text, '1');
+  perform pg_temp.assert_eq('três identidades no tenant, duas vigentes',
+    (select count(*) || '/' || count(*) filter (where revoked_at is null)
+       from app.messaging_identity where tenant_id = '{W_TENANT}'), '3/2');
+end $$;
+
+rollback;
+"""
+
+
+def webhook(webhook_sql: dict[str, str], tenant_sql: dict[str, str]) -> str:
+    """O cenário do webhook, com o SQL real de `webhooks.py` e `tenant.py`."""
+
+    def resolve(path_token: str) -> str:
+        return ligar(tenant_sql["_WEBHOOK_INTEGRATION_SQL"], provider="telegram", path_token=path_token)
+
+    def invite(tenant: str, token_hash: str) -> str:
+        return ligar(webhook_sql["_INVITE_SQL"], tenant_id=tenant, channel="telegram", token_hash=token_hash)
+
+    def consume(invite_id: str) -> str:
+        return ligar(webhook_sql["_CONSUME_INVITE_SQL"], tenant_id=W_TENANT, invite_id=invite_id)
+
+    def holder(sql: str, employee_id: str | None, contact_id: str | None) -> str:
+        return sql.replace("%(employee_id)s", "null" if employee_id is None else f"'{employee_id}'").replace(
+            "%(contact_id)s", "null" if contact_id is None else f"'{contact_id}'"
+        )
+
+    def revoke(employee_id: str | None, contact_id: str | None) -> str:
+        return holder(
+            ligar(webhook_sql["_REVOKE_PREVIOUS_SQL"], tenant_id=W_TENANT, channel="telegram", reason="novo /start"),
+            employee_id,
+            contact_id,
+        )
+
+    def insert(employee_id: str | None, contact_id: str | None, chat_id: str) -> str:
+        return holder(
+            ligar(webhook_sql["_INSERT_IDENTITY_SQL"], tenant_id=W_TENANT, channel="telegram", external_id=chat_id),
+            employee_id,
+            contact_id,
+        )
+
+    nova = (
+        "(select id::text from app.messaging_identity where tenant_id = '" + W_TENANT
+        + "' and external_id = '" + W_CHAT1 + "' and revoked_at is null)"
+    )
+    substituicoes = {
+        "{RESOLVE}": resolve(W_PATH),
+        "{RESOLVE_OUTRO}": resolve(W_PATH_OUTRO),
+        "{RESOLVE_INVENTADO}": resolve("cauda-que-ninguem-registrou-0000"),
+        "{RESOLVE_INATIVO}": resolve(W_PATH_INATIVO),
+        "{RESOLVE_ANTIGO}": resolve(W_PATH_ANTIGO),
+        "{INVITE_VALIDO}": invite(W_TENANT, HASH_VALIDO),
+        "{INVITE_EXPIRADO}": invite(W_TENANT, HASH_EXPIRADO),
+        "{INVITE_USADO}": invite(W_TENANT, HASH_USADO),
+        "{INVITE_SEGUNDO}": invite(W_TENANT, HASH_SEGUNDO),
+        "{INVITE_INVENTADO}": invite(W_TENANT, HASH_INVENTADO),
+        "{INVITE_OUTRO_LIGADO_A_ESTE}": invite(W_TENANT, HASH_OUTRO),
+        "{INVITE_OUTRO}": invite(W_OUTRO, HASH_OUTRO),
+        "{CONSUME_VALIDO}": consume(INV_VALIDO),
+        "{CONSUME_GESTOR}": consume(INV_GESTOR),
+        "{CONSUME_SEGUNDO}": consume(INV_SEGUNDO),
+        "{REVOKE_EMPLOYEE}": revoke(W_EMPLOYEE, None),
+        "{REVOKE_CONTACT}": revoke(None, W_CONTACT),
+        "{INSERT_EMPLOYEE_CHAT1}": insert(W_EMPLOYEE, None, W_CHAT1),
+        "{INSERT_EMPLOYEE_CHAT2}": insert(W_EMPLOYEE, None, W_CHAT2),
+        "{INSERT_CONTACT_CHAT1}": insert(None, W_CONTACT, W_CHAT1),
+        "{AUDIT_EMPLOYEE_CHAT1}": ligar(
+            webhook_sql["_AUDIT_SQL"],
+            tenant_id=W_TENANT,
+            depois='{"channel": "telegram", "invite_id": "' + INV_VALIDO + '"}',
+        ).replace("%(entity_id)s", nova),
+    }
+    script = CENARIO_WEBHOOK
+    for marcador, texto in substituicoes.items():
+        script = script.replace(marcador, texto)
+    for nome, valor in {
+        "{W_TENANT}": W_TENANT,
+        "{W_OUTRO}": W_OUTRO,
+        "{W_INATIVO}": W_INATIVO,
+        "{W_COMPANY}": W_COMPANY,
+        "{W_UNIT}": W_UNIT,
+        "{W_EMPLOYEE}": W_EMPLOYEE,
+        "{W_CONTACT}": W_CONTACT,
+        "{W_OUTRO_CONTACT}": W_OUTRO_CONTACT,
+        "{W_PATH}": W_PATH,
+        "{W_PATH_OUTRO}": W_PATH_OUTRO,
+        "{W_PATH_INATIVO}": W_PATH_INATIVO,
+        "{W_PATH_ANTIGO}": W_PATH_ANTIGO,
+        "{INV_VALIDO}": INV_VALIDO,
+        "{INV_EXPIRADO}": INV_EXPIRADO,
+        "{INV_USADO}": INV_USADO,
+        "{INV_GESTOR}": INV_GESTOR,
+        "{INV_SEGUNDO}": INV_SEGUNDO,
+        "{INV_OUTRO}": INV_OUTRO,
+        "{HASH_VALIDO}": HASH_VALIDO,
+        "{HASH_EXPIRADO}": HASH_EXPIRADO,
+        "{HASH_USADO}": HASH_USADO,
+        "{HASH_GESTOR}": HASH_GESTOR,
+        "{HASH_SEGUNDO}": HASH_SEGUNDO,
+        "{HASH_OUTRO}": HASH_OUTRO,
+        "{W_CHAT1}": W_CHAT1,
+        "{W_CHAT2}": W_CHAT2,
+    }.items():
+        script = script.replace(nome, valor)
+    return script
+
+
+def telegram_bot(
+    fixas: dict[str, str], fixas_tg: dict[str, str], cofre: dict[str, str], saude: dict[str, str]
+) -> str:
+    """O cenário do bot, com as duas renderizações, o SQL real do cofre e a
+    porta única da saúde (`saude.py`, compartilhada com o vigia)."""
     v_meta = "(select id from app.integration where tenant_id = '{B_TENANT}' and provider = 'meta_cloud')"
     v_bot = "(select id from app.integration where tenant_id = '{B_TENANT}' and provider = 'telegram')"
 
@@ -1050,8 +1455,8 @@ def telegram_bot(fixas: dict[str, str], fixas_tg: dict[str, str], cofre: dict[st
             cofre["_CREATE_SQL"], tenant_id=B_TENANT, key=key, value=VALOR, description=DESCRICAO
         ).replace("%(integration_id)s", integracao)
 
-    def saude(tenant: str, status: str, detail: str) -> str:
-        return ligar(fixas["_RECORD_HEALTH_SQL"], tenant_id=tenant, status=status, detail=detail).replace(
+    def medicao(tenant: str, status: str, detail: str) -> str:
+        return ligar(saude["RECORD_HEALTH_SQL"], tenant_id=tenant, status=status, detail=detail).replace(
             "%(integration_id)s", v_bot
         )
 
@@ -1064,9 +1469,9 @@ def telegram_bot(fixas: dict[str, str], fixas_tg: dict[str, str], cofre: dict[st
         "{WEBHOOK_PATCH}": ligar(fixas["_TELEGRAM_WEBHOOK_SQL"], tenant_id=B_TENANT, patch=patch).replace(
             "%(integration_id)s", v_bot
         ),
-        "{HEALTH_CONNECTED}": saude(B_TENANT, "connected", "webhook registrado"),
-        "{HEALTH_DISCONNECTED}": saude(B_TENANT, "disconnected", "setWebhook recusado: unauthorized"),
-        "{HEALTH_DISCONNECTED_OUTRO}": saude(B_OUTRO, "disconnected", "nao deveria gravar"),
+        "{HEALTH_CONNECTED}": medicao(B_TENANT, "connected", "webhook registrado"),
+        "{HEALTH_DISCONNECTED}": medicao(B_TENANT, "disconnected", "setWebhook recusado: unauthorized"),
+        "{HEALTH_DISCONNECTED_OUTRO}": medicao(B_OUTRO, "disconnected", "nao deveria gravar"),
         "{STATUS_WHATSAPP}": ligar(fixas["_CREDENTIAL_STATUS_SQL"], tenant_id=B_TENANT),
         "{STATUS_TELEGRAM}": ligar(fixas_tg["_CREDENTIAL_STATUS_SQL"], tenant_id=B_TENANT),
         "{DEACTIVATE_WHATSAPP}": ligar(fixas["_DEACTIVATE_SQL"], tenant_id=B_TENANT),
@@ -1284,6 +1689,13 @@ def main() -> None:
     fixas = instrucoes()
     fixas_tg = instrucoes(channel="telegram")
     cofre = instrucoes(COFRE)
+    saude = instrucoes(SAUDE)
+    webhook_sql = instrucoes(WEBHOOK)
+    # Só a do webhook: as outras três de `tenant.py` são o bootstrap e o
+    # `set_config`, que nenhum cenário daqui executa.
+    tenant_sql = {
+        nome: sql for nome, sql in instrucoes(TENANT_PY).items() if nome == "_WEBHOOK_INTEGRATION_SQL"
+    }
     esperadas = {
         "_READINESS_SQL",
         "_BLOCKED_SQL",
@@ -1294,7 +1706,6 @@ def main() -> None:
         "_UPSERT_INTEGRATION_SQL",
         "_AUDIT_SQL",
         "_TELEGRAM_WEBHOOK_SQL",
-        "_RECORD_HEALTH_SQL",
         "_TEMPLATES_SQL",
         "_TEMPLATE_UPSERT_SQL",
         "_OFFICIAL_INTEGRATION_SQL",
@@ -1309,6 +1720,22 @@ def main() -> None:
     if set(cofre) != esperadas_cofre:
         print(f"  ✖ esperava {sorted(esperadas_cofre)} em vault.py, achei {sorted(cofre)}")
         sys.exit(1)
+    if set(saude) != {"RECORD_HEALTH_SQL"}:
+        print(f"  ✖ esperava RECORD_HEALTH_SQL em saude.py, achei {sorted(saude)}")
+        sys.exit(1)
+    esperadas_webhook = {
+        "_INVITE_SQL",
+        "_CONSUME_INVITE_SQL",
+        "_REVOKE_PREVIOUS_SQL",
+        "_INSERT_IDENTITY_SQL",
+        "_AUDIT_SQL",
+    }
+    if set(webhook_sql) != esperadas_webhook:
+        print(f"  ✖ esperava {sorted(esperadas_webhook)} em webhooks.py, achei {sorted(webhook_sql)}")
+        sys.exit(1)
+    if set(tenant_sql) != {"_WEBHOOK_INTEGRATION_SQL"}:
+        print("  ✖ _WEBHOOK_INTEGRATION_SQL não está em tenant.py")
+        sys.exit(1)
     # As duas que existem por canal: a renderização do bot também tem de compilar.
     por_canal = {nome: fixas_tg[nome] for nome in ("_CREDENTIAL_STATUS_SQL", "_DEACTIVATE_SQL")}
     if any("{channel_providers}" in sql for sql in (*fixas.values(), *fixas_tg.values())):
@@ -1316,7 +1743,14 @@ def main() -> None:
         sys.exit(1)
 
     problemas: list[str] = []
-    for origem, lote in (("canais.py", fixas), ("canais.py[telegram]", por_canal), ("vault.py", cofre)):
+    for origem, lote in (
+        ("canais.py", fixas),
+        ("canais.py[telegram]", por_canal),
+        ("vault.py", cofre),
+        ("saude.py", saude),
+        ("webhooks.py", webhook_sql),
+        ("tenant.py", tenant_sql),
+    ):
         for nome, sql in lote.items():
             r = psql(["-c", f"prepare p as {posicionar(sql)}"])
             if r.returncode != 0:
@@ -1330,7 +1764,8 @@ def main() -> None:
         sys.exit(1)
     print(
         f"  instruções fixas compiladas: {len(fixas)} de canais.py "
-        f"(+{len(por_canal)} na renderização do bot), {len(cofre)} de vault.py"
+        f"(+{len(por_canal)} na renderização do bot), {len(cofre)} de vault.py, "
+        f"{len(saude)} de saude.py, {len(webhook_sql)} de webhooks.py, {len(tenant_sql)} de tenant.py"
     )
 
     script = (
@@ -1350,10 +1785,13 @@ def main() -> None:
     rodar(templates(fixas))
 
     print("\n--- o bot, com os dois canais ativos lado a lado")
-    rodar(telegram_bot(fixas, fixas_tg, cofre))
+    rodar(telegram_bot(fixas, fixas_tg, cofre, saude))
+
+    print("\n--- o webhook /start: resolução por path_token, convite, identidade e auditoria")
+    rodar(webhook(webhook_sql, tenant_sql))
 
     print("\n================================================")
-    print(" TELA DE CONEXÕES, CREDENCIAL, TEMPLATES E BOT: TODOS OS TESTES OK")
+    print(" TELA DE CONEXÕES, CREDENCIAL, TEMPLATES, BOT E WEBHOOK: TODOS OS TESTES OK")
     print("================================================")
 
 
