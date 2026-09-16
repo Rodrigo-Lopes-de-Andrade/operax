@@ -96,6 +96,35 @@ QUINTA PARTE — O WEBHOOK `/start` (C3, onda 2b), O SQL DO PASSO 6 CONTRA O BAN
   `chat_id` revoga a vigente anterior (`novo /start`), deixa exatamente uma
   vigente, e nada é apagado; e o `chat_id` antigo, agora livre, vincula o gestor.
 
+SEXTA PARTE — O CONVITE DE ADESÃO (C4), O SQL DA ROTA CONTRA O BANCO
+As oito instruções novas de `canais.py`, mais `outbox._PROVIDER_SQL`,
+`_TEMPLATE_SQL` e `_ENQUEUE_SQL` (importadas pela rota, não copiadas) e o
+`_REVOKE_PREVIOUS_SQL` do webhook, executadas como `POST /canais/telegram/
+convites`, o `GET` e o `revogar` as executam:
+
+* **o titular, como o usuário**: o owner vê o colaborador e o responsável
+  (com o `type`, para a rota recusar grupo); o supervisor sem escopo não vê
+  o colaborador (`util.can_see_employee` decidindo de verdade) — e vê o
+  responsável, porque `contact_read` é `has_tenant`: quem barra o convite
+  dele é o passo 1 da rota, `util.is_admin`;
+* **o número**: só a coluna, pelo tenant ligado; ligado ao outro tenant, nada;
+* **as quatro condições**: o bot com `public_identity`, o provedor de
+  WhatsApp, o template com `nome,link`;
+* **o convite anterior em aberto expira** (`expires_at = now()`, 1 linha), o
+  usado e o vencido ficam como estavam, e nada é apagado;
+* **o convite novo** nasce com `expires_at` a 7 dias (o default da tabela) e
+  só com o hash — o token literal não está na tabela;
+* **a linha da fila passa pelo gatilho** `validate_alert_template` com o
+  payload `nome`/`link`, sem regra e sem ciclo; a mesma chave de idempotência
+  de novo é 0 linhas; e **o gatilho recusa nomeado** o payload sem `link`
+  (`Payload não cobre … link`) e o `meta_cloud` com o template em `draft`;
+* **a auditoria** leva o titular e o convite — não o hash, não o número;
+* **a ficha** (`_LINK_SQL`, que não seleciona `external_id` — conferido no
+  texto antes de rodar) nos quatro estados: convite em aberto → vinculado →
+  desvinculado pelo administrador (a linha fica, `revoked_at` preenchido, o
+  convite em aberto expira junto, 1 linha) → e revogar de novo é 0 linhas
+  (o 409) → e um convite novo reabre a ficha ao lado da revogação.
+
 O valor de teste é uma string óbvia; nenhum segredo real passa por aqui.
 """
 
@@ -121,6 +150,7 @@ COFRE = RAIZ / "backend" / "operax" / "core" / "vault.py"
 SAUDE = RAIZ / "backend" / "operax" / "alertas" / "saude.py"
 WEBHOOK = RAIZ / "backend" / "server" / "routers" / "webhooks.py"
 TENANT_PY = RAIZ / "backend" / "operax" / "core" / "tenant.py"
+OUTBOX = RAIZ / "backend" / "operax" / "alertas" / "outbox.py"
 
 USUARIO = "7c000000-0000-0000-0000-000000000001"
 TENANT = "7ca70000-0000-0000-0000-0000000000a1"
@@ -169,6 +199,28 @@ INV_SEGUNDO = "7ca70000-0000-0000-0000-0000000002a5"
 INV_OUTRO = "7ca70000-0000-0000-0000-0000000002a6"
 W_CHAT1 = "987654321012"
 W_CHAT2 = "987654321013"
+# O convite: um tenant com colaborador (e o número dele na PII), um responsável
+# pessoa e um grupo, o bot e um WhatsApp ativos, o template; um owner e um
+# supervisor sem escopo; e um segundo tenant só para provar o recorte.
+I_TENANT = "7ca70000-0000-0000-0000-000000000301"
+I_OUTRO = "7ca70000-0000-0000-0000-000000000302"
+I_OWNER = "7c000000-0000-0000-0000-000000000301"
+I_SUPERVISOR = "7c000000-0000-0000-0000-000000000302"
+I_COMPANY = "7ca70000-0000-0000-0000-0000000003e1"
+I_UNIT = "7ca70000-0000-0000-0000-0000000003c1"
+I_EMPLOYEE = "7ca70000-0000-0000-0000-0000000003b1"
+I_CONTACT = "7ca70000-0000-0000-0000-00000000f301"
+I_GROUP = "7ca70000-0000-0000-0000-00000000f302"
+INV_ABERTO = "7ca70000-0000-0000-0000-0000000003a1"
+INV_JA_USADO = "7ca70000-0000-0000-0000-0000000003a2"
+INV_VENCIDO = "7ca70000-0000-0000-0000-0000000003a3"
+#: O número como o RH o digitou; o E.164 que a rota manda à fila.
+I_PHONE = "(11) 99999-0303"
+I_E164 = "+5511999990303"
+I_CHAT = "987654321303"
+#: O token do convite novo — só o hash chega ao SQL; o token vai no `link`.
+I_TOKEN = "convite-novo-de-teste-000000000000000000000"
+I_LINK = "https://t.me/ConviteBot?start=" + I_TOKEN
 
 
 def _hash(token: str) -> str:
@@ -184,6 +236,12 @@ HASH_GESTOR = _hash("convite-do-gestor-de-teste-000000000")
 HASH_SEGUNDO = _hash("segundo-convite-de-teste-00000000000")
 HASH_OUTRO = _hash("convite-do-outro-tenant-000000000000")
 HASH_INVENTADO = _hash("convite-que-ninguem-gerou-00000000000")
+HASH_ABERTO = _hash("convite-anterior-em-aberto-0000000000")
+HASH_JA_USADO = _hash("convite-anterior-ja-usado-00000000000")
+HASH_VENCIDO = _hash("convite-anterior-vencido-000000000000")
+HASH_NOVO = _hash(I_TOKEN)
+HASH_NOVO_2 = _hash("segundo-convite-novo-de-teste-00000000000")
+HASH_NOVO_3 = _hash("terceiro-convite-novo-de-teste-0000000000")
 
 #: Valores de teste, óbvios de propósito. Nenhum é real.
 VALOR = "valor-de-teste-nao-e-real"
@@ -1345,6 +1403,311 @@ rollback;
 """
 
 
+CENARIO_CONVITE = """
+begin;
+
+create or replace function pg_temp.assert_eq(rotulo text, obtido text, esperado text)
+returns void language plpgsql as $$
+begin
+  if obtido is distinct from esperado then
+    raise exception 'FALHA [%]: esperado %, obtido %', rotulo, esperado, obtido;
+  end if;
+  raise notice '  ok  % (%)', rotulo, obtido;
+end $$;
+
+create or replace function pg_temp.assert_not_in(rotulo text, palheiro text, agulha text)
+returns void language plpgsql as $$
+begin
+  if position(agulha in palheiro) > 0 then
+    raise exception 'FALHA [%]: o valor apareceu', rotulo;
+  end if;
+  raise notice '  ok  %', rotulo;
+end $$;
+
+insert into auth.users (id, email) values
+  ('{I_OWNER}',      'owner@convite'),
+  ('{I_SUPERVISOR}', 'supervisor@convite');
+
+insert into app.tenant (id, slug, name) values
+  ('{I_TENANT}', 'convite-teste', 'Convite'),
+  ('{I_OUTRO}',  'convite-outro', 'Outro');
+
+-- O owner vê tudo; o supervisor não tem linha em user_scope, então não vê nada.
+insert into app.tenant_member (tenant_id, user_id, role) values
+  ('{I_TENANT}', '{I_OWNER}',      'owner'),
+  ('{I_TENANT}', '{I_SUPERVISOR}', 'unit_supervisor');
+
+insert into app.company (id, tenant_id, legal_name) values
+  ('{I_COMPANY}', '{I_TENANT}', 'Empresa Convite LTDA');
+insert into app.unit (id, tenant_id, company_id, code, name) values
+  ('{I_UNIT}', '{I_TENANT}', '{I_COMPANY}', 'CV-1', 'Unidade Convite');
+insert into app.employee (id, tenant_id, company_id, unit_id, name) values
+  ('{I_EMPLOYEE}', '{I_TENANT}', '{I_COMPANY}', '{I_UNIT}', 'Colab Convite Silva');
+insert into app.employee_pii (employee_id, tenant_id, cpf, phone) values
+  ('{I_EMPLOYEE}', '{I_TENANT}', '12345678901', '{I_PHONE}');
+insert into app.contact (id, tenant_id, name, type, whatsapp) values
+  ('{I_CONTACT}', '{I_TENANT}', 'Gestora Convite', 'person',         '+5511999990304'),
+  ('{I_GROUP}',   '{I_TENANT}', 'Grupo da Unidade', 'whatsapp_group', '+5511999990305');
+
+-- As quatro condições: o bot com identidade pública, um WhatsApp ativo (não
+-- oficial: o gatilho não exige aprovação), e o template com nome e link.
+insert into app.integration (tenant_id, provider, alias, config, active) values
+  ('{I_TENANT}', 'telegram', 'telegram', '{"public_identity": "@ConviteBot"}', true),
+  ('{I_TENANT}', 'z_api',    'z_api',    '{"instance_id": "X"}',               true);
+insert into app.message_template (tenant_id, code, variables, body) values
+  ('{I_TENANT}', 'telegram_invite', array['nome','link'],
+   'Olá {{1}}, para receber seus avisos pelo Telegram abra {{2}}.');
+
+-- Três convites anteriores do colaborador: um em aberto, um já usado, um vencido.
+insert into app.messaging_invite (id, tenant_id, channel, employee_id, token_hash, expires_at, used_at) values
+  ('{INV_ABERTO}',   '{I_TENANT}', 'telegram', '{I_EMPLOYEE}', '{HASH_ABERTO}',   now() + interval '3 days', null),
+  ('{INV_JA_USADO}', '{I_TENANT}', 'telegram', '{I_EMPLOYEE}', '{HASH_JA_USADO}', now() + interval '3 days', now() - interval '1 day'),
+  ('{INV_VENCIDO}',  '{I_TENANT}', 'telegram', '{I_EMPLOYEE}', '{HASH_VENCIDO}',  now() - interval '1 day',  null);
+
+-- ---------------------------------------------------------------------------
+-- Passo 2, como o usuário: o titular é visível a quem pede
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  r record;
+  n int;
+begin
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{I_OWNER}';
+  select * into r from ({VISIBLE_EMPLOYEE}) x;
+  perform pg_temp.assert_eq('owner: vê o colaborador', r.name, 'Colab Convite Silva');
+  select * into r from ({VISIBLE_CONTACT}) x;
+  perform pg_temp.assert_eq('owner: vê o responsável, com o type', r.name || '/' || r.type, 'Gestora Convite/person');
+  select * into r from ({VISIBLE_GROUP}) x;
+  perform pg_temp.assert_eq('owner: o grupo vem com o type (a rota é quem recusa)', r.type, 'whatsapp_group');
+  reset role;
+
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{I_SUPERVISOR}';
+  select count(*) into n from ({VISIBLE_EMPLOYEE}) x;
+  perform pg_temp.assert_eq('supervisor sem escopo: não vê o colaborador (404 da rota)', n::text, '0');
+  select count(*) into n from ({VISIBLE_CONTACT}) x;
+  perform pg_temp.assert_eq('supervisor: vê o responsável (contact_read é has_tenant; quem barra o convite é o passo 1, is_admin)', n::text, '1');
+  reset role;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- Passos 3 e 4: o número e as quatro condições, pelo tenant ligado
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  r record;
+  n int;
+  chaves text;
+begin
+  select * into r from ({EMPLOYEE_PHONE}) x;
+  perform pg_temp.assert_eq('o número do colaborador, como o RH digitou', r.phone, '{I_PHONE}');
+  select string_agg(k, ',') into chaves from json_object_keys(row_to_json(r)) k;
+  perform pg_temp.assert_eq('e só a coluna do número — nada mais da PII', chaves, 'phone');
+  select * into r from ({CONTACT_PHONE}) x;
+  perform pg_temp.assert_eq('o WhatsApp do responsável', r.phone, '+5511999990304');
+  select count(*) into n from ({EMPLOYEE_PHONE_OUTRO}) x;
+  perform pg_temp.assert_eq('ligado ao outro tenant: zero linhas', n::text, '0');
+
+  select * into r from ({BOT_STATE}) x;
+  perform pg_temp.assert_eq('o bot ativo com identidade pública', r.public_identity, '@ConviteBot');
+  select * into r from ({PROVIDER}) x;
+  perform pg_temp.assert_eq('o provedor de WhatsApp ativo', r.provider, 'z_api');
+  select * into r from ({TEMPLATE}) x;
+  perform pg_temp.assert_eq('o template telegram_invite com nome e link',
+    array_to_string(r.variables, ','), 'nome,link');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- Passo 5: o anterior em aberto expira; o novo entra só com o hash
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  n int;
+  novo record;
+  anterior record;
+begin
+  execute $q$with x as ({EXPIRE_OUTRO}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('expirar ligado ao outro tenant: zero linhas', n::text, '0');
+
+  execute $q$with x as ({EXPIRE_EMPLOYEE}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('expirar: exatamente o convite em aberto (1 linha)', n::text, '1');
+  select * into anterior from app.messaging_invite where id = '{INV_ABERTO}';
+  perform pg_temp.assert_eq('o em aberto agora está vencido', (anterior.expires_at <= now())::text, 'true');
+  perform pg_temp.assert_eq('e continua não usado', (anterior.used_at is null)::text, 'true');
+  select * into anterior from app.messaging_invite where id = '{INV_JA_USADO}';
+  perform pg_temp.assert_eq('o já usado ficou como estava (validade intacta)', (anterior.expires_at > now())::text, 'true');
+  select * into anterior from app.messaging_invite where id = '{INV_VENCIDO}';
+  perform pg_temp.assert_eq('o vencido ficou como estava', (anterior.expires_at < now() - interval '23 hours')::text, 'true');
+  perform pg_temp.assert_eq('nada foi apagado: os três continuam lá',
+    (select count(*) from app.messaging_invite where employee_id = '{I_EMPLOYEE}')::text, '3');
+
+  execute $q${INSERT_INVITE}$q$ into novo;
+  perform pg_temp.assert_eq('o convite novo entrou', (novo.id is not null)::text, 'true');
+  perform pg_temp.assert_eq('com validade de 7 dias (default da tabela)',
+    (novo.expires_at between now() + interval '6 days 23 hours' and now() + interval '7 days 1 minute')::text, 'true');
+  perform pg_temp.assert_eq('e ligado ao colaborador',
+    (select employee_id::text from app.messaging_invite where id = novo.id), '{I_EMPLOYEE}');
+  perform pg_temp.assert_eq('o que está na tabela é o hash',
+    (select token_hash from app.messaging_invite where id = novo.id), '{HASH_NOVO}');
+  perform pg_temp.assert_not_in('o token literal não está na tabela',
+    (select string_agg(token_hash, ',') from app.messaging_invite), '{I_TOKEN}');
+  perform pg_temp.assert_eq('agora há UM convite em aberto para o colaborador, e é o novo',
+    (select string_agg(id::text, ',') from app.messaging_invite
+      where employee_id = '{I_EMPLOYEE}' and used_at is null and expires_at > now()), novo.id::text);
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- A fila: o gatilho aceita o payload nome/link, recusa nomeado sem link
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  n int;
+  fila record;
+  msg text;
+  falhou boolean;
+begin
+  execute $q$with x as ({ENQUEUE}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('a linha da fila entrou (o gatilho aceitou)', n::text, '1');
+  select * into fila from app.alert_queue where tenant_id = '{I_TENANT}';
+  perform pg_temp.assert_eq('canal WhatsApp', fila.channel, 'whatsapp');
+  perform pg_temp.assert_eq('o provedor ativo', fila.provider, 'z_api');
+  perform pg_temp.assert_eq('o template do convite', fila.template_code, 'telegram_invite');
+  perform pg_temp.assert_eq('o destino em E.164', fila.destination, '{I_E164}');
+  perform pg_temp.assert_eq('sem regra e sem ciclo', (fila.rule_id is null and fila.report_cycle_id is null)::text, 'true');
+  perform pg_temp.assert_eq('pendente para o sender', fila.status, 'pending');
+  perform pg_temp.assert_eq('o payload tem exatamente nome e link',
+    (select string_agg(k, ',' order by k) from jsonb_object_keys(fila.payload) k), 'link,nome');
+  perform pg_temp.assert_eq('a chave de idempotência é do convite',
+    fila.idempotency_key, 'telegram_invite:' || (select id from app.messaging_invite where token_hash = '{HASH_NOVO}'));
+
+  execute $q$with x as ({ENQUEUE}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('a mesma chave de novo: 0 linhas (on conflict do nothing)', n::text, '0');
+  perform pg_temp.assert_eq('e a fila continua com uma linha',
+    (select count(*) from app.alert_queue where tenant_id = '{I_TENANT}')::text, '1');
+
+  -- Sem `link` no payload: o gatilho recusa, nomeando a variável.
+  falhou := false;
+  begin
+    execute $q${ENQUEUE_SEM_LINK}$q$;
+  exception when raise_exception then
+    falhou := true;
+    get stacked diagnostics msg = message_text;
+  end;
+  perform pg_temp.assert_eq('payload sem link: o gatilho recusou', falhou::text, 'true');
+  perform pg_temp.assert_eq('e nomeou a variável que falta', msg,
+    'Payload não cobre as variáveis do template telegram_invite: link');
+
+  -- Provedor oficial com o template em draft: o gatilho recusa também — é o
+  -- `invite_refused` da rota, com esta frase.
+  falhou := false;
+  begin
+    execute $q${ENQUEUE_META}$q$;
+  exception when raise_exception then
+    falhou := true;
+    get stacked diagnostics msg = message_text;
+  end;
+  perform pg_temp.assert_eq('meta_cloud com template draft: o gatilho recusou', falhou::text, 'true');
+  perform pg_temp.assert_eq('com a frase da aprovação', msg,
+    'Template telegram_invite está draft e o provedor é meta_cloud.');
+  perform pg_temp.assert_eq('as duas recusas não deixaram linha',
+    (select count(*) from app.alert_queue where tenant_id = '{I_TENANT}')::text, '1');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- A auditoria: o titular e o convite; não o hash, não o número
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  trilha record;
+begin
+  execute $q${AUDIT_INVITE}$q$;
+  select * into trilha from app.audit_log where tenant_id = '{I_TENANT}' and entity = 'messaging_invite';
+  perform pg_temp.assert_eq('auditoria: insert de messaging_invite pelo owner',
+    trilha.action || '/' || trilha.user_id::text, 'insert/{I_OWNER}');
+  perform pg_temp.assert_eq('auditoria: o titular', trilha.depois ->> 'titular', 'employee');
+  perform pg_temp.assert_eq('auditoria: o convite', trilha.depois ->> 'invite_id',
+    (select id::text from app.messaging_invite where token_hash = '{HASH_NOVO}'));
+  perform pg_temp.assert_not_in('auditoria: sem o hash', trilha.depois::text, '{HASH_NOVO}');
+  perform pg_temp.assert_not_in('auditoria: sem o token', trilha.depois::text, '{I_TOKEN}');
+  perform pg_temp.assert_not_in('auditoria: sem o número', trilha.depois::text, '9999');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- A ficha: convite em aberto → vinculado → desvinculado → revogar de novo é 0
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  ficha record;
+  n int;
+  chaves text;
+  vigente record;
+begin
+  select * into ficha from ({LINK}) x;
+  select string_agg(k, ',' order by k) into chaves from json_object_keys(row_to_json(ficha)) k;
+  perform pg_temp.assert_eq('a ficha: só as três colunas (sem external_id)', chaves,
+    'invite_open_until,last_revoked_at,opted_in_at');
+  perform pg_temp.assert_eq('estado 1: não vinculado, nunca revogado',
+    (ficha.opted_in_at is null and ficha.last_revoked_at is null)::text, 'true');
+  perform pg_temp.assert_eq('estado 1: o convite em aberto é o novo (não o vencido)',
+    ficha.invite_open_until::text,
+    (select expires_at::text from app.messaging_invite where token_hash = '{HASH_NOVO}'));
+  select * into ficha from ({LINK_OUTRO}) x;
+  perform pg_temp.assert_eq('ligada ao outro tenant: tudo nulo',
+    (ficha.opted_in_at is null and ficha.last_revoked_at is null and ficha.invite_open_until is null)::text, 'true');
+
+  -- A pessoa clicou: o webhook consome o convite e insere a identidade.
+  execute $q${CONSUME_NOVO}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('o /start consumiu o convite novo', n::text, '1');
+  execute $q${INSERT_IDENTITY}$q$;
+  select * into ficha from ({LINK}) x;
+  perform pg_temp.assert_eq('estado 2: vinculado', (ficha.opted_in_at is not null)::text, 'true');
+  perform pg_temp.assert_eq('estado 2: sem convite em aberto (foi usado)', (ficha.invite_open_until is null)::text, 'true');
+
+  -- O administrador pede outro convite com a pessoa já vinculada (troca de
+  -- aparelho): a ficha mostra os dois — vinculado E convite em aberto.
+  execute $q${INSERT_INVITE_2}$q$;
+  select * into ficha from ({LINK}) x;
+  perform pg_temp.assert_eq('vinculado com convite em aberto: os dois aparecem',
+    (ficha.opted_in_at is not null and ficha.invite_open_until is not null)::text, 'true');
+
+  -- O administrador desvincula: a mesma instrução do webhook, com outra razão;
+  -- e o convite em aberto expira junto — um link válido de quem foi
+  -- desvinculado religaria a pessoa sem ninguém pedir.
+  execute $q$with x as ({UNLINK}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('desvincular: a vigente revogada (1 linha)', n::text, '1');
+  select * into vigente from app.messaging_identity where tenant_id = '{I_TENANT}' and employee_id = '{I_EMPLOYEE}';
+  perform pg_temp.assert_eq('a linha FICA (nada é apagado)', (vigente.id is not null)::text, 'true');
+  perform pg_temp.assert_eq('com revoked_at preenchido', (vigente.revoked_at is not null)::text, 'true');
+  perform pg_temp.assert_eq('e a razão do administrador', vigente.revoked_reason, 'desvinculado pelo administrador');
+  execute $q$with x as ({EXPIRE_EMPLOYEE}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('desvincular: o convite em aberto expirou junto (1 linha)', n::text, '1');
+  select * into ficha from ({LINK}) x;
+  perform pg_temp.assert_eq('estado 3: não vinculado', (ficha.opted_in_at is null)::text, 'true');
+  perform pg_temp.assert_eq('estado 3: a última revogação é a do administrador',
+    ficha.last_revoked_at::text, vigente.revoked_at::text);
+  perform pg_temp.assert_eq('estado 3: sem convite em aberto', (ficha.invite_open_until is null)::text, 'true');
+
+  -- Revogar de novo: 0 linhas — é o 409 da rota.
+  execute $q$with x as ({UNLINK}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('revogar sem vigente: 0 linhas (409 not_linked)', n::text, '0');
+
+  -- E um convite novo depois de desvinculado reabre a ficha: a revogação
+  -- continua na história, e o convite em aberto aparece ao lado dela.
+  execute $q${INSERT_INVITE_3}$q$;
+  select * into ficha from ({LINK}) x;
+  perform pg_temp.assert_eq('estado 4: revogado E com convite em aberto',
+    (ficha.opted_in_at is null and ficha.last_revoked_at is not null and ficha.invite_open_until is not null)::text, 'true');
+  perform pg_temp.assert_eq('seis convites na história do colaborador, um em aberto, nenhum apagado',
+    (select count(*) || '/' || count(*) filter (where used_at is null and expires_at > now())
+       from app.messaging_invite where employee_id = '{I_EMPLOYEE}'), '6/1');
+end $$;
+
+rollback;
+"""
+
+
 def webhook(webhook_sql: dict[str, str], tenant_sql: dict[str, str]) -> str:
     """O cenário do webhook, com o SQL real de `webhooks.py` e `tenant.py`."""
 
@@ -1437,6 +1800,124 @@ def webhook(webhook_sql: dict[str, str], tenant_sql: dict[str, str]) -> str:
         "{HASH_OUTRO}": HASH_OUTRO,
         "{W_CHAT1}": W_CHAT1,
         "{W_CHAT2}": W_CHAT2,
+    }.items():
+        script = script.replace(nome, valor)
+    return script
+
+
+def convite(fixas: dict[str, str], outbox_sql: dict[str, str], webhook_sql: dict[str, str]) -> str:
+    """O cenário do convite, com o SQL real de `canais.py`, `outbox.py` e
+    `webhooks.py` ligado aos valores."""
+    novo = "(select id from app.messaging_invite where token_hash = '" + HASH_NOVO + "')"
+
+    def holder(sql: str, employee_id: str | None, contact_id: str | None) -> str:
+        return sql.replace("%(employee_id)s", "null" if employee_id is None else f"'{employee_id}'").replace(
+            "%(contact_id)s", "null" if contact_id is None else f"'{contact_id}'"
+        )
+
+    def expire(tenant: str) -> str:
+        return holder(
+            ligar(fixas["_EXPIRE_OPEN_INVITES_SQL"], tenant_id=tenant, channel="telegram"), I_EMPLOYEE, None
+        )
+
+    def insert_invite(token_hash: str) -> str:
+        return holder(
+            ligar(fixas["_INSERT_INVITE_SQL"], tenant_id=I_TENANT, channel="telegram", token_hash=token_hash),
+            I_EMPLOYEE,
+            None,
+        )
+
+    def enqueue(payload: str, provider: str, key: str) -> str:
+        sql = ligar(
+            outbox_sql["_ENQUEUE_SQL"],
+            tenant_id=I_TENANT,
+            channel="whatsapp",
+            destination=I_E164,
+            payload=payload,
+            template_code="telegram_invite",
+            provider=provider,
+        )
+        return (
+            sql.replace("%(rule_id)s", "null")
+            .replace("%(cycle_id)s", "null")
+            .replace("%(idempotency_key)s", key)
+        )
+
+    def link(tenant: str) -> str:
+        return ligar(fixas["_LINK_SQL"], tenant_id=tenant, channel="telegram", employee_id=I_EMPLOYEE)
+
+    payload_ok = '{"nome": "Colab", "link": "' + I_LINK + '"}'
+    substituicoes = {
+        "{VISIBLE_EMPLOYEE}": ligar(fixas["_VISIBLE_EMPLOYEE_SQL"], tenant_id=I_TENANT, employee_id=I_EMPLOYEE),
+        "{VISIBLE_CONTACT}": ligar(fixas["_VISIBLE_CONTACT_SQL"], tenant_id=I_TENANT, contact_id=I_CONTACT),
+        "{VISIBLE_GROUP}": ligar(fixas["_VISIBLE_CONTACT_SQL"], tenant_id=I_TENANT, contact_id=I_GROUP),
+        "{EMPLOYEE_PHONE}": ligar(fixas["_EMPLOYEE_PHONE_SQL"], tenant_id=I_TENANT, employee_id=I_EMPLOYEE),
+        "{EMPLOYEE_PHONE_OUTRO}": ligar(fixas["_EMPLOYEE_PHONE_SQL"], tenant_id=I_OUTRO, employee_id=I_EMPLOYEE),
+        "{CONTACT_PHONE}": ligar(fixas["_CONTACT_PHONE_SQL"], tenant_id=I_TENANT, contact_id=I_CONTACT),
+        "{BOT_STATE}": ligar(fixas["_TELEGRAM_STATE_SQL"], tenant_id=I_TENANT, provider="telegram"),
+        "{PROVIDER}": ligar(outbox_sql["_PROVIDER_SQL"], tenant_id=I_TENANT),
+        "{TEMPLATE}": ligar(outbox_sql["_TEMPLATE_SQL"], tenant_id=I_TENANT, code="telegram_invite"),
+        "{EXPIRE_EMPLOYEE}": expire(I_TENANT),
+        "{EXPIRE_OUTRO}": expire(I_OUTRO),
+        "{INSERT_INVITE}": insert_invite(HASH_NOVO),
+        "{INSERT_INVITE_2}": insert_invite(HASH_NOVO_2),
+        "{INSERT_INVITE_3}": insert_invite(HASH_NOVO_3),
+        "{ENQUEUE}": enqueue(payload_ok, "z_api", "'telegram_invite:' || " + novo),
+        "{ENQUEUE_SEM_LINK}": enqueue('{"nome": "Colab"}', "z_api", "'telegram_invite:sem-link'"),
+        "{ENQUEUE_META}": enqueue(payload_ok, "meta_cloud", "'telegram_invite:meta'"),
+        "{AUDIT_INVITE}": ligar(
+            fixas["_ADHESION_AUDIT_SQL"],
+            tenant_id=I_TENANT,
+            user_id=I_OWNER,
+            action="insert",
+            entity="messaging_invite",
+        )
+        .replace("%(entity_id)s", novo + "::text")
+        .replace("%(depois)s", "jsonb_build_object('titular', 'employee', 'invite_id', " + novo + "::text)"),
+        "{LINK}": link(I_TENANT),
+        "{LINK_OUTRO}": link(I_OUTRO),
+        "{CONSUME_NOVO}": ligar(webhook_sql["_CONSUME_INVITE_SQL"], tenant_id=I_TENANT).replace(
+            "%(invite_id)s", novo
+        ),
+        "{INSERT_IDENTITY}": holder(
+            ligar(webhook_sql["_INSERT_IDENTITY_SQL"], tenant_id=I_TENANT, channel="telegram", external_id=I_CHAT),
+            I_EMPLOYEE,
+            None,
+        ),
+        "{UNLINK}": holder(
+            ligar(
+                webhook_sql["_REVOKE_PREVIOUS_SQL"],
+                tenant_id=I_TENANT,
+                channel="telegram",
+                reason="desvinculado pelo administrador",
+            ),
+            I_EMPLOYEE,
+            None,
+        ),
+    }
+    script = CENARIO_CONVITE
+    for marcador, texto in substituicoes.items():
+        script = script.replace(marcador, texto)
+    for nome, valor in {
+        "{I_TENANT}": I_TENANT,
+        "{I_OUTRO}": I_OUTRO,
+        "{I_OWNER}": I_OWNER,
+        "{I_SUPERVISOR}": I_SUPERVISOR,
+        "{I_COMPANY}": I_COMPANY,
+        "{I_UNIT}": I_UNIT,
+        "{I_EMPLOYEE}": I_EMPLOYEE,
+        "{I_CONTACT}": I_CONTACT,
+        "{I_GROUP}": I_GROUP,
+        "{INV_ABERTO}": INV_ABERTO,
+        "{INV_JA_USADO}": INV_JA_USADO,
+        "{INV_VENCIDO}": INV_VENCIDO,
+        "{HASH_ABERTO}": HASH_ABERTO,
+        "{HASH_JA_USADO}": HASH_JA_USADO,
+        "{HASH_VENCIDO}": HASH_VENCIDO,
+        "{HASH_NOVO}": HASH_NOVO,
+        "{I_PHONE}": I_PHONE,
+        "{I_E164}": I_E164,
+        "{I_TOKEN}": I_TOKEN,
     }.items():
         script = script.replace(nome, valor)
     return script
@@ -1691,6 +2172,13 @@ def main() -> None:
     cofre = instrucoes(COFRE)
     saude = instrucoes(SAUDE)
     webhook_sql = instrucoes(WEBHOOK)
+    # As três de `outbox.py` que a rota do convite importa. `_TARGETS_SQL` fica
+    # com o `93`. O `{whatsapp_providers}` é renderizado como o módulo o renderiza.
+    outbox_sql = {
+        nome: sql.replace("{whatsapp_providers}", whatsapp_providers())
+        for nome, sql in instrucoes(OUTBOX).items()
+        if nome in ("_PROVIDER_SQL", "_TEMPLATE_SQL", "_ENQUEUE_SQL")
+    }
     # Só a do webhook: as outras três de `tenant.py` são o bootstrap e o
     # `set_config`, que nenhum cenário daqui executa.
     tenant_sql = {
@@ -1712,6 +2200,14 @@ def main() -> None:
         "_NAMED_TEMPLATES_SQL",
         "_SYNC_TEMPLATES_SQL",
         "_TEMPLATE_AUDIT_SQL",
+        "_VISIBLE_EMPLOYEE_SQL",
+        "_VISIBLE_CONTACT_SQL",
+        "_EMPLOYEE_PHONE_SQL",
+        "_CONTACT_PHONE_SQL",
+        "_EXPIRE_OPEN_INVITES_SQL",
+        "_INSERT_INVITE_SQL",
+        "_ADHESION_AUDIT_SQL",
+        "_LINK_SQL",
     }
     if set(fixas) != esperadas:
         print(f"  ✖ esperava as instruções {sorted(esperadas)} em canais.py, achei {sorted(fixas)}")
@@ -1736,6 +2232,13 @@ def main() -> None:
     if set(tenant_sql) != {"_WEBHOOK_INTEGRATION_SQL"}:
         print("  ✖ _WEBHOOK_INTEGRATION_SQL não está em tenant.py")
         sys.exit(1)
+    if set(outbox_sql) != {"_PROVIDER_SQL", "_TEMPLATE_SQL", "_ENQUEUE_SQL"}:
+        print(f"  ✖ esperava as três instruções do convite em outbox.py, achei {sorted(outbox_sql)}")
+        sys.exit(1)
+    # ⛔ O chat_id nunca sai (SPEC-CANAIS §3.2): a ficha não seleciona a coluna.
+    if "external_id" in fixas["_LINK_SQL"]:
+        print("  ✖ _LINK_SQL seleciona external_id — o chat_id não sai por rota nenhuma")
+        sys.exit(1)
     # As duas que existem por canal: a renderização do bot também tem de compilar.
     por_canal = {nome: fixas_tg[nome] for nome in ("_CREDENTIAL_STATUS_SQL", "_DEACTIVATE_SQL")}
     if any("{channel_providers}" in sql for sql in (*fixas.values(), *fixas_tg.values())):
@@ -1750,6 +2253,7 @@ def main() -> None:
         ("saude.py", saude),
         ("webhooks.py", webhook_sql),
         ("tenant.py", tenant_sql),
+        ("outbox.py", outbox_sql),
     ):
         for nome, sql in lote.items():
             r = psql(["-c", f"prepare p as {posicionar(sql)}"])
@@ -1765,7 +2269,8 @@ def main() -> None:
     print(
         f"  instruções fixas compiladas: {len(fixas)} de canais.py "
         f"(+{len(por_canal)} na renderização do bot), {len(cofre)} de vault.py, "
-        f"{len(saude)} de saude.py, {len(webhook_sql)} de webhooks.py, {len(tenant_sql)} de tenant.py"
+        f"{len(saude)} de saude.py, {len(webhook_sql)} de webhooks.py, {len(tenant_sql)} de tenant.py, "
+        f"{len(outbox_sql)} de outbox.py"
     )
 
     script = (
@@ -1790,8 +2295,11 @@ def main() -> None:
     print("\n--- o webhook /start: resolução por path_token, convite, identidade e auditoria")
     rodar(webhook(webhook_sql, tenant_sql))
 
+    print("\n--- o convite de adesão: titular, número, as quatro condições, a fila pelo gatilho, a ficha")
+    rodar(convite(fixas, outbox_sql, webhook_sql))
+
     print("\n================================================")
-    print(" TELA DE CONEXÕES, CREDENCIAL, TEMPLATES, BOT E WEBHOOK: TODOS OS TESTES OK")
+    print(" TELA DE CONEXÕES, CREDENCIAL, TEMPLATES, BOT, WEBHOOK E CONVITE: TODOS OS TESTES OK")
     print("================================================")
 
 

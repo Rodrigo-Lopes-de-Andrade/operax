@@ -1675,3 +1675,66 @@ class TemplateSyncResult(BaseModel):
     updated: list[str]
     unmatched: list[str]
     synced_at: datetime
+
+
+class InviteRequest(BaseModel):
+    """Quem recebe o convite de adesão ao Telegram: exatamente um titular.
+
+    Colaborador (`employee_id`) ou responsável (`contact_id`) — nunca os dois,
+    nunca nenhum, o mesmo `check` de `app.messaging_invite`. O convite é
+    voluntário (decisão do dono, 16/09/2026): um novo só sai quando o
+    administrador pede outro, e cada pedido expira o anterior em aberto.
+    """
+
+    employee_id: UUID | None = None
+    contact_id: UUID | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one_holder(self) -> InviteRequest:
+        if (self.employee_id is None) == (self.contact_id is None):
+            raise ValueError("informe exatamente um titular: `employee_id` ou `contact_id`")
+        return self
+
+
+class InviteIssued(BaseModel):
+    """O convite emitido — e o que dele NÃO está aqui.
+
+    O link `https://t.me/<bot>?start=<token>` é a credencial inteira (SPEC-CANAIS
+    §3.3): quem o abre vira o destinatário dos alertas individuais da pessoa.
+    Por isso ele viaja **só** pelo WhatsApp do número em cadastro (regra 4) e
+    nunca volta ao painel: nem `token`, nem `link`, nem o número inteiro.
+    `destination_masked` mostra DDI, DDD e os quatro últimos dígitos, para o
+    administrador confirmar que o cadastro está certo sem ver o número.
+    `queued` é o `returning` da fila de WhatsApp — quem entrega é o sender.
+    Num 200 ele é sempre `true`: a chave de idempotência é do convite recém-
+    criado, e um conflito nela é erro, não `false`. O campo fica porque o
+    contrato está fixado com o frontend.
+    """
+
+    invite_id: UUID
+    expires_at: datetime
+    #: Entrou em `app.alert_queue` (canal WhatsApp, template `telegram_invite`).
+    queued: bool
+    #: `+55 11 •••••-0000` — nunca o número inteiro.
+    destination_masked: str
+
+
+class TelegramLink(BaseModel):
+    """O vínculo de um colaborador com o Telegram, como a ficha o mostra.
+
+    A regra 5 da SPEC-CANAIS §3.3: vínculo visível e revogável. `linked` diz
+    que há identidade vigente; `opted_in_at` é a data dela. `revoked_at` é a
+    última revogação, e só vem quando não há vigente — quem saiu e voltou tem
+    `linked = true` e `revoked_at = null`. `invite_open_until` é o convite em
+    aberto (não usado, não expirado), se houver.
+
+    ⛔ O `chat_id` não está aqui, nem em estado nenhum: a consulta que alimenta
+    este modelo não seleciona `external_id`.
+    """
+
+    linked: bool
+    opted_in_at: datetime | None
+    #: Da última revogação, quando não há vigente.
+    revoked_at: datetime | None
+    #: Convite em aberto, se houver.
+    invite_open_until: datetime | None

@@ -91,12 +91,14 @@ fora de transação, e não vai para auditoria, log, resposta nem exceção.
 
 from __future__ import annotations
 
+import hashlib
 import logging
 import re
 import secrets
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Any
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -105,6 +107,7 @@ from psycopg import errors
 from psycopg.rows import DictRow
 from psycopg.types.json import Jsonb
 
+from operax.alertas import outbox
 from operax.alertas.capacidades import (
     CHANNEL_PROVIDERS,
     CHANNELS,
@@ -135,13 +138,17 @@ from server.models import (
     CredentialRequest,
     CredentialStatus,
     FieldForm,
+    InviteIssued,
+    InviteRequest,
     ProviderForm,
     TelegramChannel,
+    TelegramLink,
     TemplateRow,
     TemplateSyncResult,
     TemplateWrite,
     WhatsAppChannel,
 )
+from server.routers import webhooks
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/canais", tags=["canais"])
@@ -467,10 +474,17 @@ def _status(row: DictRow | None, channel: Channel) -> CredentialStatus:
     )
 
 
-def _refuse(detail: str, code: str, **extra: Any) -> JSONResponse:
-    """422 com `detail` em pt-BR e um `code` estável ao lado. Nunca o valor."""
+def _refuse(
+    detail: str,
+    code: str,
+    *,
+    status_code: int = status.HTTP_422_UNPROCESSABLE_CONTENT,
+    **extra: Any,
+) -> JSONResponse:
+    """422 com `detail` em pt-BR e um `code` estável ao lado. Nunca o valor.
+    `status_code` só muda para o 409 de `revogar` sem vínculo."""
     return JSONResponse(
-        status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+        status_code=status_code,
         content={"detail": detail, "code": code, **extra},
     )
 
@@ -1135,3 +1149,437 @@ async def sync_templates(tenant: CurrentTenant, http: HttpDep) -> TemplateSyncRe
         unmatched=unmatched,
         synced_at=datetime.now(UTC),
     )
+
+
+# ---------------------------------------------------------------------------
+# A adesão — SPEC-CANAIS §3.3: o link É a credencial, e viaja pelo WhatsApp
+# ---------------------------------------------------------------------------
+# O convite `https://t.me/<bot>?start=<token>` vincula quem o abrir ao
+# `chat_id` daquela pessoa — e a partir daí essa conta recebe os alertas
+# individuais dela. As cinco regras da §3.3 são uma peça só, e esta seção é
+# onde quatro delas se materializam: uso único e validade curta são o
+# `used_at` e o `expires_at` da tabela (o webhook os confere); `token_hash` e
+# nunca o token é o `sha256` abaixo; **o link vai por WhatsApp para o número
+# que o empregador já tem em cadastro** (regra 4) é a linha de
+# `app.alert_queue` — o convite é uma mensagem como qualquer outra, sob o mesmo
+# contrato de template (`telegram_invite`, variáveis `nome` e `link`), e quem
+# entrega é o sender, quando o G4 fechar (regra 8). Esta rota não faz HTTP. A
+# quinta regra — vínculo visível e revogável — são o `GET` e o `revogar`.
+#
+# A adesão é VOLUNTÁRIA (decisão do dono, 16/09/2026): o texto do convite é do
+# template, não desta rota; não há lembrete, reenvio automático nem prazo de
+# resposta. Um convite novo só sai quando o administrador pede outro — e aí o
+# anterior em aberto expira na mesma transação (regra 2: dois links válidos
+# circulando são dois vetores).
+#
+# ⛔ O TOKEN E O LINK NUNCA VOLTAM AO PAINEL, NEM VÃO A LOG OU AUDITORIA. O
+# número inteiro tampouco: `InviteIssued.destination_masked` é DDI, DDD e os
+# quatro últimos dígitos. ⚠️ Premissa registrada: o link fica em
+# `alert_queue.payload` até o sender entregar — a fila é `app`, só o backend a
+# lê; o C5 deve limpar `payload.link` ao marcar `sent`.
+#
+# ONDE CADA PASSO RODA, E POR QUÊ
+# (1) `util.is_admin`, como o usuário. (2) O titular é visível a quem pede,
+# como o usuário: `util.can_see_employee` para o colaborador; para o
+# responsável, `app.contact` sob `contact_read` (`util.has_tenant` — qualquer
+# membro lê contatos; quem barra é o passo 1) — e **só `type = 'person'`**:
+# um convite para grupo viraria um `chat_id` de grupo, e
+# o alerta individual iria para o grupo inteiro pela porta que
+# `util.validate_alert_target` não vigia (regra 7, e o irmão dela na §3.4).
+# (3) O número, em `tenant_scope` com o `tenant_id` ligado: ele é destino de
+# entrega, não dado de tela — a rota não o mostra, e o domínio `pii` é
+# "ver o CPF", não "convidar". (4) Bot ativo, WhatsApp ativo e o template,
+# cada um com a sua recusa nomeada, **antes de qualquer escrita**. (5) As
+# quatro escritas numa transação só: expirar os anteriores, o convite, a fila,
+# a trilha. Uma recusa em (3) ou (4) sai da transação sem nada gravado.
+#
+# RESPONSÁVEIS FICAM FORA DA FICHA
+# O convite os alcança (o `POST` aceita `contact_id`), mas o `GET` e o
+# `revogar` são por `employee_id`: a ficha é do colaborador, e um responsável
+# não tem uma. Fica registrado, não escondido.
+_SEM_PERMISSAO_CONVIDAR = "Convidar para o Telegram é do administrador do cliente."
+_SEM_PERMISSAO_DESVINCULAR = "Desvincular do Telegram é do administrador do cliente."
+
+#: O template do convite e as variáveis que ele tem de declarar — exatamente
+#: estas. O gatilho `util.validate_alert_template` confere que o `payload`
+#: cobre o que o template declara; o que ele não confere é o inverso, um
+#: template que não pede `link` — e um convite sem link não convida ninguém.
+#: Por isso a rota confere o conjunto exato.
+_INVITE_TEMPLATE_CODE = "telegram_invite"
+_INVITE_VARIABLES = frozenset({"nome", "link"})
+_INVITE_REFUSALS = {
+    "not_a_person": (
+        "Só uma pessoa pode ser convidada para o Telegram — grupo e lista não. "
+        "Um convite para grupo viraria alerta individual no grupo inteiro."
+    ),
+    "no_phone": "O titular não tem número de WhatsApp em cadastro.",
+    "invalid_phone": "O número em cadastro não é um WhatsApp válido.",
+    "no_bot": "Conecte o bot do Telegram antes de convidar.",
+    "no_whatsapp": "O convite viaja por WhatsApp, e este cliente não tem WhatsApp ativo.",
+    "no_invite_template": (
+        "O template `telegram_invite` precisa existir em Templates e declarar "
+        "exatamente as variáveis `nome` e `link`."
+    ),
+    "not_linked": "Este colaborador não tem vínculo vigente com o Telegram.",
+}
+_UNLINK_REASON = "desvinculado pelo administrador"
+_TITULAR_NAO_ENCONTRADO = "Titular não encontrado."
+_COLABORADOR_NAO_ENCONTRADO = "Colaborador não encontrado."
+
+#: Passo 2, como o usuário: o colaborador, se quem pede o enxerga.
+#: `util.can_see_employee` é o predicado da policy `employee_read`, escrito
+#: aqui também para que a intenção esteja na instrução e não só na RLS.
+_VISIBLE_EMPLOYEE_SQL = """
+    select e.id, e.name
+    from app.employee e
+    where e.tenant_id = %(tenant_id)s
+      and e.id = %(employee_id)s
+      and util.can_see_employee(e.id)
+"""
+
+#: Passo 2, o responsável: `contact_read` recorta por tenant; `type` sai para
+#: que grupo e lista recebam a recusa nomeada, e não um 404.
+_VISIBLE_CONTACT_SQL = """
+    select c.id, c.name, c.type
+    from app.contact c
+    where c.tenant_id = %(tenant_id)s
+      and c.id = %(contact_id)s
+      and c.active
+"""
+
+#: Passo 3, em `tenant_scope`: o número, por titular. Só a coluna do número.
+_EMPLOYEE_PHONE_SQL = """
+    select p.phone
+    from app.employee_pii p
+    where p.tenant_id = %(tenant_id)s
+      and p.employee_id = %(employee_id)s
+"""
+
+_CONTACT_PHONE_SQL = """
+    select c.whatsapp as phone
+    from app.contact c
+    where c.tenant_id = %(tenant_id)s
+      and c.id = %(contact_id)s
+"""
+
+#: Passo 5, a regra 2: os convites em aberto do MESMO titular expiram agora.
+#: `is not distinct from` casa o par exato, com o lado nulo incluído — a mesma
+#: forma de `webhooks._REVOKE_PREVIOUS_SQL`. Sem delete: `expires_at`.
+_EXPIRE_OPEN_INVITES_SQL = """
+    update app.messaging_invite
+       set expires_at = now()
+     where tenant_id = %(tenant_id)s
+       and channel = %(channel)s
+       and contact_id is not distinct from %(contact_id)s
+       and employee_id is not distinct from %(employee_id)s
+       and used_at is null
+       and expires_at > now()
+    returning id
+"""
+
+#: `expires_at` é o default da tabela (7 dias, decisão do dono). O que entra é
+#: o hash; o token só existe na variável local que monta o link.
+_INSERT_INVITE_SQL = """
+    insert into app.messaging_invite
+      (tenant_id, channel, contact_id, employee_id, token_hash)
+    values
+      (%(tenant_id)s, %(channel)s, %(contact_id)s, %(employee_id)s, %(token_hash)s)
+    returning id, expires_at
+"""
+
+#: A trilha da adesão: `insert messaging_invite` (convidar) e `update
+#: messaging_identity` (desvincular). ⛔ `depois` leva o titular e o convite,
+#: ou a razão — nunca token, link, número ou `chat_id`.
+_ADHESION_AUDIT_SQL = """
+    insert into app.audit_log
+      (tenant_id, user_id, action, entity, entity_id, antes, depois)
+    values
+      (%(tenant_id)s, %(user_id)s, %(action)s, %(entity)s, %(entity_id)s, null, %(depois)s)
+"""
+
+#: A ficha: a vigente (`opted_in_at`), a última revogada e o convite em aberto,
+#: em três subconsultas escalares. ⛔ `external_id` não é selecionado — a
+#: coluna não aparece nesta instrução, e `tests/test_canais_convites.py` e o
+#: `97` prendem isso pelo texto.
+_LINK_SQL = """
+    select
+      (select mi.opted_in_at
+         from app.messaging_identity mi
+        where mi.tenant_id = %(tenant_id)s
+          and mi.channel = %(channel)s
+          and mi.employee_id = %(employee_id)s
+          and mi.revoked_at is null) as opted_in_at,
+      (select max(mi.revoked_at)
+         from app.messaging_identity mi
+        where mi.tenant_id = %(tenant_id)s
+          and mi.channel = %(channel)s
+          and mi.employee_id = %(employee_id)s
+          and mi.revoked_at is not null) as last_revoked_at,
+      (select max(i.expires_at)
+         from app.messaging_invite i
+        where i.tenant_id = %(tenant_id)s
+          and i.channel = %(channel)s
+          and i.employee_id = %(employee_id)s
+          and i.used_at is null
+          and i.expires_at > now()) as invite_open_until
+"""
+
+
+def _e164(raw: str | None) -> str | None:
+    """O número em cadastro como E.164 brasileiro, ou `None` se não tem forma.
+
+    Só dígitos; 10–11 dígitos são DDD + número e ganham `+55`; 12–15 começando
+    por `55` já trazem o DDI e ganham o `+`. Qualquer outra coisa não é um
+    WhatsApp que este produto saiba entregar.
+    """
+    digits = re.sub(r"\D", "", raw or "")
+    if 10 <= len(digits) <= 11:
+        return f"+55{digits}"
+    if 12 <= len(digits) <= 15 and digits.startswith("55"):
+        return f"+{digits}"
+    return None
+
+
+def _mask(destination: str) -> str:
+    """`+5511999990000` → `+55 11 •••••-0000`: DDI, DDD e os quatro últimos."""
+    digits = destination.lstrip("+")
+    return f"+{digits[:2]} {digits[2:4]} •••••-{digits[-4:]}"
+
+
+def _first_name(name: str) -> str:
+    return (name.split() or [name])[0]
+
+
+class _QueueRefusedError(ValueError):
+    """O gatilho da fila recusou o convite. A mensagem é a dele, já em pt-BR."""
+
+
+async def _visible_employee(tenant: TenantContext, employee_id: UUID) -> DictRow | None:
+    async with user_scope(tenant) as scope:
+        await scope.execute(
+            _VISIBLE_EMPLOYEE_SQL,
+            {"tenant_id": str(tenant.tenant_id), "employee_id": str(employee_id)},
+        )
+        return await scope.fetchone()
+
+
+async def _enqueue_invite(
+    bound: TenantScope,
+    *,
+    invite_id: UUID,
+    destination: str,
+    provider: str,
+    payload: dict[str, str],
+) -> None:
+    """A linha da fila — a instrução de `outbox`, importada, sem regra e sem
+    ciclo. O gatilho `util.validate_alert_template` é o último juiz (template
+    não aprovado no provedor oficial, variável a mais): a frase dele já é
+    pt-BR e não carrega o payload; `from None` para que a cadeia também não —
+    o `DETAIL` do Postgres traria a linha, e a linha tem o link. A saída por
+    exceção é o rollback do chamador."""
+    try:
+        await bound.execute(
+            outbox._ENQUEUE_SQL,
+            {
+                "rule_id": None,
+                "cycle_id": None,
+                "channel": WHATSAPP_CHANNEL,
+                "destination": destination,
+                "payload": Jsonb(payload),
+                "idempotency_key": f"{_INVITE_TEMPLATE_CODE}:{invite_id}",
+                "template_code": _INVITE_TEMPLATE_CODE,
+                "provider": provider,
+            },
+        )
+    except errors.RaiseException as recusa:
+        raise _QueueRefusedError(
+            recusa.diag.message_primary or "A fila recusou o convite."
+        ) from None
+    if await bound.fetchone() is None:
+        # A chave de idempotência é do convite recém-criado: um conflito nela é
+        # o driver ou o schema fora do que este código conhece.
+        raise RuntimeError("a fila não aceitou o convite recém-criado")
+
+
+async def _link(bound: TenantScope, employee_id: UUID) -> TelegramLink:
+    await bound.execute(_LINK_SQL, {"channel": webhooks.CHANNEL, "employee_id": str(employee_id)})
+    row = await bound.fetchone()
+    if row is None:
+        raise RuntimeError("a consulta do vínculo não devolveu a linha")
+    linked = row["opted_in_at"] is not None
+    return TelegramLink(
+        linked=linked,
+        opted_in_at=row["opted_in_at"],
+        revoked_at=None if linked else row["last_revoked_at"],
+        invite_open_until=row["invite_open_until"],
+    )
+
+
+@router.post("/telegram/convites")
+async def issue_invite(tenant: CurrentTenant, request: InviteRequest) -> InviteIssued:
+    """Emite o convite de adesão e o põe na fila de WhatsApp — nunca o devolve.
+
+    Os seis passos, na ordem do cabeçalho desta seção: admin; titular visível
+    (pessoa, não grupo); o número normalizado; bot, WhatsApp e template, cada
+    um com a sua recusa; as quatro escritas numa transação; a resposta sem o
+    token, sem o link e sem o número inteiro.
+    """
+    await _require_admin(tenant, _SEM_PERMISSAO_CONVIDAR)
+
+    # 2. O titular, como o usuário.
+    if request.employee_id is not None:
+        holder = await _visible_employee(tenant, request.employee_id)
+        holder_kind = "employee"
+    else:
+        async with user_scope(tenant) as scope:
+            await scope.execute(
+                _VISIBLE_CONTACT_SQL,
+                {"tenant_id": str(tenant.tenant_id), "contact_id": str(request.contact_id)},
+            )
+            holder = await scope.fetchone()
+        holder_kind = "contact"
+        if holder is not None and holder["type"] != "person":
+            return _refuse(_INVITE_REFUSALS["not_a_person"], "not_a_person")
+    if holder is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_TITULAR_NAO_ENCONTRADO)
+    holder_ids = {
+        "employee_id": str(request.employee_id) if request.employee_id is not None else None,
+        "contact_id": str(request.contact_id) if request.contact_id is not None else None,
+    }
+
+    try:
+        async with tenant_scope(tenant) as bound:
+            # 3. O número — destino de entrega, lido aqui e mostrado em lugar nenhum.
+            if holder_kind == "employee":
+                await bound.execute(_EMPLOYEE_PHONE_SQL, {"employee_id": holder_ids["employee_id"]})
+            else:
+                await bound.execute(_CONTACT_PHONE_SQL, {"contact_id": holder_ids["contact_id"]})
+            phone_row = await bound.fetchone()
+            raw_phone = phone_row["phone"] if phone_row is not None else None
+            if not raw_phone or not re.search(r"\d", raw_phone):
+                return _refuse(_INVITE_REFUSALS["no_phone"], "no_phone")
+            destination = _e164(raw_phone)
+            if destination is None:
+                return _refuse(_INVITE_REFUSALS["invalid_phone"], "invalid_phone")
+
+            # 4. O bot, o WhatsApp e o template — nada escrito até os três dizerem sim.
+            bot = await _bot_state(bound)
+            username = (bot["public_identity"] or "").lstrip("@") if bot is not None else ""
+            if not username:
+                return _refuse(_INVITE_REFUSALS["no_bot"], "no_bot")
+
+            await bound.execute(outbox._PROVIDER_SQL, {})
+            provider_row = await bound.fetchone()
+            if provider_row is None:
+                return _refuse(_INVITE_REFUSALS["no_whatsapp"], "no_whatsapp")
+            provider = provider_row["provider"]
+
+            await bound.execute(outbox._TEMPLATE_SQL, {"code": _INVITE_TEMPLATE_CODE})
+            template = await bound.fetchone()
+            if template is None or set(template["variables"]) != _INVITE_VARIABLES:
+                return _refuse(_INVITE_REFUSALS["no_invite_template"], "no_invite_template")
+
+            # 5. As quatro escritas. O token nasce aqui e morre com esta função.
+            token = secrets.token_urlsafe(32)
+            token_hash = hashlib.sha256(token.encode("ascii")).hexdigest()
+            link = f"https://t.me/{username}?start={token}"
+
+            await bound.execute(
+                _EXPIRE_OPEN_INVITES_SQL, {"channel": webhooks.CHANNEL, **holder_ids}
+            )
+            await bound.fetchall()
+
+            await bound.execute(
+                _INSERT_INVITE_SQL,
+                {"channel": webhooks.CHANNEL, "token_hash": token_hash, **holder_ids},
+            )
+            invite = await bound.fetchone()
+            if invite is None:
+                raise RuntimeError("o insert de app.messaging_invite não devolveu a linha")
+
+            await _enqueue_invite(
+                bound,
+                invite_id=invite["id"],
+                destination=destination,
+                provider=provider,
+                payload={"nome": _first_name(holder["name"]), "link": link},
+            )
+
+            await bound.execute(
+                _ADHESION_AUDIT_SQL,
+                {
+                    "user_id": tenant.user_id,
+                    "action": "insert",
+                    "entity": "messaging_invite",
+                    "entity_id": str(invite["id"]),
+                    "depois": Jsonb({"titular": holder_kind, "invite_id": str(invite["id"])}),
+                },
+            )
+    except _QueueRefusedError as recusa:
+        return _refuse(str(recusa), "invite_refused")
+
+    logger.info(
+        "canais: convite de Telegram enfileirado para o tenant %s (%s)",
+        tenant.tenant_id,
+        holder_kind,
+    )
+    # 6. Sem o token, sem o link, sem o número.
+    return InviteIssued(
+        invite_id=invite["id"],
+        expires_at=invite["expires_at"],
+        queued=True,
+        destination_masked=_mask(destination),
+    )
+
+
+@router.get("/telegram/vinculos/{employee_id}")
+async def telegram_link(tenant: CurrentTenant, employee_id: UUID) -> TelegramLink:
+    """A ficha: vinculado desde quando, revogado quando, convite em aberto até
+    quando. Qualquer membro que **vê o colaborador** (`util.can_see_employee`,
+    como o usuário); senão 404. O `chat_id` não é lido."""
+    if await _visible_employee(tenant, employee_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_COLABORADOR_NAO_ENCONTRADO
+        )
+    async with tenant_scope(tenant) as bound:
+        return await _link(bound, employee_id)
+
+
+@router.post("/telegram/vinculos/{employee_id}/revogar")
+async def unlink_telegram(tenant: CurrentTenant, employee_id: UUID) -> TelegramLink:
+    """Desvincula: a vigente ganha `revoked_at` e a razão; os convites em aberto
+    expiram; a trilha leva a razão. Sem vigente, 409 `not_linked` e nada muda.
+    A linha fica — quem foi desvinculado e voltar terá duas, e a história lê."""
+    await _require_admin(tenant, _SEM_PERMISSAO_DESVINCULAR)
+    if await _visible_employee(tenant, employee_id) is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=_COLABORADOR_NAO_ENCONTRADO
+        )
+
+    holder_ids = {"employee_id": str(employee_id), "contact_id": None}
+    async with tenant_scope(tenant) as bound:
+        await bound.execute(
+            webhooks._REVOKE_PREVIOUS_SQL,
+            {"channel": webhooks.CHANNEL, "reason": _UNLINK_REASON, **holder_ids},
+        )
+        revoked = await bound.fetchall()
+        if not revoked:
+            return _refuse(
+                _INVITE_REFUSALS["not_linked"], "not_linked", status_code=status.HTTP_409_CONFLICT
+            )
+        [identity] = revoked
+
+        await bound.execute(_EXPIRE_OPEN_INVITES_SQL, {"channel": webhooks.CHANNEL, **holder_ids})
+        await bound.fetchall()
+
+        await bound.execute(
+            _ADHESION_AUDIT_SQL,
+            {
+                "user_id": tenant.user_id,
+                "action": "update",
+                "entity": "messaging_identity",
+                "entity_id": str(identity["id"]),
+                "depois": Jsonb({"reason": _UNLINK_REASON}),
+            },
+        )
+        return await _link(bound, employee_id)
