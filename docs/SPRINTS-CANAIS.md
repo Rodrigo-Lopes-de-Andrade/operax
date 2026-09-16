@@ -782,6 +782,166 @@ owner com o risco escrito, nunca simplificação de implementação.
 depois do primeiro uso; desvincular volta o destinatário para WhatsApp sem
 perder o histórico; o painel de adesão não mostra nome nem `chat_id`.
 
+### ✅ Decisão do dono, 16/09/2026: a adesão é **voluntária**
+
+Consequências: o convite convida, não cobra; não há lembrete, reenvio
+automático, prazo de resposta nem estado de cobrança; "faltam" vira "não
+aderiram" — um número, não uma pendência. Quem não adere continua no
+WhatsApp, e nada acontece.
+
+### ✅ C4, backend — o convite pela fila de WhatsApp, o vínculo na ficha — fechado em 16/09/2026 (`f1f0774`)
+
+Entregue com pytest **993 → 1062** (69 novos em `tests/test_canais_convites.py`),
+ruff limpo, suíte de banco `SUÍTE COMPLETA OK` (o `97` compila 23 instruções
+de `canais.py` + 3 de `outbox.py`; sexta parte com 66 asserções; `98`/`99`
+intactos). Sem migration, sem HTTP, nada contra produção. As três rotas
+entraram em `canais.py` (não num `adesao.py`: os helpers já estavam lá).
+
+- `POST /canais/telegram/convites`: os seis passos na ordem; **nenhuma escrita
+  antes das quatro condições** (provado pela lista de instruções); os SQLs
+  da fila (`_ENQUEUE_SQL`, `_PROVIDER_SQL`, `_TEMPLATE_SQL`) e o da revogação
+  (`webhooks._REVOKE_PREVIOUS_SQL`) são **importados**, não copiados. Token
+  `token_urlsafe(32)` (43 ≤ 64), só o hash na tabela, o link só em
+  `alert_queue.payload`. Resposta, auditoria e log sem token, link ou número.
+- Duas decisões além do despacho, aceitas: a rota exige que o template
+  declare **exatamente** `{nome, link}` (o gatilho só confere payload ⊇
+  variáveis — um template sem `link` passaria nele e o convite sairia sem
+  link); e a recusa do gatilho vira 422 **`invite_refused`** com a frase dele
+  (sem isso, `meta_cloud` com template em `draft` daria 500). Sétimo código;
+  o frontend mostra `detail` para código desconhecido.
+- `GET …/vinculos/{id}`: quem vê o colaborador (`util.can_see_employee`, como
+  o usuário; senão 404); `_LINK_SQL` em três subconsultas escalares, **sem
+  `external_id`** (asserção textual no pytest e no `97`). `revogar`: admin,
+  409 `not_linked`, `revoked_at` + razão, convites em aberto expiram junto.
+- Premissas registradas: o número é lido em `tenant_scope` (é destino de
+  entrega, não dado de tela — em `user_scope`, `pii_read` exigiria o domínio
+  `pii`, que é "ver o CPF"); `queued` é sempre `true` num 200; o bot precisa
+  estar **ativo com `@username`**, não conectado (o link vale 7 dias);
+  colaborador desligado não é recusado; 10–11 dígitos são sempre Brasil.
+- **Dívida do C5, reafirmada:** limpar `payload.link` ao marcar `sent`.
+- O falso verde que nenhum teste pega: **o número certo da pessoa errada** —
+  a confiança é herdada do cadastro (regra 4), e o cadastro errado vem junto.
+  Mitigação: `destination_masked` mostra DDD e final antes; a ficha mostra o
+  vínculo depois (regra 5).
+
+**Guardião de superfície, 16/09/2026 — NÃO PASSA por um item, e o item é o
+gate, não a rota.** 11 de 12 OK, zero janelas sujas (hash antes e depois de
+cada item, 9 conferências). Nenhuma medição achou token, link, número inteiro
+ou `chat_id` em resposta (a varredura de `resposta.text` procura os três e
+ainda fixa o conjunto de chaves do JSON), auditoria (igualdade exata do
+`depois` nos dois eventos), tabela (só o hash), log (nem com `httpx*`
+forçado a nível 1, pela sonda do guardião) ou superfície pública (9 views,
+12 RPCs, `messaging_*` sem policy e sem `d`, `alert_queue` sem leitor fora do
+sender — o que dá peso à dívida do `payload.link`). **O que volta:**
+`_app_log` em `test_canais_convites.py` descarta os registros `httpx*`/
+`httpcore*` — herança do C3 — e a varredura sob `DEBUG` fica cega ao logger
+por onde, no C5, a URL do provedor com o número vai passar. Uma linha:
+varrer `caplog.records` inteiro, como `test_canais_credencial.py` já faz.
+
+**Revisão (ciclo 1, mutação só em overlay): APROVADA.** 38 mutações, 36
+mortas; as duas sobreviventes eram o mesmo furo — a borda de baixo da regra
+"10–11 dígitos" (`_e164` aceitando 8 ou 9 passava nos 69 testes). O
+revisor mediu o ponto de forma que eu tinha pedido: `_refuse` **devolve**,
+não levanta, e `tenant_scope` comita na saída normal — então listou cada
+`return _refuse` das três rotas com o que o antecede na transação:
+nenhum vem depois de uma escrita (as quatro condições são só leitura; a
+recusa do gatilho sai por exceção, que é rollback; o 409 do `revogar` é um
+update de zero linhas). `util.validate_alert_template` interpola só código,
+**nomes** de variáveis e status — nunca valor do payload —, então a frase de
+`invite_refused` é segura. Premissa 2 sem achado: não existe admin que não
+veja o colaborador (o primeiro ramo de `can_see_employee` é `is_admin`).
+
+**Fechado por mim antes do commit:** a tabela do `_e164` ganhou 8 e 9
+dígitos (e um caso de `invalid_phone`), provado no overlay do revisor que
+as duas mutações morrem; `_app_log` varre todos os registros (o item do
+guardião); asserção textual de `util.can_see_employee(e.id)` na instrução
+(a mutação 3 morria por artefato do stub); as duas constantes do token que
+só o teste usava saíram de `canais.py` (o padrão é `webhooks._START`); a
+frase de `no_invite_template` cobre o template que existe com variável a
+mais; a docstring de `InviteIssued.queued` diz que num 200 é sempre `true`.
+**Registrado, não feito:** dois `POST` simultâneos para o mesmo titular não
+se serializam (dois links válidos ao mesmo número) — o botão pendente fica
+desabilitado na tela, e um lock por titular mudaria a contagem de
+instruções que o `97` prende; entra se um dia aparecer.
+
+Portões finais: pytest **1066**, ruff, `SUÍTE COMPLETA OK` (o `97` com as 23
+instruções de `canais.py` recompiladas), dicionário sem deriva.
+
+### ✅ C4, frontend — a ficha, o convite, a adesão por unidade — fechado em 16/09/2026 (`273dcb2`)
+
+Entregue com Vitest **914 / 49** (+77), prettier, `tsc` e lint limpos (os 3
+warnings pré-existentes, nenhum novo). Só `frontend/**`. `database.types.ts`
+regenerado contra o `operax_test` (o `supabase db reset` não roda nesta
+máquina): +25 linhas, exatamente `fn_channel_readiness` e
+`fn_telegram_adhesion`, nenhuma tabela de `app`.
+
+- `queries.ts`: `loadTelegramLink` (Caminho 2; **404 → `null`**, para a ficha
+  cair em "Colaborador não encontrado" e não no error boundary) e
+  `loadTelegramAdhesion` (Caminho 1, `rpc("fn_telegram_adhesion")` **sem
+  argumento** — o gerador tipa `Args: never`, como em `fn_dp_alerts`).
+- `telegram-link.tsx`: cartão "Telegram" abaixo das abas da ficha, não é aba.
+  `linked` decide primeiro, depois `invite_open_until`; data nunca decide.
+  Frase da adesão voluntária em **todos** os estados, inclusive `null`.
+- `telegram-adhesion.tsx`: tabela Unidade · Aderiram · Não aderiram ·
+  Revogaram · Total, com rodapé; dentro do cartão do Telegram, **só quando há
+  bot**. Ordem: a da RPC (sem `order by` na função — sugestão para o C5).
+- **Dispensado por mim neste ciclo:** o `Link` para Templates no 422
+  `no_invite_template` — o despacho pedia o link e vedava `lib/api.ts`, e
+  `ApiError` não carrega `code`. O `detail` da API já nomeia a aba. Patch
+  aditivo proposto (`ApiError.code`), se um dia valer a pena: fica como
+  dívida pequena, não como achado.
+
+**Revisão (ciclo 1, mutação só em overlay): APROVADA.** 39 mutações, 36
+mortas; as três sobreviventes eram nomes de teste afirmando mais do que a
+asserção media — nenhuma era defeito de produto (o componente não guarda
+cópia local, limpa o desfecho no clique, e o cartão vem depois das abas).
+Fechei as três antes do commit e provei no overlay do revisor que cada uma
+morre agora: o teste "sem cópia local" resolve o `revogar` com **outra**
+data de revogação que a prop do refresh (a prop vence); o "erro antigo some"
+afirma com a promessa ainda pendente; a posição do cartão é afirmada por
+ordem no documento. Contrato conferido campo a campo contra `models.py` e a
+migration 5; `rpc("fn_telegram_adhesion", {})` de fato não compila
+(`Args: never`). Portões: Vitest **914 / 49**, prettier, `tsc`, lint com os
+3 warnings de sempre.
+
+O contrato (`InviteRequest`, `InviteIssued`, `TelegramLink`,
+`fn_telegram_adhesion`) está fixado nos dois despachos. Sem migration: o
+convite é uma linha de `app.alert_queue` sem regra, sob o mesmo contrato de
+template (`telegram_invite`, variáveis `nome` e `link`), e quem entrega é o
+sender quando o `enviar` de WhatsApp existir (C5) e o G4 fechar (regra 8).
+
+### ✅ C4 fechado no código em 16/09/2026
+
+Duas metades, dois revisores independentes com mutação em cópia (75
+mutações, 72 mortas de primeira, as 5 sobreviventes fechadas e provadas
+mortas antes do commit), um guardião de superfície com zero janelas sujas.
+Sem migration, sem `db push`, sem HTTP, nada em produção. Commits
+`273dcb2` (frontend) e `f1f0774` (backend).
+
+**O que o C4 entrega quando o resto chegar:** o administrador abre a ficha,
+vê "Não aderiu", clica "Convidar pelo WhatsApp", e a tela diz para que
+número mascarado o convite foi; o link com o token fica na fila de
+WhatsApp esperando o sender. Até o C5 existir e o G4 fechar, **nenhum
+convite sai** — a linha fica `pending`, e é assim de propósito.
+
+**O que fica para o dono (cada um pede o seu "autorizado"):** push dos
+commits desde `def9450` (agora 7: os cinco do C3 e os dois do C4); as cinco
+migrations do C3 em produção (captura datada → push → captura → diff — o
+C4 não acrescentou nenhuma); `API_PUBLIC_URL` no `operax-api`; o cron do
+vigia; `FORWARDED_ALLOW_IPS`; `vercel promote` (produção está em
+`78892f0`); a primeira credencial real e o primeiro `getWebhookInfo` real.
+
+**O que o C5 herda, nomeado:** o `enviar` de WhatsApp para `meta_cloud`,
+`z_api` e `uazapi` (regra 11); o roteamento — Telegram se houver identidade
+vigente, WhatsApp caso contrário; `app.alert_sent` por canal; **limpar
+`payload.link` ao marcar `sent`** (o link com o token fica em
+`alert_queue.payload` até lá, e `authenticated` tem `select` na tabela sob
+`alert_queue_admin` — `app` não é exposto e nenhuma rota lê, mas é dívida
+com nome); `alert_rule.channel`/`alert_queue.channel` sem `'telegram'`;
+`order by u.name` em `fn_telegram_adhesion`; confirmação ao aderente depois
+do `/start`, por template; exigir `connected` (e não só ativo) para emitir
+convite, se o desenho quiser — é uma linha em `_bot_state`.
+
 ## C5 — Roteamento e medição
 
 - `Telegram se houver identidade vigente; WhatsApp caso contrário.`
