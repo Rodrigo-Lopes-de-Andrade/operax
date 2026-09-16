@@ -724,6 +724,46 @@ deve gerar tokens ≤ 64; a URL que `getWebhookInfo` devolve é comparada como
 string — se a plataforma normalizar, um webhook certo fica `disconnected` até
 alguém medir o primeiro real.
 
+### ✅ C3 fechado no código em 16/09/2026 — quatro commits, dez gates
+
+`b629fb5` (banco), `25a9d35` (frontend), `04d9efe` (provedor, credencial por
+canal, conectar/desconectar), `1584e22` (webhook, vigia, `enviar`). Cada
+onda com revisor independente; as três de backend com guardião dez de dez.
+pytest 822 → **993**; Vitest 777 → **837**; suíte de banco com 58 migrations,
+o `86` e o `97` com 25 instruções compiladas contra o banco real.
+
+**O gate do C3, item a item:** as oito linhas da §2.2 → `scripts/86_…`, cada
+recusa nomeando a constraint ✅; `/start` inválido, expirado ou usado não
+vincula, e as três recusas são distinguíveis no log ✅; requisição sem o
+header secreto descartada **antes** do parse ✅ (e sem header também, presa
+por mutação); derrubar o bot e rodar o vigia muda o status e **não**
+reconecta ✅. O quinto — *"o mesmo alerta sai por WhatsApp e por Telegram com
+texto idêntico, a partir de um template só"* — está **meio**: o `enviar` do
+Telegram renderiza `render(body, message)` byte a byte, e é a mesma função
+que `z_api`/`uazapi` vão usar; mas o `enviar` deles é o C5, e é lá que o
+gate fecha inteiro.
+
+**Nada disto está em produção.** O que depende do dono, na ordem:
+1. push dos quatro commits (o último empurrado é `def9450`);
+2. as cinco migrations da onda 1 em produção — autorização própria, com a
+   ordem: captura datada → push → captura → diff;
+3. `API_PUBLIC_URL` no `operax-api` e o cron do vigia (`python -m
+   operax.alertas.vigia`, `*/15 * * * *`) no Railway; decidir
+   `FORWARDED_ALLOW_IPS` (sem ele o limitador por IP é global);
+4. `vercel promote` — o painel de produção ainda está em `78892f0`, sem a aba
+   de templates e sem os dois canais;
+5. as duas paradas de campo que ficaram para depois: a primeira credencial
+   real pelo painel (C2) e o primeiro `getWebhookInfo` real (a comparação da
+   URL é por string).
+
+**Decisões que o C4/C5 herdam:** adesão voluntária ou esperada (SPEC §10.3);
+o token do convite ≤ 64 caracteres (limite do `start` do Telegram); a
+representação do roteamento — `alert_rule.channel`/`alert_queue.channel` não
+têm `'telegram'`, e `channel='whatsapp'` com `provider='telegram'` é
+contraditório; `invited` como coluna nova da adesão, se quiserem "convidado,
+aguardando"; a confirmação ao usuário depois do `/start` (o bot não conversa;
+se houver, é template).
+
 ## C4 — Adesão
 
 **Isolado de propósito, e não bloqueia nada.** É projeto de campo, não código:
