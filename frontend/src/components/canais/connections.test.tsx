@@ -7,6 +7,7 @@ import type {
   BlockedAlertRule,
   ChannelCapabilities,
   ConnectionsScreen,
+  TelegramAdhesionRow,
   TelegramChannel,
   WhatsAppChannel,
 } from "@/lib/canais/queries";
@@ -125,6 +126,24 @@ function tela(overrides: Partial<ConnectionsScreen> = {}): ConnectionsScreen {
 /** O estado da produção hoje: nenhum canal. */
 const EMPTY: ConnectionsScreen = { whatsapp: null, telegram: null };
 
+/** Unidades inventadas, contagens — e nada que nomeie uma pessoa. */
+const ADHESION: TelegramAdhesionRow[] = [
+  {
+    unit_id: "11111111-1111-4111-8111-111111111111",
+    unit_name: "Unidade Zz Alfa",
+    joined: 3,
+    pending: 0,
+    revoked: 1,
+  },
+  {
+    unit_id: "22222222-2222-4222-8222-222222222222",
+    unit_name: "Unidade Zz Beta",
+    joined: 0,
+    pending: 7,
+    revoked: 0,
+  },
+];
+
 const TEMPLATE_PHRASE = /Exige template aprovado pela Meta/;
 const BAN_PHRASE = /volume alto pode levar a banimento/;
 const OPT_IN_PHRASE = /Só alcança quem aderiu pelo convite/;
@@ -167,8 +186,17 @@ function linhas() {
 function renderTela(
   screenData: ConnectionsScreen,
   canWrite = true,
+  adhesion: TelegramAdhesionRow[] | null = ADHESION,
 ): ReturnType<typeof render> {
-  return render(<Connections screen={screenData} canWrite={canWrite} />);
+  return render(
+    <Connections screen={screenData} adhesion={adhesion} canWrite={canWrite} />,
+  );
+}
+
+function adesao() {
+  return screen.queryByRole("table", {
+    name: "Adesão ao Telegram por unidade",
+  });
 }
 
 describe("critério 1 — os dois cartões existem sempre", () => {
@@ -813,5 +841,75 @@ describe("critério 3 — <Requirements>: as três famílias, pelas flags", () =
     expect(screen.getByText(OPT_IN_PHRASE)).toBeVisible();
     expect(screen.getByText(TEMPLATE_PHRASE)).toBeVisible();
     expect(screen.getAllByRole("listitem")).toHaveLength(2);
+  });
+});
+
+describe("C4 — a adesão por unidade vive dentro do cartão do Telegram", () => {
+  it("✅ com bot, a tabela está na região do Telegram, sob o título 'Adesão por unidade' — e não na do WhatsApp", () => {
+    renderTela(tela());
+
+    const t = telegramRegiao();
+    expect(
+      t.getByRole("heading", { name: "Adesão por unidade" }),
+    ).toBeVisible();
+    expect(
+      t.getByRole("table", { name: "Adesão ao Telegram por unidade" }),
+    ).toBeVisible();
+    expect(t.getByText("Unidade Zz Alfa")).toBeVisible();
+    expect(whatsapp().queryByText("Unidade Zz Alfa")).toBeNull();
+    expect(
+      whatsapp().queryByRole("heading", { name: "Adesão por unidade" }),
+    ).toBeNull();
+  });
+
+  it("⛔ sem bot não há adesão — nem tabela, nem título, nem as frases de vazio", () => {
+    // Sem bot ninguém adere; um cartão de adesão ao lado de "Nenhum bot de
+    // Telegram ativo" contaria zero de um jeito que parece defeito.
+    renderTela(tela({ telegram: null }));
+
+    expect(adesao()).toBeNull();
+    expect(
+      screen.queryByRole("heading", { name: "Adesão por unidade" }),
+    ).toBeNull();
+    expect(screen.queryByText("Unidade Zz Alfa")).toBeNull();
+    expect(screen.queryByText(/Nenhuma unidade com colaboradores/)).toBeNull();
+    expect(screen.queryByText(/A adesão não pôde ser lida/)).toBeNull();
+  });
+
+  it("a frase da adesão voluntária acompanha o cartão", () => {
+    renderTela(tela({ whatsapp: null }));
+
+    expect(
+      telegramRegiao().getByText(
+        "A adesão é voluntária: quem não aderir continua recebendo pelo WhatsApp.",
+      ),
+    ).toBeVisible();
+  });
+
+  it("`null` na adesão com bot → 'não pôde ser lida', e o resto do cartão do Telegram fica de pé", () => {
+    renderTela(tela({ whatsapp: null }), true, null);
+
+    expect(
+      telegramRegiao().getByText("A adesão não pôde ser lida agora."),
+    ).toBeVisible();
+    expect(adesao()).toBeNull();
+    expect(telegramRegiao().getByText(BOT)).toBeVisible();
+    expect(screen.getByRole("button", { name: "Desconectar" })).toBeVisible();
+  });
+
+  it("lista vazia com bot → 'Nenhuma unidade com colaboradores'", () => {
+    renderTela(tela({ whatsapp: null }), true, []);
+
+    expect(
+      telegramRegiao().getByText("Nenhuma unidade com colaboradores."),
+    ).toBeVisible();
+    expect(adesao()).toBeNull();
+  });
+
+  it("⛔ a adesão não depende de `canWrite`: quem lê a tela lê a contagem", () => {
+    renderTela(tela({ whatsapp: null }), false);
+
+    expect(adesao()).toBeVisible();
+    expect(screen.getByText("Unidade Zz Beta")).toBeVisible();
   });
 });

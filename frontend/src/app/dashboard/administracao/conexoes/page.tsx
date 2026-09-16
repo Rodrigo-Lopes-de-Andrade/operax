@@ -12,6 +12,7 @@ import {
   loadConnections,
   loadCredential,
   loadProviderForms,
+  loadTelegramAdhesion,
 } from "@/lib/canais/queries";
 import { isAdmin, loadIdentity } from "@/lib/identity";
 
@@ -39,8 +40,9 @@ export const metadata: Metadata = {
  * policy e o backend, que revalidam papel a cada chamada — cada `POST`
  * pergunta `util.is_admin` de novo, e a tela só reflete.
  *
- * As quatro leituras vão em paralelo: as conexões, os formulários e uma
- * credencial por canal. Cada formulário só aparece quando as duas dele
+ * As cinco leituras vão em paralelo: as conexões, os formulários, uma
+ * credencial por canal e a adesão por unidade — esta pelo Caminho 1, porque é
+ * contagem sem nome. Cada formulário só aparece quando as duas dele
  * (`credencial` do canal, `provedores`) vieram; `null` numa delas é sessão ou
  * papel, e a página já tem o estado para isso — não inventa outro. Os canais
  * e a ordem deles vêm de `CHANNELS`: nenhum nome de canal é escrito aqui.
@@ -52,10 +54,11 @@ export default async function ConexoesPage() {
     notFound();
   }
 
-  const [screen, forms, credentials] = await Promise.all([
+  const [screen, forms, credentials, adhesion] = await Promise.all([
     loadConnections(),
     loadProviderForms(),
     Promise.all(CHANNELS.map((channel) => loadCredential(channel))),
+    loadTelegramAdhesion(),
   ]);
 
   return (
@@ -75,7 +78,11 @@ export default async function ConexoesPage() {
       </header>
 
       {screen ? (
-        <Connections screen={screen} canWrite={isAdmin(identity?.role)} />
+        <Connections
+          screen={screen}
+          adhesion={adhesion}
+          canWrite={isAdmin(identity?.role)}
+        />
       ) : (
         <Card className="p-6">
           <EmptyState

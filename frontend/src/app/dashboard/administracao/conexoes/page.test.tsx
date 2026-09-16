@@ -9,6 +9,7 @@ import type {
   CredentialField,
   CredentialStatus,
   ProviderForm,
+  TelegramAdhesionRow,
 } from "@/lib/canais/queries";
 import type { Identity } from "@/lib/identity";
 
@@ -27,6 +28,7 @@ const loadIdentity = vi.fn();
 const loadConnections = vi.fn();
 const loadCredential = vi.fn();
 const loadProviderForms = vi.fn();
+const loadTelegramAdhesion = vi.fn();
 
 vi.mock("@/lib/identity", async () => {
   const actual =
@@ -40,6 +42,7 @@ vi.mock("@/lib/canais/queries", () => ({
   loadConnections: () => loadConnections(),
   loadCredential: (channel: Channel) => loadCredential(channel),
   loadProviderForms: () => loadProviderForms(),
+  loadTelegramAdhesion: () => loadTelegramAdhesion(),
 }));
 
 function identidade(role: string): Identity {
@@ -188,6 +191,17 @@ const FORMS: ProviderForm[] = [
   },
 ];
 
+/** Unidades inventadas; contagens, e nada que nomeie uma pessoa. */
+const ADHESION: TelegramAdhesionRow[] = [
+  {
+    unit_id: "11111111-1111-4111-8111-111111111111",
+    unit_name: "Unidade Zz Alfa",
+    joined: 3,
+    pending: 0,
+    revoked: 1,
+  },
+];
+
 type Credentials = Partial<Record<Channel, CredentialStatus | null>>;
 
 async function abrir(
@@ -195,6 +209,7 @@ async function abrir(
   screenData: ConnectionsScreen | null,
   credentials: Credentials = NOT_CONFIGURED,
   forms: ProviderForm[] | null = FORMS,
+  adhesion: TelegramAdhesionRow[] | null = ADHESION,
 ) {
   loadIdentity.mockResolvedValue(identidade(role));
   loadConnections.mockResolvedValue(screenData);
@@ -202,6 +217,7 @@ async function abrir(
     channel in credentials ? credentials[channel] : null,
   );
   loadProviderForms.mockResolvedValue(forms);
+  loadTelegramAdhesion.mockResolvedValue(adhesion);
 
   return render(await ConexoesPage());
 }
@@ -221,10 +237,11 @@ beforeEach(() => {
   loadConnections.mockReset();
   loadCredential.mockReset();
   loadProviderForms.mockReset();
+  loadTelegramAdhesion.mockReset();
 });
 
 describe("a porta da página é `isAdmin`, mais estreita que a rota de propósito", () => {
-  it("⛔ `unit_supervisor` recebe 404, e nenhuma das quatro leituras é chamada", async () => {
+  it("⛔ `unit_supervisor` recebe 404, e nenhuma das cinco leituras é chamada", async () => {
     loadIdentity.mockResolvedValue(identidade("unit_supervisor"));
 
     await expect(ConexoesPage()).rejects.toThrow("NEXT_NOT_FOUND");
@@ -232,6 +249,7 @@ describe("a porta da página é `isAdmin`, mais estreita que a rota de propósit
     expect(loadConnections).not.toHaveBeenCalled();
     expect(loadCredential).not.toHaveBeenCalled();
     expect(loadProviderForms).not.toHaveBeenCalled();
+    expect(loadTelegramAdhesion).not.toHaveBeenCalled();
   });
 
   it("⛔ `executive` também recebe 404 — lê a área de RH e não configura canal", async () => {
@@ -242,6 +260,7 @@ describe("a porta da página é `isAdmin`, mais estreita que a rota de propósit
     await expect(ConexoesPage()).rejects.toThrow("NEXT_NOT_FOUND");
     expect(loadConnections).not.toHaveBeenCalled();
     expect(loadCredential).not.toHaveBeenCalled();
+    expect(loadTelegramAdhesion).not.toHaveBeenCalled();
   });
 
   it("sem vínculo com o tenant não há tela", async () => {
@@ -279,8 +298,8 @@ describe("a porta da página é `isAdmin`, mais estreita que a rota de propósit
   });
 });
 
-describe("as quatro leituras — em paralelo, e `null` em qualquer uma não derruba", () => {
-  it("⛔ `loadCredential` é chamada uma vez por canal, com o canal", async () => {
+describe("as cinco leituras — em paralelo, e `null` em qualquer uma não derruba", () => {
+  it("⛔ `loadCredential` é chamada uma vez por canal, com o canal — e a adesão uma vez", async () => {
     await abrir("owner", SEM_CANAL);
 
     expect(loadCredential).toHaveBeenCalledTimes(2);
@@ -290,6 +309,7 @@ describe("as quatro leituras — em paralelo, e `null` em qualquer uma não derr
     ]);
     expect(loadConnections).toHaveBeenCalledTimes(1);
     expect(loadProviderForms).toHaveBeenCalledTimes(1);
+    expect(loadTelegramAdhesion).toHaveBeenCalledTimes(1);
   });
 
   it("null nas conexões (sessão, 401, 403) é 'não pôde ser lido' — outra frase, e não 'sem canal'", async () => {
@@ -431,5 +451,35 @@ describe("critério 5 — dois formulários, cada um só com os provedores do se
       (input) => input.id,
     );
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+describe("C4 — a quinta leitura: a adesão por unidade chega ao cartão do Telegram", () => {
+  it("✅ com bot, a tabela da adesão está na tela com as unidades que a RPC devolveu", async () => {
+    await abrir("owner", BLOQUEADO);
+
+    expect(
+      screen.getByRole("table", { name: "Adesão ao Telegram por unidade" }),
+    ).toBeVisible();
+    expect(screen.getByText("Unidade Zz Alfa")).toBeVisible();
+  });
+
+  it("⛔ `null` na adesão não derruba a página: o cartão diz que não pôde ler, e o resto fica", async () => {
+    await abrir("owner", BLOQUEADO, NOT_CONFIGURED, FORMS, null);
+
+    expect(notFound).not.toHaveBeenCalled();
+    expect(screen.getByText("A adesão não pôde ser lida agora.")).toBeVisible();
+    expect(screen.getByText("@zz_bot_inventado")).toBeVisible();
+    expect(formularios()).toHaveLength(2);
+  });
+
+  it("sem bot a adesão é lida mas não aparece — não há onde", async () => {
+    await abrir("owner", SEM_CANAL);
+
+    expect(loadTelegramAdhesion).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("table", { name: "Adesão ao Telegram por unidade" }),
+    ).toBeNull();
+    expect(screen.queryByText("Unidade Zz Alfa")).toBeNull();
   });
 });

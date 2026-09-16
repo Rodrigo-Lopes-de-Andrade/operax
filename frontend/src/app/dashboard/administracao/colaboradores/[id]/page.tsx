@@ -3,6 +3,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
+import { TelegramLinkCard } from "@/components/canais/telegram-link";
 import { EmployeePhoto } from "@/components/rh/employee-photo";
 import { CadastroForm } from "@/components/rh/cadastro-form";
 import { ProvenanceBlock } from "@/components/rh/provenance";
@@ -13,6 +14,7 @@ import { Card, CardHeader } from "@/components/ui/kpi-card";
 import { Table, type Column } from "@/components/ui/table";
 import { Tabs } from "@/components/ui/tabs";
 import { pageTitle } from "@/lib/brand";
+import { loadTelegramLink } from "@/lib/canais/queries";
 import { loadFreshness } from "@/lib/freshness";
 import { loadIdentity, reachesHr } from "@/lib/identity";
 import type { RawSearchParams } from "@/lib/ponto/filters";
@@ -61,6 +63,11 @@ const CURRENCY = new Intl.NumberFormat("pt-BR", {
  * Editar segue o mesmo princípio, um grau abaixo: `can_write` vem do banco, e
  * sem ele o formulário não é montado. Aqui esconder é cortesia, não segurança —
  * a API recusa a escrita de qualquer jeito.
+ *
+ * O vínculo com o Telegram (SPEC-CANAIS §3.3, regra 5) é a terceira leitura do
+ * `Promise.all` e vira o cartão abaixo das abas — não é aba: é um fato sobre a
+ * pessoa que vale em qualquer domínio, e a ordem das abas não muda. O botão
+ * dele segue o mesmo `can_write` da ficha.
  */
 export default async function ColaboradorRhPage({
   params,
@@ -77,9 +84,10 @@ export default async function ColaboradorRhPage({
 
   const { id } = await params;
   const tab = parseTab(await searchParams);
-  const [detail, freshness] = await Promise.all([
+  const [detail, freshness, link] = await Promise.all([
     loadHrEmployee(id),
     loadFreshness(),
+    loadTelegramLink(id),
   ]);
 
   if (!detail) {
@@ -158,6 +166,12 @@ export default async function ColaboradorRhPage({
           {renderTab(active, detail, freshness?.lastSyncAt ?? null)}
         </div>
       </Card>
+
+      <TelegramLinkCard
+        employeeId={employee.employee_id}
+        link={link}
+        canWrite={detail.can_write}
+      />
     </div>
   );
 }

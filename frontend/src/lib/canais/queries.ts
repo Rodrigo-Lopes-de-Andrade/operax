@@ -212,6 +212,62 @@ export type TemplateSyncResult = {
   synced_at: string;
 };
 
+/**
+ * O pedido de convite (`InviteRequest`): um titular só, colaborador **ou**
+ * responsável — o `check messaging_invite_um_titular` do banco, dito no tipo.
+ * A ficha manda `{employee_id, contact_id: null}`; a de responsável não existe
+ * ainda.
+ */
+export type InviteRequest = {
+  employee_id: string | null;
+  contact_id: string | null;
+};
+
+/**
+ * O que volta de `POST /canais/telegram/convites` (`InviteIssued`).
+ *
+ * ⛔ SEM O LINK E SEM O NÚMERO INTEIRO — E NÃO HÁ ONDE MOSTRÁ-LOS
+ * O convite viaja por WhatsApp para o número em cadastro (SPEC-CANAIS §3.3,
+ * regra 4): o painel nunca vê o deep link, porque quem o abre vira o
+ * destinatário. `destination_masked` chega como "+55 11 •••••-0000" e a tela o
+ * mostra como veio. `queued` é "entrou na fila" — quem entrega é o sender.
+ */
+export type InviteIssued = {
+  invite_id: string;
+  expires_at: string;
+  queued: boolean;
+  destination_masked: string;
+};
+
+/**
+ * O vínculo de um colaborador com o bot (`TelegramLink`), como a ficha o
+ * mostra (§3.3, regra 5: visível e revogável). `linked` é o fato; as datas
+ * são o contexto dele — `opted_in_at` preenchido com `linked: false` é um
+ * vínculo que existiu e foi revogado, não um vínculo. `invite_open_until` é
+ * o convite em aberto, se houver. Nenhum `chat_id`, em estado nenhum.
+ */
+export type TelegramLink = {
+  linked: boolean;
+  opted_in_at: string | null;
+  revoked_at: string | null;
+  invite_open_until: string | null;
+};
+
+/**
+ * Uma linha de `public.fn_telegram_adhesion()`: contagem por unidade visível,
+ * e nada que nomeie uma pessoa (SPEC-CANAIS §3.2). `pending` é "nunca teve
+ * identidade" — na tela é **não aderiram**, porque a adesão é voluntária
+ * (decisão do dono, 16/09/2026): é um número, não uma pendência. As três
+ * somam os colaboradores ativos da unidade.
+ */
+export type TelegramAdhesionRow = {
+  unit_id: string;
+  unit_name: string;
+  joined: number;
+  pending: number;
+  revoked: number;
+};
+
 async function accessToken(): Promise<string | null> {
   const supabase = await getServerSupabase();
   const { data } = await supabase.auth.getSession();
@@ -264,4 +320,56 @@ export function loadProviderForms(): Promise<ProviderForm[] | null> {
 /** O catálogo do cliente, ordenado por `code` como a API o entrega. */
 export function loadTemplates(): Promise<TemplateRow[] | null> {
   return readOrNull<TemplateRow[]>("/canais/templates");
+}
+
+/**
+ * O vínculo de um colaborador com o bot — Caminho 2, porque é dado individual.
+ *
+ * 404 vira `null` como em `loadHrEmployee`: a rota responde 404 quando não vê
+ * o colaborador, pelo mesmo recorte da ficha, e as duas leituras vão no mesmo
+ * `Promise.all` — um 404 relançado aqui derrubaria a página no error boundary
+ * em vez de deixar a ficha dizer "Colaborador não encontrado".
+ */
+export async function loadTelegramLink(
+  employeeId: string,
+): Promise<TelegramLink | null> {
+  try {
+    return await readOrNull<TelegramLink>(
+      `/canais/telegram/vinculos/${employeeId}`,
+    );
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) {
+      return null;
+    }
+
+    throw error;
+  }
+}
+
+/**
+ * A adesão por unidade — Caminho 1, e a única leitura desta área que vai
+ * direta ao Supabase: é agregado sem nome, e a função é `security definer`
+ * recortada por `util.user_tenants()` e `util.can_see_unit`, sem parâmetro
+ * nenhum para o cliente mandar (`Args: never` no tipo gerado — a chamada vai
+ * sem argumento, como `fn_dp_alerts`). Erro vira `null`, como o frescor faz;
+ * lista vazia é lista vazia — "nenhuma unidade com colaboradores" e "não pôde
+ * ser lida" são dois estados da tela.
+ */
+export async function loadTelegramAdhesion(): Promise<
+  TelegramAdhesionRow[] | null
+> {
+  const supabase = await getServerSupabase();
+  const { data, error } = await supabase.rpc("fn_telegram_adhesion");
+
+  if (error || !data) {
+    return null;
+  }
+
+  return data.map((row) => ({
+    unit_id: row.unit_id,
+    unit_name: row.unit_name,
+    joined: row.joined,
+    pending: row.pending,
+    revoked: row.revoked,
+  }));
 }

@@ -263,6 +263,21 @@ export type Database = {
       };
     };
     Functions: {
+      fn_channel_readiness: {
+        Args: never;
+        Returns: {
+          channel: string;
+          health_changed_at: string;
+          health_status: string;
+          official: boolean;
+          provider: string;
+          ready: boolean;
+          rules_blocked: number;
+          templates_approved: number;
+          templates_total: number;
+          tenant_id: string;
+        }[];
+      };
       fn_data_freshness: {
         Args: { p_stale_after_minutes?: number };
         Returns: {
@@ -398,6 +413,16 @@ export type Database = {
           employee_id: string;
           employee_name: string;
           eventos: number;
+          unit_name: string;
+        }[];
+      };
+      fn_telegram_adhesion: {
+        Args: never;
+        Returns: {
+          joined: number;
+          pending: number;
+          revoked: number;
+          unit_id: string;
           unit_name: string;
         }[];
       };

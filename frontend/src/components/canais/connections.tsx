@@ -2,6 +2,7 @@ import { BotOff, MessageSquareOff } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+import { TelegramAdhesion } from "@/components/canais/telegram-adhesion";
 import { TelegramConnection } from "@/components/canais/telegram-connection";
 import { Badge, type Tone } from "@/components/ui/badge";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -16,6 +17,7 @@ import type {
   BlockedAlertRule,
   ChannelCapabilities,
   ConnectionsScreen,
+  TelegramAdhesionRow,
   TelegramChannel,
   WhatsAppChannel,
 } from "@/lib/canais/queries";
@@ -289,12 +291,17 @@ const NEVER_MEASURED: Health = { tone: "neutral", label: "Nunca medido" };
  *    quando está nele e quando foi a última conferência (§7: conexão sem
  *    idade não é conexão); o `detail` que veio; e o registro no Telegram,
  *    com a ação que o cria ou remove — e nenhuma que o religue sozinha.
+ * 3. **Adesão** — quantos aderiram por unidade, do Caminho 1
+ *    (`fn_telegram_adhesion`), sem nome e sem `chat_id`. Só existe quando há
+ *    bot: sem bot ninguém adere, e a contagem não teria o que contar.
  */
 function TelegramCards({
   channel,
+  adhesion,
   canWrite,
 }: {
   channel: TelegramChannel;
+  adhesion: TelegramAdhesionRow[] | null;
   canWrite: boolean;
 }) {
   const { capabilities } = channel;
@@ -367,6 +374,17 @@ function TelegramCards({
           <TelegramConnection channel={channel} canWrite={canWrite} />
         </div>
       </Card>
+
+      <Card>
+        <CardHeader
+          eyebrow="Adesão"
+          title="Adesão por unidade"
+          note="A adesão é voluntária: quem não aderir continua recebendo pelo WhatsApp."
+        />
+        <div className="py-2">
+          <TelegramAdhesion rows={adhesion} />
+        </div>
+      </Card>
     </>
   );
 }
@@ -384,12 +402,17 @@ function TelegramCards({
  * na mesma página, um por canal — este componente só lê, e o `<Requirements>`
  * é compartilhado com ele para que o que cada canal exige seja dito de um
  * jeito só. `canWrite` chega a uma coisa: o registro do bot no Telegram.
+ * `adhesion` é a única leitura de Caminho 1 da tela, e entra só no cartão do
+ * Telegram.
  */
 export function Connections({
   screen,
+  adhesion,
   canWrite,
 }: {
   screen: ConnectionsScreen;
+  /** `fn_telegram_adhesion` — contagem por unidade; `null` é "não pôde ser lida". */
+  adhesion: TelegramAdhesionRow[] | null;
   /** `util.is_admin` — o único clique desta tela é o registro do bot. */
   canWrite: boolean;
 }) {
@@ -412,7 +435,11 @@ export function Connections({
 
       <ChannelRegion id="channel-telegram" title={CHANNEL_LABEL.telegram}>
         {screen.telegram ? (
-          <TelegramCards channel={screen.telegram} canWrite={canWrite} />
+          <TelegramCards
+            channel={screen.telegram}
+            adhesion={adhesion}
+            canWrite={canWrite}
+          />
         ) : (
           <Card className="p-6">
             <EmptyState

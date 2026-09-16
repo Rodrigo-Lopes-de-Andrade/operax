@@ -5,10 +5,14 @@ import {
   loadConnections,
   loadCredential,
   loadProviderForms,
+  loadTelegramAdhesion,
+  loadTelegramLink,
   loadTemplates,
   type ConnectionsScreen,
   type CredentialStatus,
   type ProviderForm,
+  type TelegramAdhesionRow,
+  type TelegramLink,
   type TemplateRow,
 } from "@/lib/canais/queries";
 
@@ -22,8 +26,14 @@ const getSession = vi.fn(async (): Promise<{ data: { session: Session } }> => ({
   data: { session: { access_token: "token-de-teste" } },
 }));
 
+/** O `rpc` do Caminho 1 — só a adesão por unidade passa por ele nesta área. */
+const rpc = vi.fn();
+
 vi.mock("@/lib/supabase-server", () => ({
-  getServerSupabase: async () => ({ auth: { getSession: () => getSession() } }),
+  getServerSupabase: async () => ({
+    auth: { getSession: () => getSession() },
+    rpc: (...args: unknown[]) => rpc(...args),
+  }),
 }));
 
 const fetchMock = vi.fn();
@@ -83,6 +93,7 @@ function answer(status: number, body: unknown): Response {
 
 beforeEach(() => {
   fetchMock.mockReset();
+  rpc.mockReset();
   getSession.mockClear();
   vi.stubGlobal("fetch", fetchMock);
 });
@@ -349,5 +360,161 @@ describe("o catálogo de templates (caminho 2)", () => {
 
     expect(await loadTemplates()).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+const EMPLOYEE = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+
+/** Vinculado — e nenhum `chat_id` no contrato para vir junto. */
+const LINKED: TelegramLink = {
+  linked: true,
+  opted_in_at: "2026-09-15T13:05:00Z",
+  revoked_at: null,
+  invite_open_until: null,
+};
+
+describe("o vínculo de um colaborador com o bot (caminho 2)", () => {
+  it("200 devolve o vínculo como veio, na rota do colaborador, com o token no header e sem tenant na URL", async () => {
+    fetchMock.mockResolvedValue(answer(200, LINKED));
+
+    const link = await loadTelegramLink(EMPLOYEE);
+
+    const [url, init] = fetchMock.mock.calls[0];
+    // ⛔ O id vai no caminho, e é o único parâmetro: o tenant sai do token.
+    expect(url).toMatch(new RegExp(`/canais/telegram/vinculos/${EMPLOYEE}$`));
+    expect(url).not.toMatch(/tenant/i);
+    expect(init.headers.Authorization).toBe("Bearer token-de-teste");
+    expect(init.method).toBe("GET");
+    expect(link).toEqual(LINKED);
+  });
+
+  it("⛔ … e é o id recebido que vai na rota, não um fixo", async () => {
+    // Uma função que ignorasse o argumento passaria no caso acima e cai aqui.
+    const outro = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+    fetchMock.mockResolvedValue(answer(200, LINKED));
+
+    await loadTelegramLink(outro);
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toMatch(new RegExp(`/canais/telegram/vinculos/${outro}$`));
+    expect(url).not.toContain(EMPLOYEE);
+  });
+
+  it("401 vira null", async () => {
+    fetchMock.mockResolvedValue(answer(401, { detail: "…" }));
+
+    expect(await loadTelegramLink(EMPLOYEE)).toBeNull();
+  });
+
+  it("403 vira null", async () => {
+    fetchMock.mockResolvedValue(
+      answer(403, { detail: "Sem vínculo ativo com este cliente." }),
+    );
+
+    expect(await loadTelegramLink(EMPLOYEE)).toBeNull();
+  });
+
+  it("404 vira null — 'não vê o colaborador' é o mesmo recorte da ficha, e a ficha é quem diz isso", async () => {
+    // As duas leituras vão no mesmo `Promise.all`: um 404 relançado aqui
+    // derrubaria a página no error boundary em vez de deixar a ficha mostrar
+    // "Colaborador não encontrado".
+    fetchMock.mockResolvedValue(answer(404, { detail: "não encontrado" }));
+
+    expect(await loadTelegramLink(EMPLOYEE)).toBeNull();
+  });
+
+  it("⛔ 500 relança — a API fora do ar não é 'sem vínculo'", async () => {
+    fetchMock.mockResolvedValue(answer(500, { detail: "boom" }));
+
+    await expect(loadTelegramLink(EMPLOYEE)).rejects.toBeInstanceOf(ApiError);
+    await expect(loadTelegramLink(EMPLOYEE)).rejects.toMatchObject({
+      status: 500,
+    });
+  });
+
+  it("sem sessão não chega a chamar a API", async () => {
+    getSession.mockResolvedValueOnce({ data: { session: null } });
+
+    expect(await loadTelegramLink(EMPLOYEE)).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+/** Nomes de unidade inventados; contagens, e nada que nomeie uma pessoa. */
+const ADHESION: TelegramAdhesionRow[] = [
+  {
+    unit_id: "11111111-1111-4111-8111-111111111111",
+    unit_name: "Unidade Zz Alfa",
+    joined: 3,
+    pending: 0,
+    revoked: 1,
+  },
+  {
+    unit_id: "22222222-2222-4222-8222-222222222222",
+    unit_name: "Unidade Zz Beta",
+    joined: 0,
+    pending: 7,
+    revoked: 0,
+  },
+];
+
+describe("a adesão por unidade (caminho 1)", () => {
+  it("✅ chama `fn_telegram_adhesion` sem parâmetro nenhum — o tenant e o escopo saem da sessão", async () => {
+    rpc.mockResolvedValue({ data: ADHESION, error: null });
+
+    const rows = await loadTelegramAdhesion();
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    // ⛔ Sem `tenant_id`, sem unidade, sem nada: a função não aceita argumento
+    // (`Args: never`), e é `util.user_tenants()` + `util.can_see_unit` que
+    // recortam. Um argumento a mais aqui não seria filtro — seria a tela
+    // acreditando que filtra.
+    expect(rpc).toHaveBeenCalledWith("fn_telegram_adhesion");
+    expect(JSON.stringify(rpc.mock.calls[0])).not.toMatch(/tenant/i);
+    expect(rows).toEqual(ADHESION);
+    // E nenhuma chamada à API: é Caminho 1.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("⛔ devolve só as cinco colunas do contrato — nada além do que a RPC promete chega à tela", async () => {
+    // A função de banco tem prova de que o tipo de retorno não nomeia pessoa;
+    // a leitura repete a fronteira: uma coluna a mais que aparecesse na
+    // resposta não passa daqui.
+    rpc.mockResolvedValue({
+      data: [{ ...ADHESION[0], zz_coluna_a_mais: "não passa" }],
+      error: null,
+    });
+
+    const rows = await loadTelegramAdhesion();
+
+    expect(rows).toEqual([ADHESION[0]]);
+    expect(Object.keys(rows![0]).sort()).toEqual([
+      "joined",
+      "pending",
+      "revoked",
+      "unit_id",
+      "unit_name",
+    ]);
+  });
+
+  it("lista vazia é lista vazia — 'nenhuma unidade' é um estado, e não é o de erro", async () => {
+    rpc.mockResolvedValue({ data: [], error: null });
+
+    expect(await loadTelegramAdhesion()).toEqual([]);
+  });
+
+  it("erro do Postgres vira null, como o frescor faz", async () => {
+    rpc.mockResolvedValue({
+      data: null,
+      error: { message: "permission denied" },
+    });
+
+    expect(await loadTelegramAdhesion()).toBeNull();
+  });
+
+  it("`data` nulo sem erro também é null — não há linha para mostrar", async () => {
+    rpc.mockResolvedValue({ data: null, error: null });
+
+    expect(await loadTelegramAdhesion()).toBeNull();
   });
 });
