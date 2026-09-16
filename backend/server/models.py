@@ -1488,12 +1488,13 @@ class BlockedAlertRule(BaseModel):
     meta_status: str | None = None
 
 
-class ConnectionsScreen(BaseModel):
-    """A tela de Conexões: o provedor ativo do cliente e por que o alerta não sai.
+class WhatsAppChannel(BaseModel):
+    """A linha de WhatsApp da tela de Conexões: o provedor ativo e por que o
+    alerta não sai.
 
-    Tudo aqui já era calculado e invisível. Os seis primeiros campos são as
-    colunas de `public.fn_whatsapp_readiness` — não são recalculados — e
-    `blocked` é a lista que ela não devolve.
+    Tudo aqui já era calculado e invisível. As contagens e `ready` são as
+    colunas de `public.fn_channel_readiness` para a linha de WhatsApp — não são
+    recalculadas — e `blocked` é a lista que ela não devolve.
 
     ⚠️ `rules_blocked` E `len(blocked)` SÃO DUAS LEITURAS DO MESMO FATO
     A contagem vem da função e a lista vem da consulta que repete o predicado
@@ -1501,19 +1502,62 @@ class ConnectionsScreen(BaseModel):
     afirmando um número que a própria lista não sustenta. Uma regra pode aparecer
     mais de uma vez quando o mesmo `code` existe em dois idiomas — a função conta
     as duas linhas, e a lista também.
-
-    Sem provedor de WhatsApp ativo a tela não é um erro: é um cliente que ainda
-    não tem por onde entregar. `provider` e `capabilities` vêm nulos, as contagens
-    vêm zeradas e `ready` é falso.
     """
 
-    provider: str | None = None
-    capabilities: ChannelCapabilities | None = None
-    templates_total: int = 0
-    templates_approved: int = 0
-    rules_blocked: int = 0
-    ready: bool = False
-    blocked: list[BlockedAlertRule] = []
+    provider: str
+    capabilities: ChannelCapabilities
+    templates_total: int
+    templates_approved: int
+    rules_blocked: int
+    ready: bool
+    blocked: list[BlockedAlertRule]
+
+
+class TelegramChannel(BaseModel):
+    """A linha de Telegram da tela de Conexões: o bot, o webhook e a saúde.
+
+    `ready` é a coluna de `public.fn_channel_readiness`: bot ativo **e**
+    `channel_health.status = connected` — sem medição não está pronto.
+    `health_status` e `health_changed_at` vêm da mesma função; `health_checked_at`
+    e `health_detail` vêm de `app.channel_health`. `bot_username` é a identidade
+    pública que a verificação do token devolveu (`@…`). `webhook_url` é o
+    endereço inteiro registrado no `setWebhook` — a tela mostra e copia **este**
+    valor, nunca um composto por ela, que poderia divergir do registrado.
+    `webhook_path_token` é a cauda rotativa dele; desconectar a troca
+    (SPEC-CANAIS §6), e reconectar não devolve a antiga.
+
+    ⛔ Nada aqui é o token do bot nem o segredo do header do webhook.
+    """
+
+    #: Sempre o provedor de Telegram.
+    provider: str
+    capabilities: ChannelCapabilities
+    #: O `public_identity` da verificação (`@…`).
+    bot_username: str | None
+    #: `config.webhook_url` não nulo.
+    webhook_configured: bool
+    #: O endereço registrado na plataforma, inteiro; nulo quando desconectado.
+    webhook_url: str | None
+    #: A cauda rotativa do endereço.
+    webhook_path_token: str | None
+    #: connected | disconnected | unknown | None (nunca medido).
+    health_status: str | None
+    health_checked_at: datetime | None
+    health_changed_at: datetime | None
+    health_detail: str | None
+    ready: bool
+
+
+class ConnectionsScreen(BaseModel):
+    """A tela de Conexões: um canal por linha, e os dois coexistem.
+
+    Sem provedor ativo num canal a linha vem nula — não é erro: é um cliente que
+    ainda não tem por onde entregar por aquele canal, e é o estado da produção
+    hoje nos dois.
+    """
+
+    whatsapp: WhatsAppChannel | None = None
+    telegram: TelegramChannel | None = None
 
 
 class FieldForm(BaseModel):
@@ -1544,6 +1588,9 @@ class ProviderForm(BaseModel):
     """
 
     provider: str
+    #: whatsapp | telegram — para a tela separar os formulários por canal sem
+    #: conhecer nome de provedor.
+    channel: str
     capabilities: ChannelCapabilities
     fields: list[FieldForm]
 
@@ -1551,8 +1598,9 @@ class ProviderForm(BaseModel):
 class CredentialStatus(BaseModel):
     """O que se diz sobre a credencial gravada: que existe, não qual é (SPEC §5.3).
 
-    `configured` é verdadeiro quando o tenant tem um provedor de WhatsApp ativo
-    **com** ponteiro em `app.integration_secret`. `updated_at` é o maior
+    Uma credencial por canal: `channel` é o canal perguntado (whatsapp | telegram),
+    e `configured` é verdadeiro quando o tenant tem um provedor **desse canal**
+    ativo **com** ponteiro em `app.integration_secret`. `updated_at` é o maior
     `updated_at` dos ponteiros. `public_identity` é a confirmação legível que o
     provedor devolveu na verificação (*"conectado como …"*).
 
@@ -1560,6 +1608,7 @@ class CredentialStatus(BaseModel):
     nenhum estado — `tests/test_canais_credencial.py` varre o JSON.
     """
 
+    channel: str
     configured: bool
     provider: str | None = None
     updated_at: datetime | None = None

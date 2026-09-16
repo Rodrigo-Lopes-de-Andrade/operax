@@ -38,8 +38,8 @@ from fastapi.testclient import TestClient
 from psycopg.types.json import Jsonb
 
 from operax.alertas import capacidades
-from operax.alertas.capacidades import WHATSAPP_PROVIDERS
-from operax.alertas.provedores import PROVIDERS, meta_cloud, uazapi, z_api
+from operax.alertas.capacidades import CHANNEL_PROVIDERS, WHATSAPP_PROVIDERS, channel_of
+from operax.alertas.provedores import PROVIDERS, meta_cloud, telegram, uazapi, z_api
 from operax.alertas.provedores.base import (
     FieldError,
     InvalidCredentialError,
@@ -62,6 +62,8 @@ INTEGRATION_ID = UUID("33333333-3333-4333-8333-333333333331")
 #: Valores de teste, óbvios de propósito. Nenhum é real.
 TOKEN = "token-de-teste-nao-e-real"
 CLIENT_TOKEN = "client-token-de-teste-nao-e-real"
+#: Na forma do BotFather (`<id>:<segredo>`), para passar pelo `pattern`.
+BOT_TOKEN = "123456789:AAH-token-de-bot-de-teste-nao-e-real-000"
 
 #: Um formulário válido por provedor, com o segredo em cada campo secreto.
 WABA_ID = "102030405060708"
@@ -69,6 +71,7 @@ VALID_FIELDS: dict[str, dict[str, str]] = {
     meta_cloud.NAME: {"phone_number_id": "123456789012345", "waba_id": WABA_ID, "token": TOKEN},
     z_api.NAME: {"instance_id": "3C4E5F6A7B8C9D0E", "token": TOKEN, "client_token": CLIENT_TOKEN},
     uazapi.NAME: {"base_url": "https://instancia.exemplo.test", "token": TOKEN},
+    telegram.NAME: {"bot_token": BOT_TOKEN},
 }
 
 
@@ -80,6 +83,11 @@ def _accepts(module: ModuleType) -> dict[str, Any]:
         return {"verified_name": "FastPark", "display_phone_number": "+55 21 99999-0000"}
     if module is z_api:
         return {"connected": True, "smartphoneConnected": True}
+    if module is telegram:
+        return {
+            "ok": True,
+            "result": {"id": 123456789, "is_bot": True, "username": "FastParkAlertasBot"},
+        }
     return {"instance": {"status": "connected", "owner": "5521999990000"}}
 
 
@@ -97,11 +105,11 @@ class Recorder:
     def accept(self, module: ModuleType) -> None:
         self.respond = lambda _: httpx.Response(200, json=_accepts(module))
 
-    def refuse_echoing_the_token(self) -> None:
+    def refuse_echoing_the_token(self, secret: str = TOKEN) -> None:
         """O caso real do gate 3: o provedor devolve o token no corpo do 401."""
         self.respond = lambda request: httpx.Response(
             401,
-            json={"error": "invalid token", "token": TOKEN, "url": str(request.url)},
+            json={"error": "invalid token", "token": secret, "url": str(request.url)},
         )
 
 
@@ -274,8 +282,10 @@ def test_a_varredura_enxerga_dentro_de_jsonb() -> None:
 def test_o_registro_de_provedores_e_a_matriz_nos_dois_sentidos() -> None:
     """Um módulo que a matriz não conhece é um provedor que a tela pode escolher
     e a API não verifica; um nome da matriz sem módulo, o contrário. A allowlist
-    de literais cresceu para `provedores/*.py` em troca desta igualdade."""
-    assert set(PROVIDERS) == set(WHATSAPP_PROVIDERS)
+    de literais cresceu para `provedores/*.py` em troca desta igualdade. Desde o
+    C3 a matriz é a dos quatro — e `WHATSAPP_PROVIDERS` continua sendo três."""
+    assert set(PROVIDERS) == set(CHANNEL_PROVIDERS)
+    assert set(WHATSAPP_PROVIDERS) < set(PROVIDERS)
     for name, module in PROVIDERS.items():
         assert module.NAME == name
 
@@ -324,7 +334,7 @@ def test_a_sonda_do_dialeto_v_distingue_o_hifen_solto_do_escapado() -> None:
     assert _v_flag_violations(r"[0-9]{5,32}") == set()
 
 
-@pytest.mark.parametrize("provider", WHATSAPP_PROVIDERS)
+@pytest.mark.parametrize("provider", CHANNEL_PROVIDERS)
 def test_todo_pattern_compila_no_dialeto_v_do_navegador(provider: str) -> None:
     for spec in PROVIDERS[provider].FIELDS:
         assert _v_flag_violations(spec.pattern) == set(), spec.name
@@ -341,8 +351,9 @@ def test_o_formulario_da_api_descreve_cada_campo_como_o_modulo_declara(
 ) -> None:
     corpo = client.get("/canais/provedores", headers=cabecalho).json()
 
-    assert [form["provider"] for form in corpo] == list(WHATSAPP_PROVIDERS)
+    assert [form["provider"] for form in corpo] == list(CHANNEL_PROVIDERS)
     for form in corpo:
+        assert form["channel"] == channel_of(form["provider"])
         specs = PROVIDERS[form["provider"]].FIELDS
         assert [f["name"] for f in form["fields"]] == [s.name for s in specs]
         assert [f["secret"] for f in form["fields"]] == [s.secret for s in specs]
@@ -568,7 +579,7 @@ def test_cada_campo_secreto_vai_para_o_cofre_como_parametro_ligado(
         assert CLIENT_TOKEN not in statement
 
 
-@pytest.mark.parametrize("provider", WHATSAPP_PROVIDERS)
+@pytest.mark.parametrize("provider", CHANNEL_PROVIDERS)
 def test_todo_campo_enviado_cai_em_exatamente_um_dos_dois_lugares(
     client: TestClient, cabecalho: dict[str, str], db: Any, transport: Recorder, provider: str
 ) -> None:
@@ -650,7 +661,7 @@ def test_get_credencial_nao_devolve_valor_nem_vault_id_mesmo_envenenado(
 
     assert resposta.status_code == 200
     corpo = resposta.json()
-    assert set(corpo) == {"configured", "provider", "updated_at", "public_identity"}
+    assert set(corpo) == {"channel", "configured", "provider", "updated_at", "public_identity"}
     assert corpo["configured"] is True
     assert TOKEN not in resposta.text
     assert "vault" not in resposta.text.lower()
@@ -666,7 +677,9 @@ def test_get_credencial_sem_credencial_diz_que_nao_ha(
 
     corpo = client.get("/canais/credencial", headers=cabecalho).json()
 
+    # Sem `?canal=`, o canal é WhatsApp — o painel de hoje não conhece o parâmetro.
     assert corpo == {
+        "channel": "whatsapp",
         "configured": False,
         "provider": None,
         "updated_at": None,
@@ -683,7 +696,13 @@ def test_post_nao_devolve_o_valor_em_campo_nenhum(
     resposta = _post(client, cabecalho, z_api.NAME, VALID_FIELDS[z_api.NAME])
 
     assert resposta.status_code == 200
-    assert set(resposta.json()) == {"configured", "provider", "updated_at", "public_identity"}
+    assert set(resposta.json()) == {
+        "channel",
+        "configured",
+        "provider",
+        "updated_at",
+        "public_identity",
+    }
     assert TOKEN not in resposta.text
     assert CLIENT_TOKEN not in resposta.text
     assert "vault" not in resposta.text.lower()

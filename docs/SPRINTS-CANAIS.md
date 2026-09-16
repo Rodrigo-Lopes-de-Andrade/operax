@@ -558,9 +558,99 @@ exato de colunas. `alert_queue.channel`/`alert_rule.channel` continuam sem
 provedor" é dever do chamador, e a onda 2 precisa do teste. FKs de titular sem
 par `tenant_id` (estilo da base; registrado).
 
-### ⏳ C3, onda 2a — provedor, credencial por canal, Conexões com dois canais — despachada em 15/09/2026
+### ✅ C3, onda 2a — provedor, credencial por canal, Conexões com dois canais — aprovada em 16/09/2026, um ciclo; guardião PASSA
 
-### ⏳ C3, onda 2 — frontend — despachada em 15/09/2026, em paralelo com a 2a
+**O que entrou:** `provedores/telegram.py` — `bot_token` como único campo
+(secreto; o token vai no **caminho da URL** da Bot API, o caso do `z_api` de
+novo: `verification_client()` e `from None`), `verify` por `getMe` → `@bot`,
+`set_webhook`/`delete_webhook`/`webhook_info` com `last_error_message`
+**mascarada antes do corte** (ela pode ecoar a URL do webhook, que carrega o
+`path_token`); `429` é `unreachable`, não veredito sobre o token. Canal como
+dado em `capacidades.py` (`channel_of`, `providers_of`); a credencial desliga
+**só o canal** do provedor que entra — gravar o bot deixa o `meta_cloud` ativo,
+e o `97` prova no banco (linha 1 da §2.2 pela porta da credencial);
+`GET /canais/credencial?canal=`, `ProviderForm.channel`, `CredentialStatus.channel`.
+`GET /canais/conexoes` lê `fn_channel_readiness` e devolve `{whatsapp, telegram}`
+(o estado do bot — `public_identity`, `webhook_url`, `webhook_path_token`,
+saúde — sai por `tenant_scope` com o tenant ligado, porque `app.integration` só
+tem policy de admin e um supervisor veria a função e não o bot). `POST
+/canais/telegram/conectar` (**grava → fecha a transação → `setWebhook`**; recusa
+deixa `disconnected` com frase própria, nunca corpo do provedor) e
+`/desconectar` (`deleteWebhook` **antes** de qualquer escrita; recusa → nada
+muda; sucesso **rotaciona** o `path_token` e o segredo). `API_PUBLIC_URL`
+opcional em `config.py` — presente, exige `https://` sem barra final, ou o
+processo não sobe.
+
+**Revisão, ciclo 1: APROVADA COM BLOQUEIO DE BANCO** (o Docker estava fora; a
+suíte rodou verde depois — `97` com 16 instruções + 2 renderizações do bot e o
+cenário "o bot, com os dois canais ativos lado a lado"). pytest **889**
+(baseline 822). 20 mutações, 19 mortas no pytest e a vigésima morta só pelo
+`97` (a lista exata de colunas de `_TELEGRAM_STATE_SQL`). Fechados antes do
+commit: **regravar o token do bot com webhook registrado** apagava
+`webhook_url` do `config` e deixava a saúde em `connected` — a tela diria
+"pronto" ao lado de "Conectar bot", com o Telegram entregando num caminho que
+o banco não conhece mais; agora a mesma transação grava `disconnected` com
+"token do bot regravado; conecte o bot de novo" (e regravar o WhatsApp não
+toca a saúde do bot). Mais três BAIXOs: a asserção que mata a vigésima
+mutação no pytest, o fixture da máscara com a URL atravessando a posição 200,
+e o `429`.
+
+**Guardião, dez de dez:** o token do bot aparece no log **uma** vez — na
+metade de controle do teste que exige o vazamento com o cliente cru antes de
+exigir a ausência com a defesa; o `webhook_secret` está no cofre (ciphertext ≠
+valor, lido de volta pela chave) e em lugar nenhum do `config`, do estado, da
+auditoria ou do log; a `_TELEGRAM_STATE_SQL` real devolve seis chaves exatas
+sem `bot_token`/`webhook_secret`; `_RECORD_HEALTH_SQL` ligada ao outro tenant
+não avalia a função; `API_PUBLIC_URL` inválida derruba o processo sem
+imprimir o valor; a desativação por canal deixa o outro canal ativo com a
+linha do bot no lugar (`active = false`, sem delete).
+
+**Ação do dono pendente:** `API_PUBLIC_URL` no painel do Railway (`operax-api`) —
+`https`, sem barra final; hoje a URL do Railway, porque `api.fastparks.com.br`
+não resolve. Sem ela, "Conectar bot" responde 422 `no_public_url` e nada é
+registrado, de propósito.
+
+**Decisões registradas:** `webhook_url`/`webhook_path_token` visíveis a qualquer
+membro em `GET /canais/conexoes` — a autenticação do webhook é o header
+secreto, que a 2b tem de conferir **antes do parse** (senão o `path_token`
+vira segredo e isto volta como achado). `deleteWebhook` recusado → nada muda
+(rotacionar sem confirmação deixaria a plataforma entregando num caminho
+morto com a tela dizendo "desconectado").
+
+### ✅ C3, onda 2 — frontend — aprovada em 16/09/2026, um ciclo (1b)
+
+**O que entrou:** a tela de Conexões com **dois cartões, sempre** — WhatsApp e
+Telegram, cada um com o seu vazio, porque os canais coexistem (§2.1) e a tela
+não pode sugerir que um substitui o outro; o cartão do Telegram com o
+`bot_username` como título, saúde por `health_status` em quatro estados
+(`connected`/`disconnected`/`unknown`/nunca medido) com *"desde …"* e
+*"conferido em …"* no fuso do tenant, `health_detail`, e o endereço do webhook
+**como o backend o registrou** (`webhook_url` entrou no contrato; uma tela
+que compusesse o endereço com `NEXT_PUBLIC_API_URL` cai em quatro testes);
+`<Requirements>` com a terceira frase pela flag `requires_recipient_opt_in` e
+a frase de "sem restrição declarada" (a dívida do C1); `telegram-connection.tsx`
+com "Conectar bot"/"Desconectar" para admin — **nenhum "reconectar" em nenhum
+estado** (§7), com teste negativo; dois `<CredentialForm>`, um por canal,
+filtrados por `channel` e nunca por nome. `Channel`, `CHANNELS` e
+`CHANNEL_LABEL` nasceram em `labels.ts` para que **nenhum** outro arquivo de
+`src/` escreva `"telegram"` — a varredura passou a caçar o quarto nome entre
+aspas (a regra da §1.1 ao pé da letra), sem afrouxar o `\b` dos três de
+WhatsApp.
+
+**Uma correção aceita fora da lista:** `useId` em `credential-form.tsx` (3
+linhas) — dois formulários na mesma página com um campo de mesmo nome
+gerariam dois `id` iguais, e o `<label for>` do segundo apontaria para o
+primeiro. É defeito que a instanciação dupla cria, não excesso de escopo.
+
+**Revisão, ciclo 1: APROVADA** — Vitest **837** (baseline 777), prettier,
+`tsc` e lint limpos; 14/14 mutações obrigatórias mortas. Três MÉDIOs de rede
+de teste fechados antes do commit (docstrings que afirmavam mais do que a
+asserção media: o catálogo caindo no primeiro canal preenchido, o badge
+oficial do bot fixo, `health_detail` escondido quando `connected` — o produto
+estava certo nos três, e agora as mutações morrem), e um BAIXO de
+acessibilidade: o "copiado" do botão de copiar não chegava ao leitor de tela,
+porque o `aria-label` fixo é o nome do botão — ganhou região viva própria,
+que só existe quando há desfecho.
 
 ## C4 — Adesão
 

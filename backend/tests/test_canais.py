@@ -1,17 +1,20 @@
 """A tela de Conexões: o que ela nomeia, o que ela não recalcula e o que não vaza.
 
 O gate desta sprint é uma frase: *"3 regras bloqueadas: template
-`deviation_individual` está `pending` na Meta"*. Hoje `fn_whatsapp_readiness`
+`deviation_individual` está `pending` na Meta"*. Hoje `fn_channel_readiness`
 sabe o "3" e não sabe o resto, e é o resto que faz alguém consertar. Então o
 teste central é que a resposta traga **qual** regra e **qual** template — e que o
 "3" da função e o tamanho da lista sejam o mesmo número.
+
+Desde o C3 a tela tem duas linhas (`whatsapp` e `telegram`); esta suíte é a da
+linha de WhatsApp, e a do Telegram é `tests/test_canais_telegram.py`.
 
 ⚠️ O QUE ESTA SUÍTE NÃO PODE PROVAR, E POR ISSO PROVA DE OUTRO JEITO
 Nada aqui toca banco. Que uma regra **inativa** fique de fora da lista é
 propriedade de um `where`, e um stub responde o que lhe mandarem responder. O que
 está ao alcance é a deriva: as cláusulas desta rota são conferidas, como
 conjuntos de tokens, **contra a CTE `blocked` da última migration que define
-`fn_whatsapp_readiness`** — que é quem produz a contagem. Divergência entre os
+`fn_channel_readiness`** — que é quem produz a contagem. Divergência entre os
 dois é exatamente o defeito que o gate teme, e é ela que o teste prende.
 
 Quem executa `_BLOCKED_SQL` e `_READINESS_SQL` contra Postgres de verdade — como
@@ -39,13 +42,15 @@ TENANT_ID = "22222222-2222-4222-8222-222222222222"
 
 
 def readiness(**overrides: Any) -> dict[str, Any]:
-    """A linha das sete colunas da função, menos o `tenant_id`."""
+    """A linha de WhatsApp da função, menos o `tenant_id` e o `channel`."""
     return {
         "provider": "meta_cloud",
         "official": True,
         "templates_total": 4,
         "templates_approved": 3,
         "rules_blocked": 1,
+        "health_status": None,
+        "health_changed_at": None,
         "ready": False,
     } | overrides
 
@@ -59,23 +64,26 @@ def blocked_row(**overrides: Any) -> dict[str, Any]:
 
 
 class StubScope:
-    """Responde o que lhe foi enfileirado e guarda o que foi perguntado."""
+    """Responde pelo assunto da instrução e guarda o que foi perguntado."""
 
-    def __init__(self, linha: dict[str, Any] | None, lista: list[dict[str, Any]]) -> None:
-        self._linha = linha
-        self._lista = lista
+    def __init__(self, answers: dict[str, Any]) -> None:
+        self._answers = answers
         self.statements: list[str] = []
         self.params: list[Any] = []
+        self._current: Any = None
 
     async def execute(self, statement: str, params: Any = None) -> None:
         self.statements.append(statement)
         self.params.append(params)
+        self._current = next(
+            (value for marker, value in self._answers.items() if marker in statement), None
+        )
 
     async def fetchone(self) -> dict[str, Any] | None:
-        return self._linha
+        return self._current
 
     async def fetchall(self) -> list[dict[str, Any]]:
-        return self._lista
+        return self._current or []
 
 
 class StubScopeContext:
@@ -91,17 +99,30 @@ class StubScopeContext:
 
 @pytest.fixture
 def answer(monkeypatch: pytest.MonkeyPatch):
-    """Enfileira a resposta da função e a da lista, e devolve o espião."""
+    """Enfileira a linha de WhatsApp da função e a lista, e devolve o espião do
+    `user_scope`. O `tenant_scope` (a linha do bot) responde vazio: não há bot."""
 
     def install(
         linha: dict[str, Any] | None,
         lista: list[dict[str, Any]] | None = None,
     ) -> StubScope:
-        scope = StubScope(linha, lista or [])
+        scope = StubScope(
+            {
+                "fn_channel_readiness": [linha] if linha is not None else [],
+                "from app.alert_rule": lista or [],
+            }
+        )
         monkeypatch.setattr(canais, "user_scope", lambda tenant: StubScopeContext(scope))
+        monkeypatch.setattr(canais, "tenant_scope", lambda tenant: StubScopeContext(StubScope({})))
         return scope
 
     return install
+
+
+def _whatsapp(client: TestClient, cabecalho: dict[str, str]) -> dict[str, Any]:
+    resposta = client.get("/canais/conexoes", headers=cabecalho)
+    assert resposta.status_code == 200, resposta.text
+    return resposta.json()["whatsapp"]
 
 
 @pytest.fixture
@@ -122,11 +143,7 @@ def test_cliente_sem_provedor_ativo_nao_e_erro(
     resposta = client.get("/canais/conexoes", headers=cabecalho)
 
     assert resposta.status_code == 200
-    corpo = resposta.json()
-    assert corpo["provider"] is None
-    assert corpo["capabilities"] is None
-    assert corpo["blocked"] == []
-    assert corpo["ready"] is False
+    assert resposta.json() == {"whatsapp": None, "telegram": None}
 
 
 def test_sem_provedor_a_lista_nem_e_consultada(
@@ -149,7 +166,7 @@ def test_a_lista_nomeia_a_regra_e_o_template_que_a_travam(
     estado continua invisível como está hoje."""
     answer(readiness(rules_blocked=1), [blocked_row()])
 
-    corpo = client.get("/canais/conexoes", headers=cabecalho).json()
+    corpo = _whatsapp(client, cabecalho)
 
     assert corpo["rules_blocked"] == 1
     assert len(corpo["blocked"]) == 1
@@ -172,7 +189,7 @@ def test_a_contagem_da_funcao_e_o_tamanho_da_lista_sao_o_mesmo_numero(
     ]
     answer(readiness(rules_blocked=len(linhas)), linhas)
 
-    corpo = client.get("/canais/conexoes", headers=cabecalho).json()
+    corpo = _whatsapp(client, cabecalho)
 
     assert corpo["rules_blocked"] == len(corpo["blocked"]) == 3
 
@@ -184,7 +201,7 @@ def test_a_regra_sem_template_nenhum_tambem_entra_na_lista(
     das duas contagens no caso mais fácil de esquecer."""
     answer(readiness(), [blocked_row(template_code=None, meta_status=None)])
 
-    corpo = client.get("/canais/conexoes", headers=cabecalho).json()
+    corpo = _whatsapp(client, cabecalho)
 
     assert corpo["blocked"][0]["template_code"] is None
     assert corpo["blocked"][0]["meta_status"] is None
@@ -198,7 +215,7 @@ def test_template_aprovado_deixa_a_tela_pronta(
     mostrar e `ready` é verdadeiro."""
     answer(readiness(templates_approved=4, rules_blocked=0, ready=True), [])
 
-    corpo = client.get("/canais/conexoes", headers=cabecalho).json()
+    corpo = _whatsapp(client, cabecalho)
 
     assert corpo["blocked"] == []
     assert corpo["rules_blocked"] == 0
@@ -269,15 +286,22 @@ def test_o_predicado_da_lista_e_o_da_cte_da_funcao(
     **última** migration que define a função: a aplicada não se edita, então é
     numa migration nova que a função mudaria sem a rota saber.
     """
-    marcador = "create or replace function public.fn_whatsapp_readiness"
+    marcador = "create or replace function public.fn_channel_readiness"
     funcao = last_migration_with(marcador).split(marcador, 1)[1]
-    join_cte, where_cte = _clauses(funcao.split("blocked as (", 1)[1])
+    cte = funcao.split("blocked as (", 1)[1]
+    join_cte, where_cte = _clauses(cte)
     join_rota, where_rota = _clauses(canais._BLOCKED_SQL)
 
+    # `p.official` e `p.channel = 'whatsapp'` saíram do `where` para o `join
+    # prov` da função (C3): ela só conta na linha de WhatsApp oficial, e na rota
+    # os dois são o `if`. Continuam presos — no lugar em que a função os pôs.
+    prov_on = _conjuncts(_tokens(cte.split("join prov p on", 1)[1].split("left join", 1)[0]))
+    assert ("p.official",) in prov_on
+    assert ("p.channel", "=", "'whatsapp'") in prov_on
     assert ("r.active",) in where_cte
-    assert ("p.official",) in where_cte
+    assert ("p.official",) not in where_cte
     assert join_rota == join_cte
-    assert where_rota == (where_cte - {("p.official",)}) | {("r.tenant_id", "=", "%(tenant_id)s")}
+    assert where_rota == where_cte | {("r.tenant_id", "=", "%(tenant_id)s")}
 
 
 def test_a_lista_nao_deduplica(client: TestClient, cabecalho: dict[str, str], answer: Any) -> None:
@@ -287,7 +311,7 @@ def test_a_lista_nao_deduplica(client: TestClient, cabecalho: dict[str, str], an
 
     repetida = [blocked_row(), blocked_row()]
     answer(readiness(rules_blocked=2), repetida)
-    corpo = client.get("/canais/conexoes", headers=cabecalho).json()
+    corpo = _whatsapp(client, cabecalho)
 
     assert len(corpo["blocked"]) == 2
 
@@ -300,7 +324,7 @@ def test_provedor_nao_oficial_nao_consulta_a_lista(
     linha que `rules_blocked` não conta."""
     scope = answer(readiness(provider="z_api", official=False, rules_blocked=0, ready=True), [])
 
-    corpo = client.get("/canais/conexoes", headers=cabecalho).json()
+    corpo = _whatsapp(client, cabecalho)
 
     assert len(scope.statements) == 1
     assert corpo["blocked"] == []
@@ -316,11 +340,11 @@ def test_as_contagens_saem_da_funcao_e_nao_sao_refeitas(
     primeiro dia em que o predicado da função mudasse."""
     scope = answer(readiness(templates_total=9, templates_approved=2, rules_blocked=1), [])
 
-    corpo = client.get("/canais/conexoes", headers=cabecalho).json()
+    corpo = _whatsapp(client, cabecalho)
 
     assert corpo["templates_total"] == 9
     assert corpo["templates_approved"] == 2
-    assert "fn_whatsapp_readiness" in scope.statements[0]
+    assert "fn_channel_readiness" in scope.statements[0]
     assert not any("count(" in statement for statement in scope.statements)
 
 
@@ -337,7 +361,7 @@ def test_a_contagem_continua_sendo_a_da_funcao_quando_a_lista_discorda(
     """
     answer(readiness(rules_blocked=3), [blocked_row()])
 
-    corpo = client.get("/canais/conexoes", headers=cabecalho).json()
+    corpo = _whatsapp(client, cabecalho)
 
     assert corpo["rules_blocked"] == 3
     assert len(corpo["blocked"]) == 1
@@ -408,7 +432,7 @@ def test_ready_e_o_da_funcao_e_nao_a_lista_vazia(
     com zero regra bloqueada porque não há o que bloquear."""
     answer(readiness(templates_total=0, templates_approved=0, rules_blocked=0, ready=False), [])
 
-    corpo = client.get("/canais/conexoes", headers=cabecalho).json()
+    corpo = _whatsapp(client, cabecalho)
 
     assert corpo["blocked"] == []
     assert corpo["ready"] is False
@@ -431,10 +455,10 @@ def test_as_capacidades_vem_da_matriz_e_chegam_inteiras_na_resposta(
     """`meta_cloud` exige template e não corre risco de banimento; os não
     oficiais, o inverso. É o que a tela usa para escolher qual aviso dar."""
     answer(readiness())
-    oficial = client.get("/canais/conexoes", headers=cabecalho).json()["capabilities"]
+    oficial = _whatsapp(client, cabecalho)["capabilities"]
 
     answer(readiness(provider="uazapi", official=False, rules_blocked=0, ready=True))
-    nao_oficial = client.get("/canais/conexoes", headers=cabecalho).json()["capabilities"]
+    nao_oficial = _whatsapp(client, cabecalho)["capabilities"]
 
     assert oficial == {
         "official": True,
@@ -483,8 +507,11 @@ def test_a_resposta_tem_exatamente_os_campos_do_contrato(
     """Campo novo na tela é decisão, não efeito colateral de um `select *`."""
     answer(readiness(), [blocked_row()])
 
-    corpo = json.loads(client.get("/canais/conexoes", headers=cabecalho).text)
+    tela = json.loads(client.get("/canais/conexoes", headers=cabecalho).text)
 
+    assert set(tela) == {"whatsapp", "telegram"}
+    assert tela["telegram"] is None
+    corpo = tela["whatsapp"]
     assert set(corpo) == {
         "provider",
         "capabilities",

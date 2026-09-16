@@ -58,6 +58,23 @@ As seis instruções novas de `canais.py` compilam e executam aqui:
 * **a leitura sob RLS**: como o owner do tenant A, o `select` do catálogo vê o
   próprio e não vê o do tenant B — nem ligado ao tenant B.
 
+QUARTA PARTE — O BOT (C3, onda 2a), OS DOIS CANAIS LADO A LADO
+Um tenant com `meta_cloud` **e** `telegram` ativos, e o SQL real de `canais.py`:
+
+* **as duas linhas**: `_READINESS_SQL` (agora `fn_channel_readiness`) devolve
+  uma por canal; a do bot nasce `not ready` e sem saúde;
+* **o estado do bot**: `_TELEGRAM_STATE_SQL` lê só as três chaves públicas de
+  `config` e a idade da saúde; `_TELEGRAM_WEBHOOK_SQL` acrescenta o webhook sem
+  apagar `public_identity`;
+* **a saúde pela porta única**: `_RECORD_HEALTH_SQL` grava `connected` e a
+  linha do bot vira `ready`; a mesma medição de novo não move
+  `health_changed_at`, uma diferente move (regra da §7, pela instrução da rota);
+  ligada ao OUTRO tenant, zero linhas e a saúde intacta;
+* **linha 1 da SPEC §2.2 pela porta da credencial**: a `_DEACTIVATE_SQL` do
+  canal `telegram` desliga o bot e **não** o `meta_cloud`; a do canal `whatsapp`
+  desliga o `meta_cloud` e **não** o bot; `_CREDENTIAL_STATUS_SQL` responde por
+  canal.
+
 O valor de teste é uma string óbvia; nenhum segredo real passa por aqui.
 """
 
@@ -98,28 +115,47 @@ T_OUTRO = "7ca70000-0000-0000-0000-0000000000f1"
 T_OWNER = "7c000000-0000-0000-0000-0000000000e1"
 T_OUTRO_OWNER = "7c000000-0000-0000-0000-0000000000f1"
 T_WABA = "102030405060708"
+# O bot: um tenant com os dois canais ativos, um owner, e um segundo tenant só
+# para provar o recorte da saúde.
+B_TENANT = "7ca70000-0000-0000-0000-000000000101"
+B_OUTRO = "7ca70000-0000-0000-0000-000000000102"
+B_OWNER = "7c000000-0000-0000-0000-000000000101"
+B_PATH_TOKEN = "cauda-publica-de-teste-000000000"
+B_WEBHOOK_URL = "https://api.exemplo.test/webhooks/telegram/" + B_PATH_TOKEN
 #: Valores de teste, óbvios de propósito. Nenhum é real.
 VALOR = "valor-de-teste-nao-e-real"
 VALOR2 = "segundo-valor-de-teste-nao-e-real"
 DESCRICAO = "descricao de teste"
 
 
-def whatsapp_providers() -> str:
-    """`'meta_cloud', 'z_api', 'uazapi'` — como `canais.py` e `outbox.py` renderizam o token."""
+def _capacidades():
     caminho = RAIZ / "backend" / "operax" / "alertas" / "capacidades.py"
     spec = importlib.util.spec_from_file_location("capacidades", caminho)
     assert spec is not None and spec.loader is not None
     capacidades = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = capacidades  # `dataclass(slots=True)` procura o módulo aqui
     spec.loader.exec_module(capacidades)
-    return ", ".join(f"'{provider}'" for provider in capacidades.WHATSAPP_PROVIDERS)
+    return capacidades
 
 
-def instrucoes(modulo: pathlib.Path = MODULO) -> dict[str, str]:
+def provider_list(channel: str = "whatsapp") -> str:
+    """`'meta_cloud', 'z_api', 'uazapi'` (ou `'telegram'`) — como `canais.py` e
+    `outbox.py` renderizam o token `{channel_providers}`, por canal."""
+    return ", ".join(f"'{provider}'" for provider in _capacidades().providers_of(channel))
+
+
+def whatsapp_providers() -> str:
+    return provider_list("whatsapp")
+
+
+def instrucoes(modulo: pathlib.Path = MODULO, channel: str = "whatsapp") -> dict[str, str]:
+    """As instruções fixas do módulo, com `{channel_providers}` renderizado para
+    `channel` — o WhatsApp por padrão, porque é o que os três primeiros cenários
+    exercitam; a quarta parte pede as duas renderizações."""
     fonte = modulo.read_text()
     achadas = re.findall(r'^(_?[A-Z][A-Z_]*_SQL) = """(.*?)"""', fonte, re.DOTALL | re.MULTILINE)
-    lista = whatsapp_providers()
-    return {nome: sql.replace("{whatsapp_providers}", lista) for nome, sql in achadas}
+    lista = provider_list(channel)
+    return {nome: sql.replace("{channel_providers}", lista) for nome, sql in achadas}
 
 
 def posicionar(sql: str) -> str:
@@ -813,6 +849,251 @@ rollback;
 """
 
 
+CENARIO_TELEGRAM = """
+begin;
+
+create or replace function pg_temp.assert_eq(rotulo text, obtido text, esperado text)
+returns void language plpgsql as $$
+begin
+  if obtido is distinct from esperado then
+    raise exception 'FALHA [%]: esperado %, obtido %', rotulo, esperado, obtido;
+  end if;
+  raise notice '  ok  % (%)', rotulo, obtido;
+end $$;
+
+insert into auth.users (id, email) values ('{B_OWNER}', 'owner@bot');
+insert into app.tenant (id, slug, name) values
+  ('{B_TENANT}', 'bot-teste', 'Bot'),
+  ('{B_OUTRO}',  'bot-outro', 'Outro');
+insert into app.tenant_member (tenant_id, user_id, role) values ('{B_TENANT}', '{B_OWNER}', 'owner');
+
+-- Os dois canais ativos no mesmo tenant: é a linha 1 da SPEC §2.2, inserida.
+-- `alias = provider`, como a rota grava, para o upsert dela encontrar a linha.
+insert into app.integration (tenant_id, provider, alias, config, active) values
+  ('{B_TENANT}', 'meta_cloud', 'meta_cloud',
+   '{"phone_number_id": "123456789012345", "waba_id": "102030405060708", "public_identity": "FastPark"}', true),
+  ('{B_TENANT}', 'telegram', 'telegram', '{"public_identity": "@FastParkAlertasBot"}', true);
+
+-- Um ponteiro por integração: `configured` exige o `join` com o cofre.
+do $$
+declare n int;
+begin
+  execute $q$with x as ({CREATE_META_TOKEN}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('ponteiro do meta_cloud gravado', n::text, '1');
+  execute $q$with x as ({CREATE_BOT_TOKEN}) select count(*) from x$q$ into n;
+  perform pg_temp.assert_eq('ponteiro do bot gravado', n::text, '1');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- As duas linhas da função, como o owner; o bot nasce sem saúde e não pronto
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  n int;
+  provedores text;
+  bot record;
+  outro int;
+begin
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{B_OWNER}';
+  select count(*), string_agg(provider, ',' order by provider) into n, provedores from ({READINESS}) x;
+  select * into bot from ({READINESS}) x where provider = 'telegram';
+  select count(*) into outro from ({READINESS_OUTRO}) x;
+  reset role;
+
+  perform pg_temp.assert_eq('a função devolve UMA linha por canal ativo', n::text, '2');
+  perform pg_temp.assert_eq('e são o meta_cloud e o bot, lado a lado', provedores, 'meta_cloud,telegram');
+  perform pg_temp.assert_eq('o bot nasce sem medição', coalesce(bot.health_status, '(nulo)'), '(nulo)');
+  perform pg_temp.assert_eq('e sem medição NÃO está pronto', bot.ready::text, 'false');
+  perform pg_temp.assert_eq('o bot não tem template a aprovar', bot.templates_total::text || '/' || bot.rules_blocked::text, '0/0');
+  perform pg_temp.assert_eq('ligada ao outro tenant, a leitura não devolve nada', outro::text, '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- O estado do bot: só as três chaves públicas; o webhook entra sem apagar o resto
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  estado json;
+  chaves text;
+  n int;
+begin
+  select row_to_json(x) into estado from ({STATE}) x;
+  perform pg_temp.assert_eq('o estado vê o bot ativo', (estado is not null)::text, 'true');
+  select string_agg(k, ',' order by k) into chaves from json_object_keys(estado) k;
+  perform pg_temp.assert_eq('e traz só as colunas do contrato', chaves,
+    'health_checked_at,health_detail,id,public_identity,webhook_path_token,webhook_url');
+  perform pg_temp.assert_eq('o @username é o public_identity', estado ->> 'public_identity', '@FastParkAlertasBot');
+  perform pg_temp.assert_eq('sem webhook ainda', coalesce(estado ->> 'webhook_url', '(nulo)'), '(nulo)');
+  perform pg_temp.assert_eq('sem saúde ainda', coalesce(estado ->> 'health_detail', '(nulo)'), '(nulo)');
+
+  select count(*) into n from ({STATE_OUTRO}) x;
+  perform pg_temp.assert_eq('ligado ao outro tenant, o estado não vê o bot', n::text, '0');
+
+  execute $q${WEBHOOK_PATCH}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('o patch do webhook alcança a integração', n::text, '1');
+  select row_to_json(x) into estado from ({STATE}) x;
+  perform pg_temp.assert_eq('o webhook_url ficou', estado ->> 'webhook_url', '{B_WEBHOOK_URL}');
+  perform pg_temp.assert_eq('o path_token ficou', estado ->> 'webhook_path_token', '{B_PATH_TOKEN}');
+  perform pg_temp.assert_eq('e o public_identity NÃO foi apagado pelo patch', estado ->> 'public_identity', '@FastParkAlertasBot');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- A saúde pela porta única — e a regra da §7 pela instrução da rota
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  bot record;
+  primeira timestamptz;
+  n int;
+  estado json;
+begin
+  execute $q${HEALTH_CONNECTED}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('a medição alcança a integração do tenant', n::text, '1');
+
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{B_OWNER}';
+  select * into bot from ({READINESS}) x where provider = 'telegram';
+  reset role;
+  perform pg_temp.assert_eq('connected: o bot está pronto', bot.ready::text, 'true');
+  perform pg_temp.assert_eq('e a função diz connected', bot.health_status, 'connected');
+
+  select row_to_json(x) into estado from ({STATE}) x;
+  perform pg_temp.assert_eq('o estado traz o detail — a frase da rota', estado ->> 'health_detail', 'webhook registrado');
+  perform pg_temp.assert_eq('e a idade da medição', (estado ->> 'health_checked_at' is not null)::text, 'true');
+
+  -- A mesma medição de novo não move o status_changed_at (regra da §7). Como
+  -- no `86`: `now()` é um só na transação inteira, então a linha é recuada uma
+  -- hora à mão para a diferença entre "ficou" e "moveu" ser visível.
+  update app.channel_health
+     set status_changed_at = now() - interval '1 hour', checked_at = now() - interval '1 hour'
+   where tenant_id = '{B_TENANT}';
+  primeira := now() - interval '1 hour';
+  execute $q${HEALTH_CONNECTED}$q$;
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{B_OWNER}';
+  select * into bot from ({READINESS}) x where provider = 'telegram';
+  reset role;
+  perform pg_temp.assert_eq('a mesma medição de novo não move health_changed_at',
+    (bot.health_changed_at = primeira)::text, 'true');
+  perform pg_temp.assert_eq('mas checked_at avança',
+    (select (checked_at = now())::text from app.channel_health where tenant_id = '{B_TENANT}'), 'true');
+
+  -- Ligada ao OUTRO tenant, a integração deste não é alcançada: zero linhas,
+  -- função nunca avaliada, saúde intacta.
+  execute $q${HEALTH_DISCONNECTED_OUTRO}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('outro tenant: a medição não alcança o bot', n::text, '0');
+  perform pg_temp.assert_eq('outro tenant: a saúde continua connected',
+    (select status from app.channel_health where tenant_id = '{B_TENANT}'), 'connected');
+
+  -- Uma medição diferente move.
+  execute $q${HEALTH_DISCONNECTED}$q$;
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{B_OWNER}';
+  select * into bot from ({READINESS}) x where provider = 'telegram';
+  reset role;
+  perform pg_temp.assert_eq('disconnected: o bot deixa de estar pronto', bot.ready::text, 'false');
+  perform pg_temp.assert_eq('e health_changed_at moveu para agora', (bot.health_changed_at = now())::text, 'true');
+  perform pg_temp.assert_eq('o detail é a frase da rota com o código, nada do provedor',
+    (select detail from app.channel_health where tenant_id = '{B_TENANT}'), 'setWebhook recusado: unauthorized');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- Linha 1 da §2.2 pela porta da credencial: cada canal desliga só o seu
+-- ---------------------------------------------------------------------------
+do $$
+declare
+  desligado text;
+  v uuid;
+begin
+  perform pg_temp.assert_eq('status por canal: whatsapp → meta_cloud',
+    (select provider from ({STATUS_WHATSAPP}) x), 'meta_cloud');
+  perform pg_temp.assert_eq('status por canal: telegram → o bot',
+    (select provider from ({STATUS_TELEGRAM}) x), 'telegram');
+
+  execute $q$with x as ({DEACTIVATE_TELEGRAM}) select string_agg(provider, ',') from x$q$ into desligado;
+  perform pg_temp.assert_eq('a desativação do canal telegram devolve SÓ o bot', desligado, 'telegram');
+  perform pg_temp.assert_eq('e o meta_cloud CONTINUA ativo',
+    (select active::text from app.integration where tenant_id = '{B_TENANT}' and provider = 'meta_cloud'), 'true');
+  perform pg_temp.assert_eq('o bot ficou inativo',
+    (select active::text from app.integration where tenant_id = '{B_TENANT}' and provider = 'telegram'), 'false');
+  perform pg_temp.assert_eq('status do canal telegram: nada',
+    (select count(*) from ({STATUS_TELEGRAM}) x)::text, '0');
+  perform pg_temp.assert_eq('status do canal whatsapp: intacto',
+    (select provider from ({STATUS_WHATSAPP}) x), 'meta_cloud');
+
+  -- O upsert da rota religa o bot (uma linha só, pelo alias).
+  execute $q$with x as ({UPSERT_BOT}) select id from x$q$ into v;
+  perform pg_temp.assert_eq('o upsert religa o bot sem segunda linha',
+    (select count(*) from app.integration where tenant_id = '{B_TENANT}' and provider = 'telegram')::text, '1');
+
+  execute $q$with x as ({DEACTIVATE_WHATSAPP}) select string_agg(provider, ',') from x$q$ into desligado;
+  perform pg_temp.assert_eq('a desativação do canal whatsapp devolve SÓ o meta_cloud', desligado, 'meta_cloud');
+  perform pg_temp.assert_eq('e o bot CONTINUA ativo',
+    (select active::text from app.integration where tenant_id = '{B_TENANT}' and provider = 'telegram'), 'true');
+end $$;
+
+rollback;
+"""
+
+
+def telegram_bot(fixas: dict[str, str], fixas_tg: dict[str, str], cofre: dict[str, str]) -> str:
+    """O cenário do bot, com as duas renderizações e o SQL real do cofre."""
+    v_meta = "(select id from app.integration where tenant_id = '{B_TENANT}' and provider = 'meta_cloud')"
+    v_bot = "(select id from app.integration where tenant_id = '{B_TENANT}' and provider = 'telegram')"
+
+    def cria(integracao: str, key: str) -> str:
+        return ligar(
+            cofre["_CREATE_SQL"], tenant_id=B_TENANT, key=key, value=VALOR, description=DESCRICAO
+        ).replace("%(integration_id)s", integracao)
+
+    def saude(tenant: str, status: str, detail: str) -> str:
+        return ligar(fixas["_RECORD_HEALTH_SQL"], tenant_id=tenant, status=status, detail=detail).replace(
+            "%(integration_id)s", v_bot
+        )
+
+    patch = '{"webhook_path_token": "' + B_PATH_TOKEN + '", "webhook_url": "' + B_WEBHOOK_URL + '"}'
+    substituicoes = {
+        "{READINESS}": ligar(fixas["_READINESS_SQL"], tenant_id=B_TENANT),
+        "{READINESS_OUTRO}": ligar(fixas["_READINESS_SQL"], tenant_id=B_OUTRO),
+        "{STATE}": ligar(fixas["_TELEGRAM_STATE_SQL"], tenant_id=B_TENANT, provider="telegram"),
+        "{STATE_OUTRO}": ligar(fixas["_TELEGRAM_STATE_SQL"], tenant_id=B_OUTRO, provider="telegram"),
+        "{WEBHOOK_PATCH}": ligar(fixas["_TELEGRAM_WEBHOOK_SQL"], tenant_id=B_TENANT, patch=patch).replace(
+            "%(integration_id)s", v_bot
+        ),
+        "{HEALTH_CONNECTED}": saude(B_TENANT, "connected", "webhook registrado"),
+        "{HEALTH_DISCONNECTED}": saude(B_TENANT, "disconnected", "setWebhook recusado: unauthorized"),
+        "{HEALTH_DISCONNECTED_OUTRO}": saude(B_OUTRO, "disconnected", "nao deveria gravar"),
+        "{STATUS_WHATSAPP}": ligar(fixas["_CREDENTIAL_STATUS_SQL"], tenant_id=B_TENANT),
+        "{STATUS_TELEGRAM}": ligar(fixas_tg["_CREDENTIAL_STATUS_SQL"], tenant_id=B_TENANT),
+        "{DEACTIVATE_WHATSAPP}": ligar(fixas["_DEACTIVATE_SQL"], tenant_id=B_TENANT),
+        "{DEACTIVATE_TELEGRAM}": ligar(fixas_tg["_DEACTIVATE_SQL"], tenant_id=B_TENANT),
+        "{UPSERT_BOT}": ligar(
+            fixas["_UPSERT_INTEGRATION_SQL"],
+            tenant_id=B_TENANT,
+            provider="telegram",
+            config='{"public_identity": "@FastParkAlertasBot"}',
+        ),
+        "{CREATE_META_TOKEN}": cria(v_meta, "token"),
+        "{CREATE_BOT_TOKEN}": cria(v_bot, "bot_token"),
+    }
+    script = CENARIO_TELEGRAM
+    for marcador, texto in substituicoes.items():
+        script = script.replace(marcador, texto)
+    for nome, valor in {
+        "{B_TENANT}": B_TENANT,
+        "{B_OUTRO}": B_OUTRO,
+        "{B_OWNER}": B_OWNER,
+        "{B_PATH_TOKEN}": B_PATH_TOKEN,
+        "{B_WEBHOOK_URL}": B_WEBHOOK_URL,
+    }.items():
+        script = script.replace(nome, valor)
+    return script
+
+
 def templates(fixas: dict[str, str]) -> str:
     """O cenário dos templates, com o SQL real de `canais.py` ligado aos valores."""
     corpo_ok = "FastPark: {{1}} com {{2}} ocorrencias."
@@ -1001,15 +1282,19 @@ def credencial(fixas: dict[str, str], cofre: dict[str, str]) -> str:
 
 def main() -> None:
     fixas = instrucoes()
+    fixas_tg = instrucoes(channel="telegram")
     cofre = instrucoes(COFRE)
     esperadas = {
         "_READINESS_SQL",
         "_BLOCKED_SQL",
+        "_TELEGRAM_STATE_SQL",
         "_PERMISSION_SQL",
         "_CREDENTIAL_STATUS_SQL",
         "_DEACTIVATE_SQL",
         "_UPSERT_INTEGRATION_SQL",
         "_AUDIT_SQL",
+        "_TELEGRAM_WEBHOOK_SQL",
+        "_RECORD_HEALTH_SQL",
         "_TEMPLATES_SQL",
         "_TEMPLATE_UPSERT_SQL",
         "_OFFICIAL_INTEGRATION_SQL",
@@ -1024,18 +1309,29 @@ def main() -> None:
     if set(cofre) != esperadas_cofre:
         print(f"  ✖ esperava {sorted(esperadas_cofre)} em vault.py, achei {sorted(cofre)}")
         sys.exit(1)
+    # As duas que existem por canal: a renderização do bot também tem de compilar.
+    por_canal = {nome: fixas_tg[nome] for nome in ("_CREDENTIAL_STATUS_SQL", "_DEACTIVATE_SQL")}
+    if any("{channel_providers}" in sql for sql in (*fixas.values(), *fixas_tg.values())):
+        print("  ✖ sobrou um `{channel_providers}` sem renderizar")
+        sys.exit(1)
 
     problemas: list[str] = []
-    for origem, lote in (("canais.py", fixas), ("vault.py", cofre)):
+    for origem, lote in (("canais.py", fixas), ("canais.py[telegram]", por_canal), ("vault.py", cofre)):
         for nome, sql in lote.items():
             r = psql(["-c", f"prepare p as {posicionar(sql)}"])
             if r.returncode != 0:
-                problemas.append(f"{origem}:{nome} não compila: {r.stderr.strip().splitlines()[0]}")
+                # `stderr` vazio é o psql que nem subiu (wrapper sem Docker):
+                # a primeira linha de qualquer saída é melhor que um IndexError.
+                saida = (r.stderr.strip() or r.stdout.strip() or "(sem saída)").splitlines()[0]
+                problemas.append(f"{origem}:{nome} não compila: {saida}")
     if problemas:
         for p in problemas:
             print(f"  ✖ {p}")
         sys.exit(1)
-    print(f"  instruções fixas compiladas: {len(fixas)} de canais.py, {len(cofre)} de vault.py")
+    print(
+        f"  instruções fixas compiladas: {len(fixas)} de canais.py "
+        f"(+{len(por_canal)} na renderização do bot), {len(cofre)} de vault.py"
+    )
 
     script = (
         CENARIO.replace("{USUARIO}", USUARIO)
@@ -1053,8 +1349,11 @@ def main() -> None:
     print("\n--- os templates, contra o gatilho, o upsert e a policy de verdade")
     rodar(templates(fixas))
 
+    print("\n--- o bot, com os dois canais ativos lado a lado")
+    rodar(telegram_bot(fixas, fixas_tg, cofre))
+
     print("\n================================================")
-    print(" TELA DE CONEXÕES, CREDENCIAL E TEMPLATES: TODOS OS TESTES OK")
+    print(" TELA DE CONEXÕES, CREDENCIAL, TEMPLATES E BOT: TODOS OS TESTES OK")
     print("================================================")
 
 

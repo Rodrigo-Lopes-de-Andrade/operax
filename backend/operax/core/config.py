@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     # Exact origins of the dashboard. With allow_credentials, "*" is forbidden.
     cors_origins: Annotated[tuple[str, ...], NoDecode] = ("http://localhost:3000",)
 
+    # The public https address of THIS API, no trailing slash — what the Telegram
+    # platform calls back on (`{API_PUBLIC_URL}/webhooks/telegram/{path_token}`).
+    # Optional on purpose: without it the process runs and "Conectar o bot"
+    # answers 422 `no_public_url`, instead of registering a webhook nobody
+    # reaches. Empty is absent — the `.env.example` lists it blank.
+    api_public_url: str | None = None
+
     # Bucket privado do Storage onde o arquivo importado fica guardado. Privado
     # não é opinião: o arquivo carrega nome, matrícula e, conforme o template,
     # salário.
@@ -75,6 +82,15 @@ class Settings(BaseSettings):
     def _reject_wildcard(cls, value: tuple[str, ...]) -> tuple[str, ...]:
         if "*" in value:
             raise ValueError("CORS_ORIGINS cannot contain '*': the API answers with credentials")
+        return value
+
+    @field_validator("api_public_url", mode="before")
+    @classmethod
+    def _public_url_shape(cls, value: object) -> object:
+        if value is None or value == "":
+            return None
+        if not isinstance(value, str) or not value.startswith("https://") or value.endswith("/"):
+            raise ValueError("API_PUBLIC_URL must start with https:// and carry no trailing slash")
         return value
 
     @model_validator(mode="after")

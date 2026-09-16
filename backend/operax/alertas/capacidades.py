@@ -51,6 +51,7 @@ Collapsing the two is how the anti-ban guard gets switched off by a rename.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 
 
 class UnknownProviderError(LookupError):
@@ -61,6 +62,10 @@ class UnknownProviderError(LookupError):
     has no restriction" is how a number gets banned, and a channel the catalogue
     does not know is a channel nobody decided about yet.
     """
+
+
+class UnknownChannelError(LookupError):
+    """A channel nobody declared here. Same reasoning as `UnknownProviderError`."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -108,6 +113,25 @@ WHATSAPP_PROVIDERS: tuple[str, ...] = ("meta_cloud", "z_api", "uazapi")
 #: `integration_telegram_unico_ativo`, sibling of the WhatsApp one.
 CHANNEL_PROVIDERS: tuple[str, ...] = (*WHATSAPP_PROVIDERS, "telegram")
 
+#: The channel a provider carries — the axis the two sibling exclusivity
+#: indexes are drawn on. `whatsapp` is three providers behind one index;
+#: `telegram` is one provider behind the other. A route that switches a
+#: tenant's provider switches it WITHIN its channel: disabling "every active
+#: channel provider" when a bot token is saved would be the bug of SPEC-CANAIS
+#: §2.1 — *"liguei o Telegram e o WhatsApp desligou"* — through the credential
+#: door instead of the index. `channel_of` and `providers_of` are that axis as
+#: data, so nobody else needs to know which name is which.
+Channel = Literal["whatsapp", "telegram"]
+
+WHATSAPP_CHANNEL: Channel = "whatsapp"
+TELEGRAM_CHANNEL: Channel = "telegram"
+CHANNELS: tuple[Channel, ...] = (WHATSAPP_CHANNEL, TELEGRAM_CHANNEL)
+
+_PROVIDERS_OF: dict[Channel, tuple[str, ...]] = {
+    WHATSAPP_CHANNEL: WHATSAPP_PROVIDERS,
+    TELEGRAM_CHANNEL: ("telegram",),
+}
+
 #: ⛔ The one place in the backend that spells these names. Everything else asks.
 #:
 #: The two unofficial ones *are* the conservative assumption rather than a copy of
@@ -141,4 +165,25 @@ def capabilities_for(provider: str) -> ProviderCapabilities:
         raise UnknownProviderError(
             f"provider {provider!r} is not in the capability matrix; "
             f"the declared ones are {', '.join(sorted(_CAPABILITIES))}"
+        ) from None
+
+
+def channel_of(provider: str) -> Channel:
+    """The channel this provider carries, or a refusal to guess."""
+    for channel, providers in _PROVIDERS_OF.items():
+        if provider in providers:
+            return channel
+    raise UnknownProviderError(
+        f"provider {provider!r} carries no declared channel; "
+        f"the declared ones are {', '.join(sorted(CHANNEL_PROVIDERS))}"
+    )
+
+
+def providers_of(channel: str) -> tuple[str, ...]:
+    """The providers that carry `channel` — the predicate of its exclusivity index."""
+    try:
+        return _PROVIDERS_OF[channel]
+    except KeyError:
+        raise UnknownChannelError(
+            f"channel {channel!r} is not declared; the declared ones are {', '.join(CHANNELS)}"
         ) from None

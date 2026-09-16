@@ -3,7 +3,34 @@
 `public.fn_whatsapp_readiness` (migration 14) sabe dizer desde sempre que o
 cliente está bloqueado e por quê. Ninguém a chama. Diagnóstico existente e
 invisível é diagnóstico que não existe, e é isso — não uma tela nova — que esta
-rota conserta.
+rota conserta. Desde o C3 quem responde é `public.fn_channel_readiness`
+(migration `ch_readiness_fn`): uma linha por canal ativo, WhatsApp e Telegram
+lado a lado — os dois canais coexistem por desenho (SPEC-CANAIS §2.1, §8).
+
+DOIS CANAIS, UMA CREDENCIAL POR CANAL
+`channel_of(provider)` decide de qual canal um provedor é, e é por canal que a
+credencial desliga o que estava ativo antes do upsert: gravar o token do bot
+desliga o bot anterior, e **só** ele. Desligar "todo provedor de canal ativo"
+aqui seria o bug *"liguei o Telegram e o WhatsApp desligou"* (§2.1) pela porta
+da credencial, com o índice irmão intacto e a suíte de banco verde.
+
+O BOT — SPEC-CANAIS §6, A PARTE QUE É REGISTRO
+Conectar grava primeiro e chama a plataforma depois: `webhook_path_token` e
+`webhook_url` em `config`, `webhook_secret` no cofre, e só com a transação
+fechada o `setWebhook`. A ordem é deliberada — um `setWebhook` que passou e uma
+gravação que falhou deixaria o Telegram apontando para um caminho que o banco
+não conhece. Recusa da plataforma vira saúde `disconnected` com uma frase
+**desta rota** (nunca o corpo do provedor) e 422 com o código. Desconectar faz o
+inverso: `deleteWebhook` fora de transação e, se passou, **rotaciona** o
+`path_token` e o segredo — reconectar não devolve o endereço antigo. Nada aqui
+religa sozinho (§7). O endpoint que recebe o webhook é a onda 2b.
+
+`bot_username`, o estado do webhook e a idade da saúde saem de
+`app.integration.config` e `app.channel_health` por `tenant_scope`, com o
+`tenant_id` ligado — o mesmo caminho pelo qual `GET /canais/credencial` já lê
+`public_identity` para qualquer membro. `app.integration` só tem a policy
+`integration_admin` (`util.is_admin`, migration 09): como o usuário, um
+supervisor veria a linha do bot na função e nada do bot ao lado dela.
 
 POR QUE CAMINHO 2, SE A FUNÇÃO JÁ ATENDE O NAVEGADOR
 A função sim: é `security definer`, recortada por `util.user_tenants()` e já
@@ -66,26 +93,38 @@ from __future__ import annotations
 
 import logging
 import re
+import secrets
 from collections.abc import AsyncIterator, Mapping
 from datetime import UTC, datetime
 from typing import Annotated, Any
 
 import httpx
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import JSONResponse
 from psycopg import errors
 from psycopg.rows import DictRow
 from psycopg.types.json import Jsonb
 
-from operax.alertas.capacidades import WHATSAPP_PROVIDERS, capabilities_for
-from operax.alertas.provedores import PROVIDERS, meta_cloud
+from operax.alertas.capacidades import (
+    CHANNEL_PROVIDERS,
+    CHANNELS,
+    TELEGRAM_CHANNEL,
+    WHATSAPP_CHANNEL,
+    Channel,
+    ProviderCapabilities,
+    capabilities_for,
+    channel_of,
+    providers_of,
+)
+from operax.alertas.provedores import PROVIDERS, meta_cloud, telegram
 from operax.alertas.provedores.base import (
     FieldError,
     InvalidCredentialError,
     check_fields,
     verification_client,
 )
-from operax.core.tenant import TenantContext, tenant_scope, user_scope
+from operax.core.config import get_settings
+from operax.core.tenant import TenantContext, TenantScope, tenant_scope, user_scope
 from operax.core.vault import read_secret, store_secret
 from server.deps import CurrentTenant
 from server.models import (
@@ -96,29 +135,37 @@ from server.models import (
     CredentialStatus,
     FieldForm,
     ProviderForm,
+    TelegramChannel,
     TemplateRow,
     TemplateSyncResult,
     TemplateWrite,
+    WhatsAppChannel,
 )
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/canais", tags=["canais"])
 
-#: As sete colunas da função, menos o `tenant_id` que já é o do token.
+#: Uma linha por integração ativa de canal do tenant — as colunas da função,
+#: menos `tenant_id` (é o do token) e `channel` (a rota pergunta à matriz, com
+#: `channel_of`, em vez de confiar na coluna: provedor que a matriz não conhece
+#: derruba a tela em vez de virar linha de canal nenhum).
 _READINESS_SQL = """
-    select provider, official, templates_total, templates_approved, rules_blocked, ready
-    from public.fn_whatsapp_readiness()
+    select provider, official, templates_total, templates_approved, rules_blocked,
+           health_status, health_changed_at, ready
+    from public.fn_channel_readiness()
     where tenant_id = %(tenant_id)s
 """
 
-#: ⚠️ ESTE `where` É O MESMO DA CTE `blocked` DE `fn_whatsapp_readiness`, CLÁUSULA
-#: POR CLÁUSULA — menos `p.official`, que aqui é o `if` na rota. Regra ligada,
-#: canal que alcança WhatsApp, e template que não está aprovado — incluindo a
-#: regra que não aponta para template nenhum (`m.id is null`), que a função conta
-#: e que é o caso mais fácil de esquecer aqui. Qualquer diferença entre os dois
-#: predicados aparece como contagem que a lista não sustenta. `tests/test_canais.py`
-#: confere as cláusulas contra a última migration que define a função, e
-#: `scripts/97_teste_canais.py` executa as duas contra o banco.
+#: ⚠️ ESTE `where` É O MESMO DA CTE `blocked` DE `fn_channel_readiness`, CLÁUSULA
+#: POR CLÁUSULA — menos `p.official` e `p.channel = 'whatsapp'`, que na função
+#: estão no `join prov` e aqui são o `if` na rota (a lista só é consultada para
+#: a linha de WhatsApp oficial). Regra ligada, canal que alcança WhatsApp, e
+#: template que não está aprovado — incluindo a regra que não aponta para
+#: template nenhum (`m.id is null`), que a função conta e que é o caso mais fácil
+#: de esquecer aqui. Qualquer diferença entre os dois predicados aparece como
+#: contagem que a lista não sustenta. `tests/test_canais.py` confere as cláusulas
+#: contra a última migration que define a função, e `scripts/97_teste_canais.py`
+#: executa as duas contra o banco.
 #:
 #: Sem `distinct`, de propósito: o mesmo `code` em dois idiomas casa duas vezes no
 #: `left join` e a função conta as duas. Deduplicar aqui quebraria o par.
@@ -139,27 +186,83 @@ _BLOCKED_SQL = """
 """
 
 
-@router.get("/conexoes")
-async def connections(tenant: CurrentTenant) -> ConnectionsScreen:
-    """O provedor ativo do cliente, a saúde do canal e o que está travando o envio."""
+#: O que a linha de Telegram precisa além da função: a identidade pública do
+#: bot, o estado do webhook e a idade da saúde. `tenant_scope`, pelo motivo do
+#: docstring; o recorte é o `%(tenant_id)s`. Só as três chaves de `config` que
+#: são públicas saem daqui — nem `vault_id`, nem `config` inteiro.
+_TELEGRAM_STATE_SQL = """
+    select i.id,
+           i.config ->> 'public_identity' as public_identity,
+           i.config ->> 'webhook_url' as webhook_url,
+           i.config ->> 'webhook_path_token' as webhook_path_token,
+           h.checked_at as health_checked_at,
+           h.detail as health_detail
+    from app.integration i
+    left join app.channel_health h on h.integration_id = i.id
+    where i.tenant_id = %(tenant_id)s
+      and i.active
+      and i.provider = %(provider)s
+"""
+
+
+def _capabilities(capabilities: ProviderCapabilities) -> ChannelCapabilities:
+    return ChannelCapabilities(
+        official=capabilities.official,
+        requires_templates=capabilities.requires_templates,
+        ban_risk=capabilities.ban_risk,
+        requires_recipient_opt_in=capabilities.requires_recipient_opt_in,
+    )
+
+
+def _whatsapp(row: DictRow, blocked: list[DictRow]) -> WhatsAppChannel:
+    return WhatsAppChannel(
+        provider=row["provider"],
+        capabilities=_capabilities(capabilities_for(row["provider"])),
+        templates_total=row["templates_total"],
+        templates_approved=row["templates_approved"],
+        rules_blocked=row["rules_blocked"],
+        ready=row["ready"],
+        blocked=[BlockedAlertRule(**linha) for linha in blocked],
+    )
+
+
+def _telegram(row: DictRow, state: Mapping[str, Any]) -> TelegramChannel:
+    return TelegramChannel(
+        provider=row["provider"],
+        capabilities=_capabilities(capabilities_for(row["provider"])),
+        bot_username=state.get("public_identity"),
+        webhook_configured=state.get("webhook_url") is not None,
+        webhook_url=state.get("webhook_url"),
+        webhook_path_token=state.get("webhook_path_token"),
+        health_status=row["health_status"],
+        health_checked_at=state.get("health_checked_at"),
+        health_changed_at=row["health_changed_at"],
+        health_detail=state.get("health_detail"),
+        ready=row["ready"],
+    )
+
+
+async def _connections(tenant: TenantContext) -> ConnectionsScreen:
+    """A tela inteira, relida — é o que o `GET` devolve e o que conectar e
+    desconectar devolvem depois de agir."""
     async with user_scope(tenant) as scope:
         await scope.execute(_READINESS_SQL, {"tenant_id": str(tenant.tenant_id)})
-        readiness = await scope.fetchone()
-
-        if readiness is None:
-            # Cliente sem provedor de WhatsApp ativo. Não é 404: a tela existe
-            # para dizer justamente isso, e é o estado da produção hoje.
-            return ConnectionsScreen()
+        # Fail-closed: provedor que a matriz não conhece levanta aqui em vez de
+        # virar "canal sem restrição" na tela de quem decide ligar uma regra.
+        rows: dict[Channel, DictRow] = {
+            channel_of(row["provider"]): row for row in await scope.fetchall()
+        }
+        whatsapp = rows.get(WHATSAPP_CHANNEL)
 
         blocked: list[DictRow] = []
-        if readiness["official"]:
-            # A CTE da função só conta regra bloqueada quando o provedor é o
-            # oficial — é ele que recusa template não aprovado. Perguntar fora
-            # disso devolveria linha que `rules_blocked` não conta.
+        if whatsapp is not None and whatsapp["official"]:
+            # A CTE da função só conta regra bloqueada quando o provedor de
+            # WhatsApp é o oficial — é ele que recusa template não aprovado.
+            # Perguntar fora disso devolveria linha que `rules_blocked` não conta.
             await scope.execute(_BLOCKED_SQL, {"tenant_id": str(tenant.tenant_id)})
             blocked = await scope.fetchall()
 
-    if readiness["rules_blocked"] != len(blocked):
+    if whatsapp is not None and whatsapp["rules_blocked"] != len(blocked):
         # Duas leituras do mesmo fato que discordam. A tela entrega as duas como
         # vieram — a contagem é a que o gate de prontidão usa e a lista é o que
         # há para mostrar — e o sintoma fica no log em vez de mudo. Não levanta:
@@ -167,31 +270,35 @@ async def connections(tenant: CurrentTenant) -> ConnectionsScreen:
         # meio dos dois statements produz exatamente esta diferença por um
         # instante, sem que nada esteja errado.
         logger.warning(
-            "canais: fn_whatsapp_readiness conta %d regra(s) bloqueada(s) e a lista "
+            "canais: fn_channel_readiness conta %d regra(s) bloqueada(s) e a lista "
             "traz %d para o tenant %s",
-            readiness["rules_blocked"],
+            whatsapp["rules_blocked"],
             len(blocked),
             tenant.tenant_id,
         )
 
-    # Fail-closed: provedor que a matriz não conhece levanta aqui em vez de
-    # virar "canal sem restrição" na tela de quem decide ligar uma regra.
-    capabilities = capabilities_for(readiness["provider"])
+    bot = rows.get(TELEGRAM_CHANNEL)
+    state: Mapping[str, Any] = {}
+    if bot is not None:
+        async with tenant_scope(tenant) as bound:
+            # `or {}`: a função viu o bot ativo uma transação atrás; se outra
+            # sessão o desligou no meio, a linha vem sem bot em vez de 500.
+            state = (await _bot_state(bound)) or {}
 
     return ConnectionsScreen(
-        provider=readiness["provider"],
-        capabilities=ChannelCapabilities(
-            official=capabilities.official,
-            requires_templates=capabilities.requires_templates,
-            ban_risk=capabilities.ban_risk,
-            requires_recipient_opt_in=capabilities.requires_recipient_opt_in,
-        ),
-        templates_total=readiness["templates_total"],
-        templates_approved=readiness["templates_approved"],
-        rules_blocked=readiness["rules_blocked"],
-        ready=readiness["ready"],
-        blocked=[BlockedAlertRule(**row) for row in blocked],
+        whatsapp=_whatsapp(whatsapp, blocked) if whatsapp is not None else None,
+        telegram=_telegram(bot, state) if bot is not None else None,
     )
+
+
+@router.get("/conexoes")
+async def connections(tenant: CurrentTenant) -> ConnectionsScreen:
+    """Os canais ativos do cliente, a saúde de cada um e o que está travando o envio.
+
+    Cliente sem canal nenhum não é 404: a tela existe para dizer justamente
+    isso, e é o estado da produção hoje.
+    """
+    return await _connections(tenant)
 
 
 # ---------------------------------------------------------------------------
@@ -220,26 +327,42 @@ _REFUSALS = {
         "A credencial da Cloud API não está gravada com o ID da WABA. "
         "Grave-a em Conexões antes de sincronizar."
     ),
+    # A do bot, recusada antes de qualquer HTTP.
+    "no_public_url": (
+        "O endereço público da API (API_PUBLIC_URL) não está configurado, e o "
+        "Telegram não teria para onde entregar. Nada foi alterado."
+    ),
+}
+
+#: `no_credential` do bot: mesmo código, frase própria — a de cima fala da WABA.
+_SEM_BOT_CREDENCIAL = "O token do bot não está gravado. Grave-o em Conexões antes de conectar."
+
+#: A frase de cada recusa da plataforma ao registrar ou remover o webhook. São
+#: os mesmos três códigos de `verify`, com outra frase: aqui não é a credencial
+#: que está sendo gravada, e "nada foi gravado" seria falso depois de conectar
+#: — a integração fica com o `webhook_url` e a saúde vai a `disconnected`.
+_WEBHOOK_REFUSALS = {
+    "unauthorized": "O Telegram recusou o token do bot. Confira a credencial em Conexões.",
+    "unreachable": "Não foi possível falar com o Telegram agora. Tente de novo em instantes.",
+    "malformed": "O Telegram respondeu de um jeito que este sistema não reconhece.",
 }
 
 #: Teto da identidade pública gravada em `config` e devolvida pelo `GET`. É
 #: string do provedor, sem limite do lado de lá; aqui vira uma frase de tela.
 _IDENTITY_MAX_CHARS = 120
 
-#: A mesma lista renderizada de `outbox._PROVIDER_SQL`: o índice parcial da
-#: migration 14 é escrito para a forma `in (...)`, e `{whatsapp_providers}` é o
-#: único token que não é do psycopg — `scripts/97_teste_canais.py` o renderiza
-#: do mesmo jeito para compilar e executar o texto real.
-_WHATSAPP_PROVIDER_LIST = ", ".join(f"'{provider}'" for provider in WHATSAPP_PROVIDERS)
-
 _PERMISSION_SQL = """
     select util.is_admin(%(tenant_id)s) as admin
 """
 
-#: O estado da credencial: só o provedor ativo **com** ponteiro. O `join` é
-#: interno de propósito — integração ativa sem segredo é canal escolhido e
-#: credencial não gravada, e `configured` tem de dizer o segundo. Nem `vault_id`
-#: nem `config` inteiro saem daqui: a chave `public_identity` é a única lida.
+#: O estado da credencial de UM canal: só o provedor ativo desse canal **com**
+#: ponteiro. O `join` é interno de propósito — integração ativa sem segredo é
+#: canal escolhido e credencial não gravada, e `configured` tem de dizer o
+#: segundo. Nem `vault_id` nem `config` inteiro saem daqui: a chave
+#: `public_identity` é a única lida. `{channel_providers}` é o único token que
+#: não é do psycopg: renderizado uma vez por canal, abaixo, com a lista de
+#: `providers_of` — a mesma técnica de `outbox._PROVIDER_SQL`, e a que
+#: `scripts/97_teste_canais.py` repete para compilar e executar o texto real.
 _CREDENTIAL_STATUS_SQL = """
     select i.provider,
            i.config ->> 'public_identity' as public_identity,
@@ -248,23 +371,36 @@ _CREDENTIAL_STATUS_SQL = """
     join app.integration_secret s on s.integration_id = i.id
     where i.tenant_id = %(tenant_id)s
       and i.active
-      and i.provider in ({whatsapp_providers})
+      and i.provider in ({channel_providers})
     group by i.id, i.provider, i.config
-""".replace("{whatsapp_providers}", _WHATSAPP_PROVIDER_LIST)
+"""
 
-#: Desliga TODO WhatsApp ativo do tenant, e não só o de outro provedor: o
-#: índice parcial `integration_whatsapp_unico_ativo` é conferido no `insert` do
-#: upsert abaixo, e uma linha ativa do mesmo provedor com outro `alias` (o que
-#: um seed à mão produz) o faria estourar. O upsert religa exatamente uma. O
-#: `returning` é o que a auditoria grava como `antes`.
+#: Desliga TODO provedor ativo DO CANAL, e não só o de outro provedor: o índice
+#: parcial do canal (`integration_whatsapp_unico_ativo` ou o irmão
+#: `integration_telegram_unico_ativo`) é conferido no `insert` do upsert abaixo,
+#: e uma linha ativa do mesmo provedor com outro `alias` (o que um seed à mão
+#: produz) o faria estourar. O upsert religa exatamente uma. O `returning` é o
+#: que a auditoria grava como `antes`. ⛔ Só o canal: o WhatsApp ativo sobrevive
+#: à gravação do bot, e vice-versa (SPEC-CANAIS §2.2, linha 1).
 _DEACTIVATE_SQL = """
     update app.integration
        set active = false
      where tenant_id = %(tenant_id)s
        and active
-       and provider in ({whatsapp_providers})
-    returning provider
-""".replace("{whatsapp_providers}", _WHATSAPP_PROVIDER_LIST)
+       and provider in ({channel_providers})
+    returning provider,
+              coalesce(jsonb_typeof(config -> 'webhook_url') = 'string', false) as had_webhook
+"""
+
+
+def _render(sql: str, channel: Channel) -> str:
+    return sql.replace(
+        "{channel_providers}", ", ".join(f"'{provider}'" for provider in providers_of(channel))
+    )
+
+
+_CREDENTIAL_STATUS_BY_CHANNEL = {c: _render(_CREDENTIAL_STATUS_SQL, c) for c in CHANNELS}
+_DEACTIVATE_BY_CHANNEL = {c: _render(_DEACTIVATE_SQL, c) for c in CHANNELS}
 
 #: `alias = provider`, como a integração `secullum` de produção (alias
 #: `'secullum'`): a chave única da migration 09 é `(tenant_id, provider, alias)`
@@ -298,15 +434,10 @@ HttpDep = Annotated[httpx.AsyncClient, Depends(get_http_client)]
 
 
 def _form(provider: str) -> ProviderForm:
-    capabilities = capabilities_for(provider)
     return ProviderForm(
         provider=provider,
-        capabilities=ChannelCapabilities(
-            official=capabilities.official,
-            requires_templates=capabilities.requires_templates,
-            ban_risk=capabilities.ban_risk,
-            requires_recipient_opt_in=capabilities.requires_recipient_opt_in,
-        ),
+        channel=channel_of(provider),
+        capabilities=_capabilities(capabilities_for(provider)),
         fields=[
             FieldForm(
                 name=spec.name,
@@ -323,10 +454,11 @@ def _form(provider: str) -> ProviderForm:
     )
 
 
-def _status(row: DictRow | None) -> CredentialStatus:
+def _status(row: DictRow | None, channel: Channel) -> CredentialStatus:
     if row is None:
-        return CredentialStatus(configured=False)
+        return CredentialStatus(channel=channel, configured=False)
     return CredentialStatus(
+        channel=channel,
         configured=True,
         provider=row["provider"],
         updated_at=row["updated_at"],
@@ -356,22 +488,27 @@ async def _require_admin(tenant: TenantContext, detail: str = _SEM_PERMISSAO) ->
 
 @router.get("/provedores")
 async def provider_forms(tenant: CurrentTenant) -> list[ProviderForm]:
-    """O formulário de cada provedor de WhatsApp, na ordem da matriz (o oficial
-    primeiro). Qualquer membro: é a descrição de um formulário, não um dado."""
-    return [_form(provider) for provider in WHATSAPP_PROVIDERS]
+    """O formulário de cada provedor de canal, na ordem da matriz (os três de
+    WhatsApp, o oficial primeiro; depois o bot), cada um dizendo de que canal é.
+    Qualquer membro: é a descrição de um formulário, não um dado."""
+    return [_form(provider) for provider in CHANNEL_PROVIDERS]
 
 
 @router.get("/credencial")
-async def credential_status(tenant: CurrentTenant) -> CredentialStatus:
-    """Que a credencial existe, de qual provedor e desde quando — nunca qual é.
+async def credential_status(
+    tenant: CurrentTenant,
+    channel: Annotated[Channel, Query(alias="canal")] = WHATSAPP_CHANNEL,
+) -> CredentialStatus:
+    """Que a credencial do canal existe, de qual provedor e desde quando — nunca
+    qual é. `canal` default WhatsApp, para o painel de hoje não quebrar.
 
     `tenant_scope`, porque a tabela de ponteiros não tem policy; o recorte é o
     `%(tenant_id)s` do `join`. Qualquer membro do tenant, como `/conexoes`.
     """
     async with tenant_scope(tenant) as bound:
-        await bound.execute(_CREDENTIAL_STATUS_SQL, {})
+        await bound.execute(_CREDENTIAL_STATUS_BY_CHANNEL[channel], {})
         row = await bound.fetchone()
-    return _status(row)
+    return _status(row, channel)
 
 
 @router.post("/credencial")
@@ -383,15 +520,17 @@ async def save_credential(
     A ordem é o contrato. (1) `util.is_admin` como o usuário; (2) provedor e
     formato de cada campo, antes de qualquer HTTP; (3) o provedor, fora de
     transação, que devolve só a identidade pública; (4) uma transação: desliga o
-    WhatsApp ativo, upsert da integração com os campos não-secretos em `config`
-    (decidido por `FieldSpec.secret`, aqui), um segredo no cofre por campo
-    secreto, e a auditoria com as **chaves** — nunca os valores.
+    que estava ativo **no canal do provedor** — e só nele —, upsert da
+    integração com os campos não-secretos em `config` (decidido por
+    `FieldSpec.secret`, aqui), um segredo no cofre por campo secreto, e a
+    auditoria com as **chaves** — nunca os valores.
     """
     await _require_admin(tenant)
 
     module = PROVIDERS.get(request.provider)
     if module is None:
         return _refuse("Provedor desconhecido.", "unknown_provider")
+    channel = channel_of(request.provider)
 
     try:
         fields = check_fields(module.FIELDS, request.fields)
@@ -429,8 +568,10 @@ async def save_credential(
     config["public_identity"] = public_identity
 
     async with tenant_scope(tenant) as bound:
-        await bound.execute(_DEACTIVATE_SQL, {})
-        previous = [linha["provider"] for linha in await bound.fetchall()]
+        await bound.execute(_DEACTIVATE_BY_CHANNEL[channel], {})
+        deactivated = await bound.fetchall()
+        previous = [linha["provider"] for linha in deactivated]
+        had_webhook = any(linha["had_webhook"] for linha in deactivated)
 
         await bound.execute(
             _UPSERT_INTEGRATION_SQL,
@@ -446,6 +587,19 @@ async def save_credential(
 
         for key in secret_keys:
             await store_secret(bound, integration_id, key, fields[key])
+
+        if channel == TELEGRAM_CHANNEL and had_webhook:
+            # O upsert troca `config` inteiro, e com ele somem `webhook_url` e
+            # `webhook_path_token` — mas a saúde ficaria em `connected`, e a
+            # tela diria "pronto" ao lado de "Conectar bot". O Telegram segue
+            # entregando no caminho antigo, que o banco não conhece mais; até
+            # o administrador reconectar, o canal está fora, e a saúde diz.
+            await _record_health(
+                bound,
+                integration_id,
+                "disconnected",
+                "token do bot regravado; conecte o bot de novo",
+            )
 
         await bound.execute(
             _AUDIT_SQL,
@@ -463,10 +617,225 @@ async def save_credential(
             },
         )
 
-        await bound.execute(_CREDENTIAL_STATUS_SQL, {})
+        await bound.execute(_CREDENTIAL_STATUS_BY_CHANNEL[channel], {})
         row = await bound.fetchone()
 
-    return _status(row)
+    return _status(row, channel)
+
+
+# ---------------------------------------------------------------------------
+# O bot — SPEC-CANAIS §6, a parte que é registro; §7, o que não religa
+# ---------------------------------------------------------------------------
+_SEM_PERMISSAO_CONECTAR = "Conectar o bot é do administrador do cliente."
+_SEM_PERMISSAO_DESCONECTAR = "Desconectar o bot é do administrador do cliente."
+
+#: A chave do cofre em que `save_credential` guardou o token do bot — derivada
+#: de `FieldSpec.secret`, como a da Cloud API, e não escrita à mão aqui.
+[_BOT_TOKEN_KEY] = [spec.name for spec in telegram.FIELDS if spec.secret]
+
+#: A chave do cofre do segredo que a plataforma devolve no header
+#: `X-Telegram-Bot-Api-Secret-Token`. Não é campo de formulário: nasce aqui, em
+#: `secrets.token_urlsafe`, e rotaciona a cada desconexão.
+_WEBHOOK_SECRET_KEY = "webhook_secret"
+
+#: `app.channel_health.status`, os dois que esta rota escreve. A terceira
+#: (`unknown`) é do vigia.
+_HEALTH_CONNECTED = "connected"
+_HEALTH_DISCONNECTED = "disconnected"
+
+#: `config` ganha (ou troca) as duas chaves do webhook. `||` com o patch, em vez
+#: de reescrever `config`: `public_identity` e o que mais o formulário gravou
+#: ficam. `%(patch)s` é `Jsonb`, com `webhook_url` nulo na desconexão.
+_TELEGRAM_WEBHOOK_SQL = """
+    update app.integration
+       set config = config || %(patch)s::jsonb
+     where tenant_id = %(tenant_id)s
+       and id = %(integration_id)s
+    returning id
+"""
+
+#: A medição, gravada pela porta única (`app.fn_record_channel_health`, migration
+#: `ch_channel_health`), que é quem segura a regra da §7 — `status_changed_at`
+#: só avança quando o status muda. O `from app.integration … tenant_id` é o que
+#: liga o tenant: integração de outro cliente é zero linhas e função nunca
+#: avaliada. ⛔ `%(detail)s` é sempre uma frase DESTA rota — no máximo com o
+#: código da recusa —, nunca corpo nem mensagem do provedor: a função grava o
+#: que recebe (achado do guardião da onda 1).
+_RECORD_HEALTH_SQL = """
+    select app.fn_record_channel_health(i.id, %(status)s, %(detail)s)
+    from app.integration i
+    where i.tenant_id = %(tenant_id)s
+      and i.id = %(integration_id)s
+"""
+
+
+async def _bot_state(bound: TenantScope) -> DictRow | None:
+    await bound.execute(_TELEGRAM_STATE_SQL, {"provider": telegram.NAME})
+    return await bound.fetchone()
+
+
+async def _record_health(
+    bound: TenantScope, integration_id: Any, status_: str, detail: str
+) -> None:
+    await bound.execute(
+        _RECORD_HEALTH_SQL,
+        {"integration_id": integration_id, "status": status_, "detail": detail},
+    )
+    if await bound.fetchone() is None:
+        raise RuntimeError("app.fn_record_channel_health não alcançou a integração do tenant")
+
+
+async def _rotate_webhook(
+    bound: TenantScope,
+    tenant: TenantContext,
+    state: DictRow,
+    *,
+    webhook_url: str | None,
+    path_token: str,
+    webhook_secret: str,
+) -> None:
+    """As três gravações de um webhook — `config`, cofre e trilha — na
+    transação do chamador. A auditoria leva `webhook_path_token` (a cauda
+    pública da URL) e a **chave** do segredo; o valor, nunca."""
+    await bound.execute(
+        _TELEGRAM_WEBHOOK_SQL,
+        {
+            "integration_id": state["id"],
+            "patch": Jsonb({"webhook_path_token": path_token, "webhook_url": webhook_url}),
+        },
+    )
+    if await bound.fetchone() is None:
+        raise RuntimeError("o update de app.integration não alcançou a integração do tenant")
+    await store_secret(bound, state["id"], _WEBHOOK_SECRET_KEY, webhook_secret)
+    await bound.execute(
+        _AUDIT_SQL,
+        {
+            "user_id": tenant.user_id,
+            "entity_id": str(state["id"]),
+            "antes": Jsonb(
+                {
+                    "webhook_path_token": state["webhook_path_token"],
+                    "webhook_url": state["webhook_url"],
+                }
+            ),
+            "depois": Jsonb(
+                {
+                    "webhook_path_token": path_token,
+                    "webhook_url": webhook_url,
+                    "keys": [_WEBHOOK_SECRET_KEY],
+                }
+            ),
+        },
+    )
+
+
+async def _telegram_channel(tenant: TenantContext) -> TelegramChannel:
+    screen = await _connections(tenant)
+    if screen.telegram is None:
+        # A integração estava ativa duas transações atrás. Sumir agora é outra
+        # sessão desligando o bot no meio do clique, e a tela tem de dizer isso
+        # em vez de devolver um bot que não existe.
+        raise RuntimeError("a integração do bot deixou de estar ativa durante a operação")
+    return screen.telegram
+
+
+@router.post("/telegram/conectar")
+async def connect_bot(tenant: CurrentTenant, http: HttpDep) -> TelegramChannel:
+    """Registra o webhook do bot na plataforma — gravando antes de chamar.
+
+    (1) `util.is_admin`; (2) `API_PUBLIC_URL`, sem a qual não há endereço a
+    registrar; (3) uma transação: o bot ativo com ponteiro (ou 422), o token do
+    cofre para uma variável local, `webhook_path_token` e `webhook_url` em
+    `config`, `webhook_secret` novo no cofre, auditoria; (4) fechada a
+    transação, `setWebhook` — recusa vira saúde `disconnected` com o código,
+    numa segunda transação, e 422; (5) sucesso vira saúde `connected`. A tela
+    volta relida.
+    """
+    await _require_admin(tenant, _SEM_PERMISSAO_CONECTAR)
+
+    public_url = get_settings().api_public_url
+    if public_url is None:
+        return _refuse(_REFUSALS["no_public_url"], "no_public_url")
+
+    path_token = secrets.token_urlsafe(24)
+    webhook_secret = secrets.token_urlsafe(32)
+    webhook_url = f"{public_url}{telegram.WEBHOOK_PATH}/{path_token}"
+
+    async with tenant_scope(tenant) as bound:
+        state = await _bot_state(bound)
+        token = await read_secret(bound, state["id"], _BOT_TOKEN_KEY) if state else None
+        if state is None or token is None:
+            return _refuse(_SEM_BOT_CREDENCIAL, "no_credential")
+        await _rotate_webhook(
+            bound,
+            tenant,
+            state,
+            webhook_url=webhook_url,
+            path_token=path_token,
+            webhook_secret=webhook_secret,
+        )
+
+    try:
+        await telegram.set_webhook(token, webhook_url, webhook_secret, http)
+    except InvalidCredentialError as recusa:
+        # Só o código: a exceção nasce `from None` no provedor e não carrega
+        # corpo nem URL — e é só o código que vai para o `detail` da saúde.
+        logger.info(
+            "canais: setWebhook recusado para o tenant %s (%s)", tenant.tenant_id, recusa.code
+        )
+        async with tenant_scope(tenant) as bound:
+            await _record_health(
+                bound, state["id"], _HEALTH_DISCONNECTED, f"setWebhook recusado: {recusa.code}"
+            )
+        return _refuse(_WEBHOOK_REFUSALS[recusa.code], recusa.code)
+
+    async with tenant_scope(tenant) as bound:
+        await _record_health(bound, state["id"], _HEALTH_CONNECTED, "webhook registrado")
+
+    return await _telegram_channel(tenant)
+
+
+@router.post("/telegram/desconectar")
+async def disconnect_bot(tenant: CurrentTenant, http: HttpDep) -> TelegramChannel:
+    """Remove o webhook na plataforma e **rotaciona** o caminho e o segredo.
+
+    (1) `util.is_admin`; (2) uma transação só de leitura: o bot ativo com
+    ponteiro (ou 422) e o token do cofre; (3) fechada, `deleteWebhook` —
+    recusa é 422 e nada muda; (4) uma transação: `webhook_path_token` novo,
+    `webhook_url` nulo, `webhook_secret` novo, saúde `disconnected`, auditoria.
+    Reconectar não devolve o endereço antigo (SPEC-CANAIS §6), e nada aqui
+    religa (§7).
+    """
+    await _require_admin(tenant, _SEM_PERMISSAO_DESCONECTAR)
+
+    async with tenant_scope(tenant) as bound:
+        state = await _bot_state(bound)
+        token = await read_secret(bound, state["id"], _BOT_TOKEN_KEY) if state else None
+        if state is None or token is None:
+            return _refuse(_SEM_BOT_CREDENCIAL, "no_credential")
+
+    try:
+        await telegram.delete_webhook(token, http)
+    except InvalidCredentialError as recusa:
+        logger.info(
+            "canais: deleteWebhook recusado para o tenant %s (%s)", tenant.tenant_id, recusa.code
+        )
+        return _refuse(_WEBHOOK_REFUSALS[recusa.code], recusa.code)
+
+    async with tenant_scope(tenant) as bound:
+        await _rotate_webhook(
+            bound,
+            tenant,
+            state,
+            webhook_url=None,
+            path_token=secrets.token_urlsafe(24),
+            webhook_secret=secrets.token_urlsafe(32),
+        )
+        await _record_health(
+            bound, state["id"], _HEALTH_DISCONNECTED, "desconectado pelo administrador"
+        )
+
+    return await _telegram_channel(tenant)
 
 
 # ---------------------------------------------------------------------------
