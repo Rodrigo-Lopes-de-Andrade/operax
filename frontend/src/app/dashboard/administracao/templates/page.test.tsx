@@ -57,13 +57,21 @@ const TEMPLATE: TemplateRow = {
 };
 
 const OFICIAL: ConnectionsScreen = {
-  provider: "meta_cloud",
-  capabilities: { official: true, requires_templates: true, ban_risk: false },
-  templates_total: 1,
-  templates_approved: 0,
-  rules_blocked: 0,
-  ready: false,
-  blocked: [],
+  whatsapp: {
+    provider: "meta_cloud",
+    capabilities: {
+      official: true,
+      requires_templates: true,
+      ban_risk: false,
+      requires_recipient_opt_in: false,
+    },
+    templates_total: 1,
+    templates_approved: 0,
+    rules_blocked: 0,
+    ready: false,
+    blocked: [],
+  },
+  telegram: null,
 };
 
 async function abrir(

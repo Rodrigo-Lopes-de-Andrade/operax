@@ -460,8 +460,10 @@ export function TemplateCatalog({
   const [syncing, setSyncing] = useState(false);
   const [sync, setSync] = useState<SyncOutcome | null>(null);
 
+  // O botão é do canal de WhatsApp: é a WABA que se sincroniza, e é a flag
+  // desse canal que decide — o Telegram não tem template para sincronizar.
   const requiresTemplates =
-    connections?.capabilities?.requires_templates === true;
+    connections?.whatsapp?.capabilities.requires_templates === true;
 
   async function synchronize() {
     setSyncing(true);

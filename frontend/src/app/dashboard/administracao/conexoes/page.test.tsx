@@ -1,9 +1,12 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import ConexoesPage from "@/app/dashboard/administracao/conexoes/page";
+import type { Channel } from "@/lib/canais/labels";
 import type {
+  ChannelCapabilities,
   ConnectionsScreen,
+  CredentialField,
   CredentialStatus,
   ProviderForm,
 } from "@/lib/canais/queries";
@@ -35,7 +38,7 @@ vi.mock("@/lib/identity", async () => {
 
 vi.mock("@/lib/canais/queries", () => ({
   loadConnections: () => loadConnections(),
-  loadCredential: () => loadCredential(),
+  loadCredential: (channel: Channel) => loadCredential(channel),
   loadProviderForms: () => loadProviderForms(),
 }));
 
@@ -48,44 +51,109 @@ function identidade(role: string): Identity {
   };
 }
 
-/** O estado da produção no primeiro dia: nenhum canal. */
-const SEM_CANAL: ConnectionsScreen = {
-  provider: null,
-  capabilities: null,
-  templates_total: 0,
-  templates_approved: 0,
-  rules_blocked: 0,
-  ready: false,
-  blocked: [],
+const OFFICIAL: ChannelCapabilities = {
+  official: true,
+  requires_templates: true,
+  ban_risk: false,
+  requires_recipient_opt_in: false,
 };
+
+const UNOFFICIAL: ChannelCapabilities = {
+  official: false,
+  requires_templates: false,
+  ban_risk: true,
+  requires_recipient_opt_in: false,
+};
+
+const OPT_IN: ChannelCapabilities = {
+  official: true,
+  requires_templates: false,
+  ban_risk: false,
+  requires_recipient_opt_in: true,
+};
+
+/** O estado da produção no primeiro dia: nenhum canal. */
+const SEM_CANAL: ConnectionsScreen = { whatsapp: null, telegram: null };
 
 const BLOQUEADO: ConnectionsScreen = {
-  provider: "meta_cloud",
-  capabilities: { official: true, requires_templates: true, ban_risk: false },
-  templates_total: 1,
-  templates_approved: 0,
-  rules_blocked: 1,
-  ready: false,
-  blocked: [
-    {
-      rule_name: "Desvio individual",
-      template_code: "deviation_individual",
-      meta_status: "pending",
-    },
-  ],
+  whatsapp: {
+    provider: "meta_cloud",
+    capabilities: OFFICIAL,
+    templates_total: 1,
+    templates_approved: 0,
+    rules_blocked: 1,
+    ready: false,
+    blocked: [
+      {
+        rule_name: "Desvio individual",
+        template_code: "deviation_individual",
+        meta_status: "pending",
+      },
+    ],
+  },
+  telegram: {
+    provider: "telegram",
+    capabilities: OPT_IN,
+    bot_username: "@zz_bot_inventado",
+    webhook_configured: true,
+    webhook_url:
+      "https://api.zz-inventada.test/webhooks/telegram/zz-token-inventado-0123456789abcdef",
+    webhook_path_token: "zz-token-inventado-0123456789abcdef",
+    health_status: "connected",
+    health_checked_at: "2026-09-15T13:05:00Z",
+    health_changed_at: "2026-09-14T09:00:00Z",
+    health_detail: null,
+    ready: true,
+  },
 };
 
-const NOT_CONFIGURED: CredentialStatus = {
-  configured: false,
-  provider: null,
-  updated_at: null,
-  public_identity: null,
+const NOT_CONFIGURED: Record<Channel, CredentialStatus> = {
+  whatsapp: {
+    channel: "whatsapp",
+    configured: false,
+    provider: null,
+    updated_at: null,
+    public_identity: null,
+  },
+  telegram: {
+    channel: "telegram",
+    configured: false,
+    provider: null,
+    updated_at: null,
+    public_identity: null,
+  },
+};
+
+const TELEGRAM_CONFIGURED: CredentialStatus = {
+  channel: "telegram",
+  configured: true,
+  provider: "telegram",
+  updated_at: "2026-09-15T13:05:00Z",
+  public_identity: "@zz_bot_inventado",
+};
+
+/**
+ * O mesmo nome de campo nos dois canais, **de propósito**: no backend o campo
+ * do bot se chama `bot_token`, então o par que colide não existe hoje — este
+ * fixture é o que prende que dois formulários na mesma página nunca partilhem
+ * `id`, seja qual for o nome que um provedor futuro escolher.
+ */
+const TOKEN: CredentialField = {
+  name: "token",
+  label: "Token",
+  pattern: "[A-Za-z0-9:_\\-]+",
+  autocomplete: "one-time-code",
+  inputmode: "text",
+  secret: true,
+  placeholder: "…",
+  hint: "isto não parece um token",
 };
 
 const FORMS: ProviderForm[] = [
   {
     provider: "meta_cloud",
-    capabilities: { official: true, requires_templates: true, ban_risk: false },
+    channel: "whatsapp",
+    capabilities: OFFICIAL,
     fields: [
       {
         name: "phone_number_id",
@@ -97,26 +165,54 @@ const FORMS: ProviderForm[] = [
         placeholder: "123456789012345",
         hint: "isto não parece um ID de número: a Meta usa só dígitos",
       },
+      { ...TOKEN, label: "Token de acesso permanente" },
     ],
+  },
+  {
+    provider: "z_api",
+    channel: "whatsapp",
+    capabilities: UNOFFICIAL,
+    fields: [{ ...TOKEN, label: "Token da instância" }],
+  },
+  {
+    provider: "uazapi",
+    channel: "whatsapp",
+    capabilities: UNOFFICIAL,
+    fields: [{ ...TOKEN, label: "Token da instância" }],
+  },
+  {
+    provider: "telegram",
+    channel: "telegram",
+    capabilities: OPT_IN,
+    fields: [{ ...TOKEN, label: "Token do bot" }],
   },
 ];
 
+type Credentials = Partial<Record<Channel, CredentialStatus | null>>;
+
 async function abrir(
   role: string,
-  screen: ConnectionsScreen | null,
-  credential: CredentialStatus | null = NOT_CONFIGURED,
+  screenData: ConnectionsScreen | null,
+  credentials: Credentials = NOT_CONFIGURED,
   forms: ProviderForm[] | null = FORMS,
 ) {
   loadIdentity.mockResolvedValue(identidade(role));
-  loadConnections.mockResolvedValue(screen);
-  loadCredential.mockResolvedValue(credential);
+  loadConnections.mockResolvedValue(screenData);
+  loadCredential.mockImplementation(async (channel: Channel) =>
+    channel in credentials ? credentials[channel] : null,
+  );
   loadProviderForms.mockResolvedValue(forms);
 
   return render(await ConexoesPage());
 }
 
-function formulario() {
-  return screen.queryByRole("button", { name: "Validar e gravar" });
+function formularios() {
+  return screen.queryAllByRole("button", { name: "Validar e gravar" });
+}
+
+/** A região do formulário de um canal, pelo título. */
+function credencial(titulo: string) {
+  return within(screen.getByRole("region", { name: titulo }));
 }
 
 beforeEach(() => {
@@ -128,7 +224,7 @@ beforeEach(() => {
 });
 
 describe("a porta da página é `isAdmin`, mais estreita que a rota de propósito", () => {
-  it("⛔ `unit_supervisor` recebe 404, e a API nem é chamada", async () => {
+  it("⛔ `unit_supervisor` recebe 404, e nenhuma das quatro leituras é chamada", async () => {
     loadIdentity.mockResolvedValue(identidade("unit_supervisor"));
 
     await expect(ConexoesPage()).rejects.toThrow("NEXT_NOT_FOUND");
@@ -145,6 +241,7 @@ describe("a porta da página é `isAdmin`, mais estreita que a rota de propósit
 
     await expect(ConexoesPage()).rejects.toThrow("NEXT_NOT_FOUND");
     expect(loadConnections).not.toHaveBeenCalled();
+    expect(loadCredential).not.toHaveBeenCalled();
   });
 
   it("sem vínculo com o tenant não há tela", async () => {
@@ -154,79 +251,185 @@ describe("a porta da página é `isAdmin`, mais estreita que a rota de propósit
     expect(loadConnections).not.toHaveBeenCalled();
   });
 
-  it("✅ `owner` entra e vê o que está preso — e o formulário de credencial", async () => {
+  it("✅ `owner` entra e vê os dois canais, o que está preso, e os dois formulários", async () => {
     await abrir("owner", BLOQUEADO);
 
     expect(notFound).not.toHaveBeenCalled();
-    expect(screen.getByRole("heading", { name: "Conexões" })).toBeVisible();
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Conexões" }),
+    ).toBeVisible();
     expect(
       screen.getByRole("heading", { name: "O que está preso" }),
     ).toBeVisible();
     expect(screen.getByText("deviation_individual")).toBeVisible();
+    expect(screen.getByText("@zz_bot_inventado")).toBeVisible();
+    // O admin vê a ação do bot.
+    expect(screen.getByRole("button", { name: "Desconectar" })).toBeVisible();
 
-    // O C2 é o que traz a escrita para esta tela: o formulário vem dirigido
-    // pelo que `GET /canais/provedores` descreveu.
-    expect(
-      screen.getByRole("heading", { name: "Credencial do canal" }),
-    ).toBeVisible();
-    expect(screen.getByLabelText("ID do número de telefone")).toBeVisible();
-    expect(formulario()).toBeVisible();
+    expect(formularios()).toHaveLength(2);
   });
 
-  it("✅ `owner` sem canal vê o estado vazio — a tela do primeiro dia", async () => {
+  it("✅ `owner` sem canal vê os dois vazios — a tela do primeiro dia", async () => {
     await abrir("owner", SEM_CANAL);
 
     expect(notFound).not.toHaveBeenCalled();
-    expect(
-      screen.getByText("Nenhum canal de WhatsApp configurado"),
-    ).toBeVisible();
+    expect(screen.getByText("Nenhum provedor de WhatsApp ativo")).toBeVisible();
+    expect(screen.getByText("Nenhum bot de Telegram ativo")).toBeVisible();
     expect(screen.queryByText("As conexões não puderam ser lidas")).toBeNull();
   });
+});
 
-  it("null (sessão, 401, 403) é 'não pôde ser lido' — outra frase, e não 'sem canal'", async () => {
-    await abrir("owner", null, null, null);
+describe("as quatro leituras — em paralelo, e `null` em qualquer uma não derruba", () => {
+  it("⛔ `loadCredential` é chamada uma vez por canal, com o canal", async () => {
+    await abrir("owner", SEM_CANAL);
+
+    expect(loadCredential).toHaveBeenCalledTimes(2);
+    expect(loadCredential.mock.calls.map(([channel]) => channel)).toEqual([
+      "whatsapp",
+      "telegram",
+    ]);
+    expect(loadConnections).toHaveBeenCalledTimes(1);
+    expect(loadProviderForms).toHaveBeenCalledTimes(1);
+  });
+
+  it("null nas conexões (sessão, 401, 403) é 'não pôde ser lido' — outra frase, e não 'sem canal'", async () => {
+    await abrir("owner", null, {}, null);
 
     expect(notFound).not.toHaveBeenCalled();
     expect(screen.getByText("As conexões não puderam ser lidas")).toBeVisible();
-    expect(
-      screen.queryByText("Nenhum canal de WhatsApp configurado"),
-    ).toBeNull();
+    expect(screen.queryByText("Nenhum provedor de WhatsApp ativo")).toBeNull();
+    expect(screen.queryByText("Nenhum bot de Telegram ativo")).toBeNull();
     // Sem sessão de API não há formulário — e não há estado vazio novo.
-    expect(formulario()).toBeNull();
+    expect(formularios()).toHaveLength(0);
   });
 
-  it("`owner` com as conexões lidas mas sem os formulários: a tela fica, o formulário não", async () => {
-    // A corrida de milissegundos em que a sessão vence entre uma chamada e a
-    // outra. A página não quebra e não inventa um estado: mostra o que veio.
+  it("conexões lidas mas sem os formulários: a tela fica, formulário nenhum", async () => {
     await abrir("owner", SEM_CANAL, NOT_CONFIGURED, null);
 
+    expect(screen.getByText("Nenhum provedor de WhatsApp ativo")).toBeVisible();
+    expect(formularios()).toHaveLength(0);
+    expect(screen.queryByRole("region", { name: /Credencial do/ })).toBeNull();
+  });
+
+  it("⛔ falta só a credencial do Telegram: o formulário de WhatsApp fica, o do Telegram não", async () => {
+    // A corrida de milissegundos em que a sessão vence entre uma chamada e a
+    // outra. A página não quebra e não inventa: mostra o que veio.
+    await abrir("owner", SEM_CANAL, {
+      whatsapp: NOT_CONFIGURED.whatsapp,
+      telegram: null,
+    });
+
+    expect(formularios()).toHaveLength(1);
     expect(
-      screen.getByText("Nenhum canal de WhatsApp configurado"),
+      screen.getByRole("region", { name: "Credencial do WhatsApp" }),
     ).toBeVisible();
-    expect(formulario()).toBeNull();
     expect(
-      screen.queryByRole("heading", { name: "Credencial do canal" }),
+      screen.queryByRole("region", { name: "Credencial do Telegram" }),
     ).toBeNull();
   });
 
-  it("… e o mesmo quando falta só o estado da credencial", async () => {
-    await abrir("owner", SEM_CANAL, null, FORMS);
+  it("… e o par: falta só a do WhatsApp", async () => {
+    await abrir("owner", SEM_CANAL, {
+      whatsapp: null,
+      telegram: NOT_CONFIGURED.telegram,
+    });
 
+    expect(formularios()).toHaveLength(1);
     expect(
-      screen.getByText("Nenhum canal de WhatsApp configurado"),
+      screen.queryByRole("region", { name: "Credencial do WhatsApp" }),
+    ).toBeNull();
+    expect(
+      screen.getByRole("region", { name: "Credencial do Telegram" }),
     ).toBeVisible();
-    expect(formulario()).toBeNull();
   });
+});
 
-  it("✅ `owner` sem canal e com sessão vê o formulário — é a tela do primeiro dia com a saída", async () => {
+describe("critério 5 — dois formulários, cada um só com os provedores do seu canal", () => {
+  it("⛔ o de WhatsApp tem três provedores e o de Telegram um — pelo `channel`", async () => {
     await abrir("owner", SEM_CANAL);
 
+    const whatsapp = credencial("Credencial do WhatsApp");
+    const telegram = credencial("Credencial do Telegram");
+
     expect(
-      screen.getByText("Nenhum canal de WhatsApp configurado"),
+      whatsapp.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["WhatsApp Cloud API (Meta)", "Z-API", "UAZAPI"]);
+    expect(
+      telegram.getAllByRole("option").map((option) => option.textContent),
+    ).toEqual(["Telegram"]);
+  });
+
+  it("⛔ … e é o `channel` que separa, não o nome: um provedor de WhatsApp declarado como Telegram vai para o Telegram", async () => {
+    // Um filtro por nome (`provider === "telegram"`) passaria no caso acima e
+    // cai aqui.
+    const trocado = FORMS.map((form) =>
+      form.provider === "z_api"
+        ? { ...form, channel: "telegram" as const }
+        : form,
+    );
+    await abrir("owner", SEM_CANAL, NOT_CONFIGURED, trocado);
+
+    expect(
+      credencial("Credencial do WhatsApp")
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["WhatsApp Cloud API (Meta)", "UAZAPI"]);
+    // Na ordem da API, como o filtro a preserva.
+    expect(
+      credencial("Credencial do Telegram")
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Z-API", "Telegram"]);
+  });
+
+  it("cada formulário mostra o estado da credencial do seu canal", async () => {
+    await abrir("owner", SEM_CANAL, {
+      whatsapp: NOT_CONFIGURED.whatsapp,
+      telegram: TELEGRAM_CONFIGURED,
+    });
+
+    expect(
+      credencial("Credencial do WhatsApp").getByText("Não configurada"),
     ).toBeVisible();
     expect(
-      screen.getByText("Nenhuma credencial gravada neste cliente."),
+      credencial("Credencial do Telegram").getByText("Configurada"),
     ).toBeVisible();
-    expect(formulario()).toBeVisible();
+    expect(
+      credencial("Credencial do Telegram").getByText("@zz_bot_inventado"),
+    ).toBeVisible();
+  });
+
+  it("os títulos dos formulários são os dos canais, na ordem WhatsApp → Telegram", async () => {
+    await abrir("owner", SEM_CANAL);
+
+    const titulos = screen
+      .getAllByRole("region", { name: /Credencial do/ })
+      .map((region) => region.getAttribute("aria-labelledby"))
+      .map((id) => (id ? document.getElementById(id)?.textContent : null));
+
+    expect(titulos).toEqual([
+      "Credencial do WhatsApp",
+      "Credencial do Telegram",
+    ]);
+  });
+
+  it("⛔ dois formulários com o mesmo nome de campo não partilham `id`: cada rótulo aponta para o seu input", async () => {
+    // Com `id` derivado só do nome do campo, o segundo rótulo apontaria para o
+    // primeiro input — clicar em "Token do bot" focaria o token da Meta.
+    await abrir("owner", SEM_CANAL);
+
+    const meta = screen.getByLabelText("Token de acesso permanente");
+    const bot = screen.getByLabelText("Token do bot");
+
+    expect(meta).not.toBe(bot);
+    expect(meta.id).not.toBe(bot.id);
+    expect(
+      credencial("Credencial do Telegram").getByLabelText("Token do bot"),
+    ).toBe(bot);
+
+    const ids = Array.from(document.querySelectorAll("input")).map(
+      (input) => input.id,
+    );
+    expect(new Set(ids).size).toBe(ids.length);
   });
 });

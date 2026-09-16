@@ -5,9 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TemplateCatalog } from "@/components/canais/template-catalog";
 import { ApiError } from "@/lib/api";
 import type {
+  ChannelCapabilities,
   ConnectionsScreen,
+  TelegramChannel,
   TemplateRow,
   TemplateSyncResult,
+  WhatsAppChannel,
 } from "@/lib/canais/queries";
 
 const request = vi.fn();
@@ -47,9 +50,23 @@ function template(overrides: Partial<TemplateRow> = {}): TemplateRow {
   };
 }
 
-const OFFICIAL: ConnectionsScreen = {
+const OFFICIAL_CAPABILITIES: ChannelCapabilities = {
+  official: true,
+  requires_templates: true,
+  ban_risk: false,
+  requires_recipient_opt_in: false,
+};
+
+const UNOFFICIAL_CAPABILITIES: ChannelCapabilities = {
+  official: false,
+  requires_templates: false,
+  ban_risk: true,
+  requires_recipient_opt_in: false,
+};
+
+const OFFICIAL_WHATSAPP: WhatsAppChannel = {
   provider: "meta_cloud",
-  capabilities: { official: true, requires_templates: true, ban_risk: false },
+  capabilities: OFFICIAL_CAPABILITIES,
   templates_total: 1,
   templates_approved: 0,
   rules_blocked: 0,
@@ -57,10 +74,39 @@ const OFFICIAL: ConnectionsScreen = {
   blocked: [],
 };
 
+/** Um bot cujas flags, se lidas por engano, dariam botão a quem não tem template. */
+const TELEGRAM: TelegramChannel = {
+  provider: "telegram",
+  capabilities: {
+    official: true,
+    requires_templates: false,
+    ban_risk: false,
+    requires_recipient_opt_in: true,
+  },
+  bot_username: "@zz_bot_inventado",
+  webhook_configured: true,
+  webhook_url:
+    "https://api.zz-inventada.test/webhooks/telegram/zz-token-inventado-0123456789abcdef",
+  webhook_path_token: "zz-token-inventado-0123456789abcdef",
+  health_status: "connected",
+  health_checked_at: "2026-09-15T13:05:00Z",
+  health_changed_at: "2026-09-14T09:00:00Z",
+  health_detail: null,
+  ready: true,
+};
+
+const OFFICIAL: ConnectionsScreen = {
+  whatsapp: OFFICIAL_WHATSAPP,
+  telegram: null,
+};
+
 const UNOFFICIAL: ConnectionsScreen = {
-  ...OFFICIAL,
-  provider: "z_api",
-  capabilities: { official: false, requires_templates: false, ban_risk: true },
+  whatsapp: {
+    ...OFFICIAL_WHATSAPP,
+    provider: "z_api",
+    capabilities: UNOFFICIAL_CAPABILITIES,
+  },
+  telegram: null,
 };
 
 const SYNC_PHRASE = /só se sincroniza com a Cloud API da Meta/;
@@ -782,11 +828,11 @@ describe("critério 6 — o botão 'Sincronizar' existe pelas flags, nunca pelo 
     expect(screen.getByText(SYNC_PHRASE)).toBeVisible();
   });
 
-  it("sem provedor (`capabilities: null`) → a frase, sem botão", () => {
+  it("sem canal de WhatsApp (`whatsapp: null`) → a frase, sem botão", () => {
     render(
       <TemplateCatalog
         templates={[]}
-        connections={{ ...OFFICIAL, provider: null, capabilities: null }}
+        connections={{ whatsapp: null, telegram: null }}
       />,
     );
 
@@ -794,12 +840,53 @@ describe("critério 6 — o botão 'Sincronizar' existe pelas flags, nunca pelo 
     expect(screen.getByText(SYNC_PHRASE)).toBeVisible();
   });
 
+  it("⛔ a leitura é do canal de WhatsApp: um bot de Telegram sozinho não ganha botão", () => {
+    // O Telegram não tem template para sincronizar. A flag do bot vem
+    // INVERTIDA de propósito: uma leitura que caísse no primeiro canal
+    // preenchido veria `requires_templates: true` e desenharia o botão.
+    render(
+      <TemplateCatalog
+        templates={[]}
+        connections={{
+          whatsapp: null,
+          telegram: {
+            ...TELEGRAM,
+            capabilities: {
+              ...TELEGRAM.capabilities,
+              requires_templates: true,
+            },
+          },
+        }}
+      />,
+    );
+
+    expect(sincronizar()).toBeNull();
+    expect(screen.getByText(SYNC_PHRASE)).toBeVisible();
+  });
+
+  it("✅ … e com o WhatsApp oficial ao lado do bot, o botão está lá", () => {
+    render(
+      <TemplateCatalog
+        templates={[]}
+        connections={{ whatsapp: OFFICIAL_WHATSAPP, telegram: TELEGRAM }}
+      />,
+    );
+
+    expect(sincronizar()).toBeVisible();
+  });
+
   it("⛔ flags invertidas: nome oficial com flags de não oficial não ganha botão", () => {
     // Um `provider === "…"` passaria nos casos acima e cai aqui.
     render(
       <TemplateCatalog
         templates={[]}
-        connections={{ ...OFFICIAL, capabilities: UNOFFICIAL.capabilities }}
+        connections={{
+          whatsapp: {
+            ...OFFICIAL_WHATSAPP,
+            capabilities: UNOFFICIAL_CAPABILITIES,
+          },
+          telegram: null,
+        }}
       />,
     );
 
@@ -811,7 +898,14 @@ describe("critério 6 — o botão 'Sincronizar' existe pelas flags, nunca pelo 
     render(
       <TemplateCatalog
         templates={[]}
-        connections={{ ...UNOFFICIAL, capabilities: OFFICIAL.capabilities }}
+        connections={{
+          whatsapp: {
+            ...OFFICIAL_WHATSAPP,
+            provider: "z_api",
+            capabilities: OFFICIAL_CAPABILITIES,
+          },
+          telegram: null,
+        }}
       />,
     );
 

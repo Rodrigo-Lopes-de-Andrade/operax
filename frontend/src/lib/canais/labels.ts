@@ -11,10 +11,34 @@
  * aparecer fora daqui.
  */
 
+/**
+ * Os dois canais, na ordem em que a tela os mostra, e o rótulo de cada um.
+ *
+ * `telegram` é o único nome que é canal **e** provedor ao mesmo tempo, e a
+ * varredura de `labels.test.ts` não distingue os dois usos — nem precisa,
+ * desde que todo `telegram` do `src/` saia deste arquivo. Por isso o tipo
+ * `Channel` mora aqui e não em `queries.ts`: escrever a união lá seria o
+ * primeiro literal fora de casa.
+ */
+export const CHANNELS = ["whatsapp", "telegram"] as const;
+
+export type Channel = (typeof CHANNELS)[number];
+
+export const CHANNEL_LABEL: Record<Channel, string> = {
+  whatsapp: "WhatsApp",
+  telegram: "Telegram",
+};
+
+/**
+ * Os quatro provedores: os três de WhatsApp (o par de `WHATSAPP_PROVIDERS` do
+ * backend e do índice `integration_whatsapp_unico_ativo`) e o do Telegram (o
+ * quarto de `CHANNEL_PROVIDERS`, com o índice irmão `integration_telegram_unico_ativo`).
+ */
 export const PROVIDER_LABEL: Record<string, string> = {
   meta_cloud: "WhatsApp Cloud API (Meta)",
   z_api: "Z-API",
   uazapi: "UAZAPI",
+  telegram: "Telegram",
 };
 
 /**

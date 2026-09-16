@@ -23,7 +23,7 @@ export const metadata: Metadata = {
  * `util.is_admin` de novo no backend, e a tela só reflete.
  *
  * As duas leituras vão em paralelo: o catálogo, e as conexões — que dizem, pelas
- * flags do canal ativo, se o botão "Sincronizar" faz sentido. `null` na
+ * flags do canal de WhatsApp, se o botão "Sincronizar" faz sentido. `null` na
  * segunda não derruba a tela: sem canal lido, não há botão, e a frase no
  * lugar dele diz o que sincroniza.
  */

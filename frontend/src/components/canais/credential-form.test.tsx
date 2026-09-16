@@ -30,12 +30,14 @@ const OFFICIAL: ChannelCapabilities = {
   official: true,
   requires_templates: true,
   ban_risk: false,
+  requires_recipient_opt_in: false,
 };
 
 const UNOFFICIAL: ChannelCapabilities = {
   official: false,
   requires_templates: false,
   ban_risk: true,
+  requires_recipient_opt_in: false,
 };
 
 // Valores de teste óbvios — nenhum é credencial de ninguém.
@@ -79,6 +81,7 @@ const INSTANCE_ID: CredentialField = {
 function official(overrides: Partial<ProviderForm> = {}): ProviderForm {
   return {
     provider: "meta_cloud",
+    channel: "whatsapp",
     capabilities: OFFICIAL,
     fields: [NUMBER_ID, TOKEN],
     ...overrides,
@@ -88,6 +91,7 @@ function official(overrides: Partial<ProviderForm> = {}): ProviderForm {
 function unofficial(overrides: Partial<ProviderForm> = {}): ProviderForm {
   return {
     provider: "z_api",
+    channel: "whatsapp",
     capabilities: UNOFFICIAL,
     fields: [INSTANCE_ID, { ...TOKEN, label: "Token da instância" }],
     ...overrides,
@@ -95,6 +99,7 @@ function unofficial(overrides: Partial<ProviderForm> = {}): ProviderForm {
 }
 
 const NOT_CONFIGURED: CredentialStatus = {
+  channel: "whatsapp",
   configured: false,
   provider: null,
   updated_at: null,
@@ -102,6 +107,7 @@ const NOT_CONFIGURED: CredentialStatus = {
 };
 
 const CONFIGURED: CredentialStatus = {
+  channel: "whatsapp",
   configured: true,
   provider: "meta_cloud",
   // 13:05 UTC é 10:05 em São Paulo — a data sai no fuso do tenant.

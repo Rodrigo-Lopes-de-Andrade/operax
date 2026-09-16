@@ -1,6 +1,7 @@
 import "server-only";
 
 import { ApiError, requestApi } from "@/lib/api";
+import type { Channel } from "@/lib/canais/labels";
 import { getServerSupabase } from "@/lib/supabase-server";
 
 /**
@@ -26,8 +27,8 @@ import { getServerSupabase } from "@/lib/supabase-server";
 
 /**
  * O que o canal permite — cópia de `operax/alertas/capacidades.py`, decidida
- * lá. `null` no lugar deste objeto é "nenhum provedor de WhatsApp ativo", e
- * não "sem restrição".
+ * lá. As três famílias de restrição da SPEC-CANAIS §1.1, cada uma lida por si:
+ * um canal pode não ter nenhuma das três, e isso não é "sem regra".
  */
 export type ChannelCapabilities = {
   official: boolean;
@@ -35,6 +36,8 @@ export type ChannelCapabilities = {
   requires_templates: boolean;
   /** Auto-restrição: o número do cliente pode ser banido pelo volume. */
   ban_risk: boolean;
+  /** Restrição de destinatário (§1.1): só alcança quem iniciou o bot. */
+  requires_recipient_opt_in: boolean;
 };
 
 /**
@@ -56,19 +59,62 @@ export type BlockedAlertRule = {
 };
 
 /**
+ * O canal de WhatsApp ativo do cliente — um dos três provedores — e por que o
+ * alerta não sai por ele.
+ *
  * `rules_blocked` e `blocked.length` são duas leituras do mesmo fato: a
- * contagem vem de `fn_whatsapp_readiness` e a lista da consulta que repete o
+ * contagem vem de `fn_channel_readiness` e a lista da consulta que repete o
  * predicado dela. A tela mostra a contagem que a API deu e a lista que veio —
  * as duas, sem fechar uma pela outra.
  */
-export type ConnectionsScreen = {
-  provider: string | null;
-  capabilities: ChannelCapabilities | null;
+export type WhatsAppChannel = {
+  provider: string;
+  capabilities: ChannelCapabilities;
   templates_total: number;
   templates_approved: number;
   rules_blocked: number;
   ready: boolean;
   blocked: BlockedAlertRule[];
+};
+
+/**
+ * O bot de Telegram do cliente, e a saúde dele (SPEC-CANAIS §6 e §7).
+ *
+ * `webhook_url` é o endereço inteiro que o backend registrou no `setWebhook`
+ * — exatamente o que o Telegram chama, nulo quando desconectado — e
+ * `webhook_path_token` é a cauda rotativa dele: desconectar rotaciona de
+ * propósito, e reconectar não devolve o antigo — a tela mostra o que veio.
+ * Não é segredo (o segredo vai no header), mas também não precisa ficar
+ * inteiro na tela.
+ *
+ * `health_status` nulo é "o vigia nunca mediu", e é diferente de `unknown`
+ * ("mediu e o Telegram não respondeu"). `health_changed_at` só avança quando o
+ * estado muda — é o tempo no estado, não a última conferência. `ready` só é
+ * verdadeiro com saúde `connected`; e ninguém aqui religa nada (§7).
+ */
+export type TelegramChannel = {
+  provider: string;
+  capabilities: ChannelCapabilities;
+  /** "@…", como o Telegram devolveu ao validar o token. */
+  bot_username: string | null;
+  webhook_configured: boolean;
+  webhook_url: string | null;
+  webhook_path_token: string | null;
+  health_status: "connected" | "disconnected" | "unknown" | null;
+  health_checked_at: string | null;
+  health_changed_at: string | null;
+  health_detail: string | null;
+  ready: boolean;
+};
+
+/**
+ * A tela de Conexões: os dois canais, que **coexistem** por desenho (SPEC
+ * §2.1). Nulo num deles é "nenhum provedor ativo desse canal", e os dois nulos
+ * é o estado da produção hoje — não um erro.
+ */
+export type ConnectionsScreen = {
+  whatsapp: WhatsAppChannel | null;
+  telegram: TelegramChannel | null;
 };
 
 /**
@@ -93,19 +139,23 @@ export type CredentialField = {
 /**
  * O formulário de um provedor (`ProviderForm`). Sem rótulo humano: ele vive em
  * `lib/canais/labels.ts`, e um segundo aqui seria uma cópia livre para divergir.
+ * `channel` é o que separa os quatro em dois formulários — pelo canal, nunca
+ * pelo nome.
  */
 export type ProviderForm = {
   provider: string;
+  channel: Channel;
   capabilities: ChannelCapabilities;
   fields: CredentialField[];
 };
 
 /**
- * O que se diz da credencial gravada: que existe, não qual é (SPEC §5.3).
- * `CredentialStatus` em `models.py` — nenhum campo carrega valor de segredo,
- * em nenhum estado.
+ * O que se diz da credencial gravada de um canal: que existe, não qual é
+ * (SPEC §5.3). `CredentialStatus` em `models.py` — nenhum campo carrega valor
+ * de segredo, em nenhum estado.
  */
 export type CredentialStatus = {
+  channel: Channel;
   configured: boolean;
   provider: string | null;
   updated_at: string | null;
@@ -196,12 +246,17 @@ export function loadConnections(): Promise<ConnectionsScreen | null> {
   return readOrNull<ConnectionsScreen>("/canais/conexoes");
 }
 
-/** Que a credencial existe, de qual provedor e desde quando — nunca qual é. */
-export function loadCredential(): Promise<CredentialStatus | null> {
-  return readOrNull<CredentialStatus>("/canais/credencial");
+/**
+ * Que a credencial do canal existe, de qual provedor e desde quando — nunca
+ * qual é. Uma leitura por canal: a página chama as duas.
+ */
+export function loadCredential(
+  channel: Channel,
+): Promise<CredentialStatus | null> {
+  return readOrNull<CredentialStatus>(`/canais/credencial?canal=${channel}`);
 }
 
-/** Os formulários, na ordem da API — o oficial primeiro. */
+/** Os formulários dos quatro provedores, na ordem da API — o oficial primeiro. */
 export function loadProviderForms(): Promise<ProviderForm[] | null> {
   return readOrNull<ProviderForm[]>("/canais/provedores");
 }

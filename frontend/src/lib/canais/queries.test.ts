@@ -28,21 +28,51 @@ vi.mock("@/lib/supabase-server", () => ({
 
 const fetchMock = vi.fn();
 
+/** Os dois canais preenchidos — a leitura devolve o que veio, canal a canal. */
 const PAYLOAD: ConnectionsScreen = {
-  provider: "meta_cloud",
-  capabilities: { official: true, requires_templates: true, ban_risk: false },
-  templates_total: 2,
-  templates_approved: 1,
-  rules_blocked: 1,
-  ready: false,
-  blocked: [
-    {
-      rule_name: "Desvio individual",
-      template_code: "deviation_individual",
-      meta_status: "pending",
+  whatsapp: {
+    provider: "meta_cloud",
+    capabilities: {
+      official: true,
+      requires_templates: true,
+      ban_risk: false,
+      requires_recipient_opt_in: false,
     },
-  ],
+    templates_total: 2,
+    templates_approved: 1,
+    rules_blocked: 1,
+    ready: false,
+    blocked: [
+      {
+        rule_name: "Desvio individual",
+        template_code: "deviation_individual",
+        meta_status: "pending",
+      },
+    ],
+  },
+  telegram: {
+    provider: "telegram",
+    capabilities: {
+      official: true,
+      requires_templates: false,
+      ban_risk: false,
+      requires_recipient_opt_in: true,
+    },
+    bot_username: "@zz_bot_inventado",
+    webhook_configured: true,
+    webhook_url:
+      "https://api.zz-inventada.test/webhooks/telegram/zz-token-inventado-0123456789abcdef",
+    webhook_path_token: "zz-token-inventado-0123456789abcdef",
+    health_status: "connected",
+    health_checked_at: "2026-09-15T13:05:00Z",
+    health_changed_at: "2026-09-14T09:00:00Z",
+    health_detail: null,
+    ready: true,
+  },
 };
+
+/** O estado da produção hoje: cliente sem canal nenhum. */
+const SEM_CANAL: ConnectionsScreen = { whatsapp: null, telegram: null };
 
 function answer(status: number, body: unknown): Response {
   return new Response(JSON.stringify(body), {
@@ -73,6 +103,14 @@ describe("a tela de Conexões — caminho 2", () => {
     expect(url).not.toMatch(/tenant/i);
     expect(init.headers.Authorization).toBe("Bearer token-de-teste");
     expect(screen).toEqual(PAYLOAD);
+  });
+
+  it("os dois canais nulos são resposta válida, não null — é a produção hoje", async () => {
+    // `null` da leitura é sessão ou papel; `{ whatsapp: null, telegram: null }`
+    // é um cliente sem canal, e a tela tem estado próprio para cada um.
+    fetchMock.mockResolvedValue(answer(200, SEM_CANAL));
+
+    expect(await loadConnections()).toEqual(SEM_CANAL);
   });
 
   it("401 é a sessão que venceu, e vira null", async () => {
@@ -108,16 +146,31 @@ describe("a tela de Conexões — caminho 2", () => {
 });
 
 const CREDENTIAL: CredentialStatus = {
+  channel: "whatsapp",
   configured: true,
   provider: "meta_cloud",
   updated_at: "2026-09-14T13:05:00Z",
   public_identity: "+55 11 99999-0000",
 };
 
+const TELEGRAM_CREDENTIAL: CredentialStatus = {
+  channel: "telegram",
+  configured: true,
+  provider: "telegram",
+  updated_at: "2026-09-15T13:05:00Z",
+  public_identity: "@zz_bot_inventado",
+};
+
 const FORMS: ProviderForm[] = [
   {
     provider: "meta_cloud",
-    capabilities: { official: true, requires_templates: true, ban_risk: false },
+    channel: "whatsapp",
+    capabilities: {
+      official: true,
+      requires_templates: true,
+      ban_risk: false,
+      requires_recipient_opt_in: false,
+    },
     fields: [
       {
         name: "phone_number_id",
@@ -133,23 +186,36 @@ const FORMS: ProviderForm[] = [
   },
 ];
 
-describe("a credencial — o estado, nunca o valor (caminho 2)", () => {
+describe("a credencial — o estado, nunca o valor (caminho 2), um canal por vez", () => {
   it("200 devolve o estado como veio, com o token no header e sem tenant na URL", async () => {
     fetchMock.mockResolvedValue(answer(200, CREDENTIAL));
 
-    const status = await loadCredential();
+    const status = await loadCredential("whatsapp");
 
     const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toMatch(/\/canais\/credencial$/);
+    // ⛔ O canal vai na query string, e é o único parâmetro.
+    expect(url).toMatch(/\/canais\/credencial\?canal=whatsapp$/);
     expect(url).not.toMatch(/tenant/i);
     expect(init.headers.Authorization).toBe("Bearer token-de-teste");
     expect(status).toEqual(CREDENTIAL);
   });
 
+  it("⛔ o canal do Telegram pede `?canal=telegram` — e não o do WhatsApp", async () => {
+    // Uma função que ignorasse o argumento passaria no caso acima e cai aqui.
+    fetchMock.mockResolvedValue(answer(200, TELEGRAM_CREDENTIAL));
+
+    const status = await loadCredential("telegram");
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/canais\/credencial\?canal=telegram$/);
+    expect(url).not.toMatch(/whatsapp/);
+    expect(status).toEqual(TELEGRAM_CREDENTIAL);
+  });
+
   it("401 vira null", async () => {
     fetchMock.mockResolvedValue(answer(401, { detail: "…" }));
 
-    expect(await loadCredential()).toBeNull();
+    expect(await loadCredential("whatsapp")).toBeNull();
   });
 
   it("403 vira null", async () => {
@@ -157,13 +223,15 @@ describe("a credencial — o estado, nunca o valor (caminho 2)", () => {
       answer(403, { detail: "Sem vínculo ativo com este cliente." }),
     );
 
-    expect(await loadCredential()).toBeNull();
+    expect(await loadCredential("telegram")).toBeNull();
   });
 
   it("⛔ 500 relança — a API fora do ar não é 'sem credencial'", async () => {
     fetchMock.mockResolvedValue(answer(500, { detail: "boom" }));
 
-    await expect(loadCredential()).rejects.toMatchObject({ status: 500 });
+    await expect(loadCredential("whatsapp")).rejects.toMatchObject({
+      status: 500,
+    });
   });
 });
 
@@ -205,7 +273,7 @@ describe("os formulários dos provedores (caminho 2)", () => {
       .mockResolvedValueOnce({ data: { session: null } })
       .mockResolvedValueOnce({ data: { session: null } });
 
-    expect(await loadCredential()).toBeNull();
+    expect(await loadCredential("whatsapp")).toBeNull();
     expect(await loadProviderForms()).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });

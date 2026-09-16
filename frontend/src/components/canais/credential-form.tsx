@@ -2,7 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import { useRouter } from "next/navigation";
-import { type ComponentProps, useState } from "react";
+import { type ComponentProps, useId, useState } from "react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
 
@@ -142,6 +142,9 @@ function ProviderFields({
     resolver: zodResolver(schemaFor(form.fields)),
     defaultValues: emptyValues(form.fields),
   });
+  // Um formulário por canal na mesma página, e dois provedores podem nomear o
+  // mesmo campo: o `id` precisa ser desta instância, não do nome.
+  const idPrefix = useId();
 
   const onSubmit = handleSubmit(async (values) => {
     onOutcome(null);
@@ -169,7 +172,7 @@ function ProviderFields({
         {form.fields.map((field) => (
           <TextField
             key={field.name}
-            id={`credencial-${field.name}`}
+            id={`${idPrefix}${field.name}`}
             label={field.label}
             type={field.secret ? "password" : "text"}
             autoComplete={field.autocomplete}

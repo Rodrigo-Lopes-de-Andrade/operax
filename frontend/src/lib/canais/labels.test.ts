@@ -2,12 +2,30 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { label, META_STATUS_LABEL, PROVIDER_LABEL } from "@/lib/canais/labels";
+import {
+  CHANNEL_LABEL,
+  CHANNELS,
+  label,
+  META_STATUS_LABEL,
+  PROVIDER_LABEL,
+} from "@/lib/canais/labels";
 
 // A raiz do vitest é `frontend/` — o `include` do config já assume isso — e em
 // jsdom `import.meta.url` não é `file:`, então o caminho sai do cwd.
 const SRC_DIR = join(process.cwd(), "src");
 const LABELS_FILE = join(SRC_DIR, "lib", "canais", "labels.ts");
+
+/**
+ * Os quatro nomes. Os três de WhatsApp são identificadores que só existem
+ * como nome de provedor, e `\b` basta. `telegram` também é canal
+ * (`screen.telegram`, `telegram: TelegramChannel | null`), segmento de rota
+ * (`/canais/telegram/conectar`, `/webhooks/telegram/`) e nome de arquivo
+ * (`telegram-connection`) — por isso ele entra pela regra da SPEC §1.1 ao pé
+ * da letra: **como string literal**, entre aspas. É exatamente o que um
+ * `if provider === "telegram"` escreveria, e o que o campo, a rota e o
+ * import não escrevem.
+ */
+const PROVIDER_LITERAL = /\b(meta_cloud|z_api|uazapi)\b|["'`]telegram["'`]/;
 
 function sourceFiles(dir: string): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
@@ -24,13 +42,14 @@ function sourceFiles(dir: string): string[] {
 }
 
 describe("os nomes dos provedores vivem num lugar só", () => {
-  it("⛔ o Record tem exatamente os três provedores de WhatsApp — nem um a mais", () => {
-    // O par de `WHATSAPP_PROVIDERS` do backend e do índice
-    // `integration_whatsapp_unico_ativo`. Um quarto nome aqui sem um quarto
-    // nome lá é um rótulo para um canal que a API nunca vai devolver — e o
-    // Telegram, quando entrar, entra pelos dois lados no mesmo PR.
+  it("⛔ o Record tem exatamente os quatro provedores — os três de WhatsApp e o Telegram", () => {
+    // O par de `CHANNEL_PROVIDERS` do backend: os três do índice
+    // `integration_whatsapp_unico_ativo` e o do índice irmão
+    // `integration_telegram_unico_ativo`. Um quinto nome aqui sem um quinto
+    // nome lá é um rótulo para um canal que a API nunca vai devolver.
     expect(Object.keys(PROVIDER_LABEL).sort()).toEqual([
       "meta_cloud",
+      "telegram",
       "uazapi",
       "z_api",
     ]);
@@ -42,12 +61,13 @@ describe("os nomes dos provedores vivem num lugar só", () => {
     );
     expect(label(PROVIDER_LABEL, "z_api")).toBe("Z-API");
     expect(label(PROVIDER_LABEL, "uazapi")).toBe("UAZAPI");
+    expect(label(PROVIDER_LABEL, "telegram")).toBe("Telegram");
   });
 
   it("provedor que a matriz não conhece aparece cru em vez de sumir", () => {
     // O backend levanta para provedor desconhecido (fail-closed); se um dia
     // deixar passar, a tela mostra o código — feio, e honesto.
-    expect(label(PROVIDER_LABEL, "telegram")).toBe("telegram");
+    expect(label(PROVIDER_LABEL, "signal")).toBe("signal");
   });
 
   it("⛔ nenhum outro arquivo de `src/` escreve o nome de um provedor", () => {
@@ -58,7 +78,7 @@ describe("os nomes dos provedores vivem num lugar só", () => {
     const offenders = sourceFiles(SRC_DIR).filter(
       (file) =>
         file !== LABELS_FILE &&
-        /\b(meta_cloud|z_api|uazapi)\b/.test(readFileSync(file, "utf8")),
+        PROVIDER_LITERAL.test(readFileSync(file, "utf8")),
     );
 
     expect(offenders).toEqual([]);
@@ -69,12 +89,68 @@ describe("os nomes dos provedores vivem num lugar só", () => {
     const files = sourceFiles(SRC_DIR);
 
     expect(files).toContain(LABELS_FILE);
-    // E o arquivo mais provável de ofender — uma varredura reduzida a
-    // `lib/canais/` passaria verde sem nunca olhar o componente.
+    // E os arquivos mais prováveis de ofender — uma varredura reduzida a
+    // `lib/canais/` passaria verde sem nunca olhar os componentes.
     expect(files).toContain(
       join(SRC_DIR, "components", "canais", "connections.tsx"),
     );
-    expect(readFileSync(LABELS_FILE, "utf8")).toMatch(/meta_cloud/);
+    expect(files).toContain(
+      join(SRC_DIR, "components", "canais", "telegram-connection.tsx"),
+    );
+    expect(files).toContain(
+      join(
+        SRC_DIR,
+        "app",
+        "dashboard",
+        "administracao",
+        "conexoes",
+        "page.tsx",
+      ),
+    );
+    expect(PROVIDER_LITERAL.test(readFileSync(LABELS_FILE, "utf8"))).toBe(true);
+  });
+
+  it("✅ o positivo do quarto nome: a varredura casa o literal que um `if` escreveria", () => {
+    // Os três de WhatsApp já eram casados; este prende que `telegram` também é
+    // — nas três aspas, em comparação, em chave de objeto e em chamada. Até o
+    // literal de *canal* cai: todo `telegram` entre aspas sai de `labels.ts`.
+    expect(PROVIDER_LITERAL.test('if (provider === "telegram") {')).toBe(true);
+    expect(PROVIDER_LITERAL.test("provider: 'telegram',")).toBe(true);
+    expect(PROVIDER_LITERAL.test("case `telegram`:")).toBe(true);
+    expect(PROVIDER_LITERAL.test('channel === "telegram"')).toBe(true);
+    expect(PROVIDER_LITERAL.test('loadCredential("telegram")')).toBe(true);
+    expect(PROVIDER_LITERAL.test('provider === "meta_cloud"')).toBe(true);
+  });
+
+  it("… e o que não é literal passa: campo, rota e nome de arquivo", () => {
+    // O que o `src/` precisa escrever e não é nome de provedor: o campo do
+    // contrato, as rotas da API e o import do componente. Nenhum deles é um
+    // `if` esperando o quarto canal.
+    expect(PROVIDER_LITERAL.test("screen.telegram ?? null")).toBe(false);
+    expect(PROVIDER_LITERAL.test("telegram: TelegramChannel | null;")).toBe(
+      false,
+    );
+    expect(PROVIDER_LITERAL.test('"/canais/telegram/conectar"')).toBe(false);
+    expect(PROVIDER_LITERAL.test("`${base}/webhooks/telegram/${token}`")).toBe(
+      false,
+    );
+    expect(
+      PROVIDER_LITERAL.test('from "@/components/canais/telegram-connection"'),
+    ).toBe(false);
+    expect(PROVIDER_LITERAL.test('id="channel-telegram"')).toBe(false);
+  });
+});
+
+describe("os dois canais", () => {
+  it("são exatamente dois, nesta ordem, e coexistem — a tela mostra os dois sempre", () => {
+    // SPEC §2.1: WhatsApp e Telegram são canais diferentes e devem coexistir.
+    // A ordem é a da tela (o que já existe primeiro) e a dos formulários.
+    expect(CHANNELS).toEqual(["whatsapp", "telegram"]);
+  });
+
+  it("cada canal tem rótulo humano", () => {
+    expect(CHANNEL_LABEL.whatsapp).toBe("WhatsApp");
+    expect(CHANNEL_LABEL.telegram).toBe("Telegram");
   });
 });
 
