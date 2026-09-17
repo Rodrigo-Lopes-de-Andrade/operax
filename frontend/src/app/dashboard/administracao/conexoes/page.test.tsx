@@ -8,6 +8,7 @@ import type {
   ConnectionsScreen,
   CredentialField,
   CredentialStatus,
+  DeliveryByChannelRow,
   ProviderForm,
   TelegramAdhesionRow,
 } from "@/lib/canais/queries";
@@ -29,6 +30,7 @@ const loadConnections = vi.fn();
 const loadCredential = vi.fn();
 const loadProviderForms = vi.fn();
 const loadTelegramAdhesion = vi.fn();
+const loadDeliveryByChannel = vi.fn();
 
 vi.mock("@/lib/identity", async () => {
   const actual =
@@ -43,6 +45,7 @@ vi.mock("@/lib/canais/queries", () => ({
   loadCredential: (channel: Channel) => loadCredential(channel),
   loadProviderForms: () => loadProviderForms(),
   loadTelegramAdhesion: () => loadTelegramAdhesion(),
+  loadDeliveryByChannel: (...args: unknown[]) => loadDeliveryByChannel(...args),
 }));
 
 function identidade(role: string): Identity {
@@ -202,6 +205,24 @@ const ADHESION: TelegramAdhesionRow[] = [
   },
 ];
 
+/** Uma semana com os dois canais — contagens, e nada que nomeie uma pessoa. */
+const DELIVERIES: DeliveryByChannelRow[] = [
+  {
+    week_start: "2026-08-31",
+    channel: "whatsapp",
+    provider: "meta_cloud",
+    sent: 40,
+    failed: 2,
+  },
+  {
+    week_start: "2026-08-31",
+    channel: "telegram",
+    provider: "telegram",
+    sent: 10,
+    failed: 0,
+  },
+];
+
 type Credentials = Partial<Record<Channel, CredentialStatus | null>>;
 
 async function abrir(
@@ -210,6 +231,7 @@ async function abrir(
   credentials: Credentials = NOT_CONFIGURED,
   forms: ProviderForm[] | null = FORMS,
   adhesion: TelegramAdhesionRow[] | null = ADHESION,
+  deliveries: DeliveryByChannelRow[] | null = DELIVERIES,
 ) {
   loadIdentity.mockResolvedValue(identidade(role));
   loadConnections.mockResolvedValue(screenData);
@@ -218,6 +240,7 @@ async function abrir(
   );
   loadProviderForms.mockResolvedValue(forms);
   loadTelegramAdhesion.mockResolvedValue(adhesion);
+  loadDeliveryByChannel.mockResolvedValue(deliveries);
 
   return render(await ConexoesPage());
 }
@@ -238,10 +261,11 @@ beforeEach(() => {
   loadCredential.mockReset();
   loadProviderForms.mockReset();
   loadTelegramAdhesion.mockReset();
+  loadDeliveryByChannel.mockReset();
 });
 
 describe("a porta da página é `isAdmin`, mais estreita que a rota de propósito", () => {
-  it("⛔ `unit_supervisor` recebe 404, e nenhuma das cinco leituras é chamada", async () => {
+  it("⛔ `unit_supervisor` recebe 404, e nenhuma das seis leituras é chamada", async () => {
     loadIdentity.mockResolvedValue(identidade("unit_supervisor"));
 
     await expect(ConexoesPage()).rejects.toThrow("NEXT_NOT_FOUND");
@@ -250,6 +274,7 @@ describe("a porta da página é `isAdmin`, mais estreita que a rota de propósit
     expect(loadCredential).not.toHaveBeenCalled();
     expect(loadProviderForms).not.toHaveBeenCalled();
     expect(loadTelegramAdhesion).not.toHaveBeenCalled();
+    expect(loadDeliveryByChannel).not.toHaveBeenCalled();
   });
 
   it("⛔ `executive` também recebe 404 — lê a área de RH e não configura canal", async () => {
@@ -261,6 +286,7 @@ describe("a porta da página é `isAdmin`, mais estreita que a rota de propósit
     expect(loadConnections).not.toHaveBeenCalled();
     expect(loadCredential).not.toHaveBeenCalled();
     expect(loadTelegramAdhesion).not.toHaveBeenCalled();
+    expect(loadDeliveryByChannel).not.toHaveBeenCalled();
   });
 
   it("sem vínculo com o tenant não há tela", async () => {
@@ -268,6 +294,7 @@ describe("a porta da página é `isAdmin`, mais estreita que a rota de propósit
 
     await expect(ConexoesPage()).rejects.toThrow("NEXT_NOT_FOUND");
     expect(loadConnections).not.toHaveBeenCalled();
+    expect(loadDeliveryByChannel).not.toHaveBeenCalled();
   });
 
   it("✅ `owner` entra e vê os dois canais, o que está preso, e os dois formulários", async () => {
@@ -298,8 +325,8 @@ describe("a porta da página é `isAdmin`, mais estreita que a rota de propósit
   });
 });
 
-describe("as cinco leituras — em paralelo, e `null` em qualquer uma não derruba", () => {
-  it("⛔ `loadCredential` é chamada uma vez por canal, com o canal — e a adesão uma vez", async () => {
+describe("as seis leituras — em paralelo, e `null` em qualquer uma não derruba", () => {
+  it("⛔ `loadCredential` é chamada uma vez por canal, com o canal — a adesão e as entregas uma vez cada", async () => {
     await abrir("owner", SEM_CANAL);
 
     expect(loadCredential).toHaveBeenCalledTimes(2);
@@ -310,6 +337,10 @@ describe("as cinco leituras — em paralelo, e `null` em qualquer uma não derru
     expect(loadConnections).toHaveBeenCalledTimes(1);
     expect(loadProviderForms).toHaveBeenCalledTimes(1);
     expect(loadTelegramAdhesion).toHaveBeenCalledTimes(1);
+    expect(loadDeliveryByChannel).toHaveBeenCalledTimes(1);
+    // Com a janela padrão: a página não escolhe outra, e a frase de vazio do
+    // cartão diz "8 semanas".
+    expect(loadDeliveryByChannel).toHaveBeenCalledWith();
   });
 
   it("null nas conexões (sessão, 401, 403) é 'não pôde ser lido' — outra frase, e não 'sem canal'", async () => {
@@ -481,5 +512,54 @@ describe("C4 — a quinta leitura: a adesão por unidade chega ao cartão do Tel
       screen.queryByRole("table", { name: "Adesão ao Telegram por unidade" }),
     ).toBeNull();
     expect(screen.queryByText("Unidade Zz Alfa")).toBeNull();
+  });
+});
+
+describe("C5 — a sexta leitura: as entregas por canal chegam ao cartão, com ou sem canal", () => {
+  it("✅ com os dois canais, a tabela de entregas está na tela com as semanas que a RPC devolveu", async () => {
+    await abrir("owner", BLOQUEADO);
+
+    expect(
+      screen.getByRole("table", { name: "Entregas por canal e semana" }),
+    ).toBeVisible();
+    expect(screen.getByText("31/08")).toBeVisible();
+  });
+
+  it("⛔ sem canal nenhum, o cartão está lá com a frase de vazio — o `[]` é a mensagem", async () => {
+    await abrir("owner", SEM_CANAL, NOT_CONFIGURED, FORMS, ADHESION, []);
+
+    expect(loadDeliveryByChannel).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole("heading", { name: "Entregas por canal" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText("Nenhuma entrega registrada nas últimas 8 semanas."),
+    ).toBeVisible();
+    expect(
+      screen.queryByRole("table", { name: "Entregas por canal e semana" }),
+    ).toBeNull();
+  });
+
+  it("⛔ `null` nas entregas não derruba a página: o cartão diz que não pôde ler, e o resto fica", async () => {
+    await abrir("owner", BLOQUEADO, NOT_CONFIGURED, FORMS, ADHESION, null);
+
+    expect(notFound).not.toHaveBeenCalled();
+    expect(
+      screen.getByText("As entregas não puderam ser lidas agora."),
+    ).toBeVisible();
+    expect(screen.getByText("@zz_bot_inventado")).toBeVisible();
+    expect(formularios()).toHaveLength(2);
+  });
+
+  it("conexões em `null` (sessão, 401, 403): a leitura das entregas acontece, mas não há onde mostrá-la", async () => {
+    // O `Promise.all` dispara as seis; o cartão vive dentro de `<Connections>`,
+    // que não é renderizado sem a tela — e o estado é o de "não pôde ser
+    // lido", não um cartão de entregas solto.
+    await abrir("owner", null, {}, null);
+
+    expect(loadDeliveryByChannel).toHaveBeenCalledTimes(1);
+    expect(
+      screen.queryByRole("heading", { name: "Entregas por canal" }),
+    ).toBeNull();
   });
 });

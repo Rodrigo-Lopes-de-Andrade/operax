@@ -288,6 +288,16 @@ export type Database = {
           tenant_id: string;
         }[];
       };
+      fn_delivery_by_channel: {
+        Args: { p_weeks?: number };
+        Returns: {
+          channel: string;
+          failed: number;
+          provider: string;
+          sent: number;
+          week_start: string;
+        }[];
+      };
       fn_detection_health: {
         Args: { p_backfill_max_age_hours?: number };
         Returns: {

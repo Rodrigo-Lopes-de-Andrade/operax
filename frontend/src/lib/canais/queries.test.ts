@@ -4,12 +4,14 @@ import { ApiError } from "@/lib/api";
 import {
   loadConnections,
   loadCredential,
+  loadDeliveryByChannel,
   loadProviderForms,
   loadTelegramAdhesion,
   loadTelegramLink,
   loadTemplates,
   type ConnectionsScreen,
   type CredentialStatus,
+  type DeliveryByChannelRow,
   type ProviderForm,
   type TelegramAdhesionRow,
   type TelegramLink,
@@ -26,7 +28,7 @@ const getSession = vi.fn(async (): Promise<{ data: { session: Session } }> => ({
   data: { session: { access_token: "token-de-teste" } },
 }));
 
-/** O `rpc` do Caminho 1 — só a adesão por unidade passa por ele nesta área. */
+/** O `rpc` do Caminho 1 — a adesão por unidade e as entregas por canal. */
 const rpc = vi.fn();
 
 vi.mock("@/lib/supabase-server", () => ({
@@ -516,5 +518,103 @@ describe("a adesão por unidade (caminho 1)", () => {
     rpc.mockResolvedValue({ data: null, error: null });
 
     expect(await loadTelegramAdhesion()).toBeNull();
+  });
+});
+
+/**
+ * Duas semanas, e na primeira dois provedores de WhatsApp — a leitura devolve
+ * as linhas como vieram; quem soma é o cartão. Nenhum nome, nenhum destino.
+ */
+const DELIVERIES: DeliveryByChannelRow[] = [
+  {
+    week_start: "2026-08-31",
+    channel: "whatsapp",
+    provider: "meta_cloud",
+    sent: 40,
+    failed: 2,
+  },
+  {
+    week_start: "2026-08-31",
+    channel: "whatsapp",
+    provider: "z_api",
+    sent: 5,
+    failed: 1,
+  },
+  {
+    week_start: "2026-09-07",
+    channel: "telegram",
+    provider: "telegram",
+    sent: 12,
+    failed: 0,
+  },
+];
+
+describe("as entregas por canal (caminho 1)", () => {
+  it("✅ chama `fn_delivery_by_channel` com `{ p_weeks: 8 }` por padrão — e nada mais", async () => {
+    rpc.mockResolvedValue({ data: DELIVERIES, error: null });
+
+    const rows = await loadDeliveryByChannel();
+
+    expect(rpc).toHaveBeenCalledTimes(1);
+    // ⛔ O único argumento é a janela. O tenant sai da sessão, e a policy
+    // `alert_sent_read` é quem recorta — um `tenant_id` aqui não seria
+    // filtro, seria a tela acreditando que filtra.
+    expect(rpc).toHaveBeenCalledWith("fn_delivery_by_channel", { p_weeks: 8 });
+    expect(JSON.stringify(rpc.mock.calls[0])).not.toMatch(/tenant/i);
+    expect(rows).toEqual(DELIVERIES);
+    // E nenhuma chamada à API: é Caminho 1.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("… e é a janela recebida que vai no argumento, não a fixa", async () => {
+    // Uma função que ignorasse o argumento passaria no caso acima e cai aqui.
+    rpc.mockResolvedValue({ data: [], error: null });
+
+    await loadDeliveryByChannel(12);
+
+    expect(rpc).toHaveBeenCalledWith("fn_delivery_by_channel", {
+      p_weeks: 12,
+    });
+  });
+
+  it("⛔ devolve só as cinco colunas do contrato — uma sexta na resposta não passa", async () => {
+    // A função de banco prova, pelo nome, que o retorno não tem destino nem
+    // hash; a leitura repete a fronteira do lado de cá.
+    rpc.mockResolvedValue({
+      data: [{ ...DELIVERIES[0], destination_hash: "não passa" }],
+      error: null,
+    });
+
+    const rows = await loadDeliveryByChannel();
+
+    expect(rows).toEqual([DELIVERIES[0]]);
+    expect(Object.keys(rows![0]).sort()).toEqual([
+      "channel",
+      "failed",
+      "provider",
+      "sent",
+      "week_start",
+    ]);
+  });
+
+  it("lista vazia é lista vazia — 'nenhuma entrega' é o estado normal enquanto o sender não roda, e não é o de erro", async () => {
+    rpc.mockResolvedValue({ data: [], error: null });
+
+    expect(await loadDeliveryByChannel()).toEqual([]);
+  });
+
+  it("erro do Postgres vira null", async () => {
+    rpc.mockResolvedValue({
+      data: null,
+      error: { message: "permission denied" },
+    });
+
+    expect(await loadDeliveryByChannel()).toBeNull();
+  });
+
+  it("`data` nulo sem erro também é null", async () => {
+    rpc.mockResolvedValue({ data: null, error: null });
+
+    expect(await loadDeliveryByChannel()).toBeNull();
   });
 });

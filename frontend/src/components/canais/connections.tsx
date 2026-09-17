@@ -2,6 +2,7 @@ import { BotOff, MessageSquareOff } from "lucide-react";
 import Link from "next/link";
 import type { ReactNode } from "react";
 
+import { DeliveryByChannel } from "@/components/canais/delivery-by-channel";
 import { TelegramAdhesion } from "@/components/canais/telegram-adhesion";
 import { TelegramConnection } from "@/components/canais/telegram-connection";
 import { Badge, type Tone } from "@/components/ui/badge";
@@ -17,6 +18,7 @@ import type {
   BlockedAlertRule,
   ChannelCapabilities,
   ConnectionsScreen,
+  DeliveryByChannelRow,
   TelegramAdhesionRow,
   TelegramChannel,
   WhatsAppChannel,
@@ -402,17 +404,22 @@ function TelegramCards({
  * na mesma página, um por canal — este componente só lê, e o `<Requirements>`
  * é compartilhado com ele para que o que cada canal exige seja dito de um
  * jeito só. `canWrite` chega a uma coisa: o registro do bot no Telegram.
- * `adhesion` é a única leitura de Caminho 1 da tela, e entra só no cartão do
- * Telegram.
+ * `adhesion` e `deliveries` são as duas leituras de Caminho 1 da tela: a
+ * primeira entra só no cartão do Telegram; a segunda é de ambos os canais e
+ * vai abaixo das duas regiões, **sempre** — sem canal nenhum, o `[]` é a
+ * mensagem, e não um cartão a menos.
  */
 export function Connections({
   screen,
   adhesion,
+  deliveries,
   canWrite,
 }: {
   screen: ConnectionsScreen;
   /** `fn_telegram_adhesion` — contagem por unidade; `null` é "não pôde ser lida". */
   adhesion: TelegramAdhesionRow[] | null;
+  /** `fn_delivery_by_channel` — entregas por semana e canal; `null` é "não pôde ser lida". */
+  deliveries: DeliveryByChannelRow[] | null;
   /** `util.is_admin` — o único clique desta tela é o registro do bot. */
   canWrite: boolean;
 }) {
@@ -451,6 +458,10 @@ export function Connections({
           </Card>
         )}
       </ChannelRegion>
+
+      <div className="xl:col-span-2">
+        <DeliveryByChannel rows={deliveries} />
+      </div>
     </div>
   );
 }

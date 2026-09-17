@@ -268,6 +268,23 @@ export type TelegramAdhesionRow = {
   revoked: number;
 };
 
+/**
+ * Uma linha de `public.fn_delivery_by_channel(p_weeks)`: uma por (semana,
+ * canal, provedor), contagens e nada mais — a função não devolve nem o hash
+ * do destino (SPEC-CANAIS §8, consequência 3). `week_start` é `date`, a
+ * segunda-feira da semana, e chega como `YYYY-MM-DD`: formata-se por string,
+ * sem passar por `Date`, porque não há hora para deslocar. `channel` é o que
+ * agrega — o canal de um provedor nunca se infere pelo nome dele.
+ */
+export type DeliveryByChannelRow = {
+  week_start: string;
+  channel: string;
+  provider: string;
+  /** `sent` + `delivered` + `read` — o que saiu. */
+  sent: number;
+  failed: number;
+};
+
 async function accessToken(): Promise<string | null> {
   const supabase = await getServerSupabase();
   const { data } = await supabase.auth.getSession();
@@ -371,5 +388,36 @@ export async function loadTelegramAdhesion(): Promise<
     joined: row.joined,
     pending: row.pending,
     revoked: row.revoked,
+  }));
+}
+
+/**
+ * As entregas por semana, canal e provedor — Caminho 1, como a adesão: é
+ * contagem, e a função é `security invoker` sobre `app.alert_sent`, então
+ * quem recorta é a policy `alert_sent_read` (`util.is_admin`) — quem não é
+ * admin recebe `[]`, e a página que a chama já é só de admin. `p_weeks` é o
+ * único argumento, e conta para trás a partir da semana atual, inclusa; sem
+ * `tenant_id`, que a policy não aceitaria de qualquer jeito. Erro vira
+ * `null`; lista vazia é lista vazia — o sender ainda não está agendado, e
+ * "nenhuma entrega" vai ser o estado normal por semanas.
+ */
+export async function loadDeliveryByChannel(
+  weeks = 8,
+): Promise<DeliveryByChannelRow[] | null> {
+  const supabase = await getServerSupabase();
+  const { data, error } = await supabase.rpc("fn_delivery_by_channel", {
+    p_weeks: weeks,
+  });
+
+  if (error || !data) {
+    return null;
+  }
+
+  return data.map((row) => ({
+    week_start: row.week_start,
+    channel: row.channel,
+    provider: row.provider,
+    sent: row.sent,
+    failed: row.failed,
   }));
 }

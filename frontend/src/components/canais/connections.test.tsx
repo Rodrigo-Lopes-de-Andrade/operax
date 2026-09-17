@@ -7,6 +7,7 @@ import type {
   BlockedAlertRule,
   ChannelCapabilities,
   ConnectionsScreen,
+  DeliveryByChannelRow,
   TelegramAdhesionRow,
   TelegramChannel,
   WhatsAppChannel,
@@ -144,6 +145,24 @@ const ADHESION: TelegramAdhesionRow[] = [
   },
 ];
 
+/** Uma semana com os dois canais — contagens, e nada que nomeie uma pessoa. */
+const DELIVERIES: DeliveryByChannelRow[] = [
+  {
+    week_start: "2026-08-31",
+    channel: "whatsapp",
+    provider: "meta_cloud",
+    sent: 40,
+    failed: 2,
+  },
+  {
+    week_start: "2026-08-31",
+    channel: "telegram",
+    provider: "telegram",
+    sent: 10,
+    failed: 0,
+  },
+];
+
 const TEMPLATE_PHRASE = /Exige template aprovado pela Meta/;
 const BAN_PHRASE = /volume alto pode levar a banimento/;
 const OPT_IN_PHRASE = /Só alcança quem aderiu pelo convite/;
@@ -187,10 +206,20 @@ function renderTela(
   screenData: ConnectionsScreen,
   canWrite = true,
   adhesion: TelegramAdhesionRow[] | null = ADHESION,
+  deliveries: DeliveryByChannelRow[] | null = DELIVERIES,
 ): ReturnType<typeof render> {
   return render(
-    <Connections screen={screenData} adhesion={adhesion} canWrite={canWrite} />,
+    <Connections
+      screen={screenData}
+      adhesion={adhesion}
+      deliveries={deliveries}
+      canWrite={canWrite}
+    />,
   );
+}
+
+function entregas() {
+  return screen.queryByRole("table", { name: "Entregas por canal e semana" });
 }
 
 function adesao() {
@@ -911,5 +940,85 @@ describe("C4 — a adesão por unidade vive dentro do cartão do Telegram", () =
 
     expect(adesao()).toBeVisible();
     expect(screen.getByText("Unidade Zz Beta")).toBeVisible();
+  });
+});
+
+describe("C5 — as entregas por canal vivem abaixo das duas regiões, sempre", () => {
+  it("✅ com os dois canais, o cartão está na tela, fora das duas regiões, com a tabela da prop", () => {
+    renderTela(tela());
+
+    expect(
+      screen.getByRole("heading", { name: "Entregas por canal" }),
+    ).toBeVisible();
+    expect(entregas()).toBeVisible();
+    // Fora das regiões: é de ambos os canais, e não de um.
+    expect(
+      whatsapp().queryByRole("heading", { name: "Entregas por canal" }),
+    ).toBeNull();
+    expect(
+      telegramRegiao().queryByRole("heading", { name: "Entregas por canal" }),
+    ).toBeNull();
+    // E as duas regiões continuam sendo exatamente duas.
+    expect(screen.getAllByRole("region")).toHaveLength(2);
+    // 40 de WhatsApp, 10 de Telegram: 10/50 = 20%.
+    expect(
+      within(entregas()!.querySelector("tbody")!)
+        .getAllByRole("cell")
+        .map((cell) => cell.textContent),
+    ).toEqual(["40", "10", "2", "20%"]);
+  });
+
+  it("⛔ sem canal nenhum, o cartão continua lá — o `[]` é a mensagem, não um cartão a menos", () => {
+    // A produção hoje: nenhum canal, nenhuma entrega. O cartão diz isso.
+    renderTela(EMPTY, true, ADHESION, []);
+
+    expect(
+      screen.getByRole("heading", { name: "Entregas por canal" }),
+    ).toBeVisible();
+    expect(
+      screen.getByText("Nenhuma entrega registrada nas últimas 8 semanas."),
+    ).toBeVisible();
+    expect(entregas()).toBeNull();
+    expect(screen.getAllByRole("region")).toHaveLength(2);
+  });
+
+  it("`null` nas entregas → 'não puderam ser lidas', e o resto da tela fica de pé", () => {
+    renderTela(tela(), true, ADHESION, null);
+
+    expect(
+      screen.getByText("As entregas não puderam ser lidas agora."),
+    ).toBeVisible();
+    expect(entregas()).toBeNull();
+    expect(telegramRegiao().getByText(BOT)).toBeVisible();
+    expect(adesao()).toBeVisible();
+  });
+
+  it("a frase do porquê acompanha o cartão em qualquer estado", () => {
+    const WHY = "Cada pessoa que adere ao Telegram sai do número de WhatsApp.";
+
+    for (const deliveries of [DELIVERIES, [], null]) {
+      const { unmount } = renderTela(EMPTY, true, ADHESION, deliveries);
+
+      expect(screen.getByText(WHY)).toBeVisible();
+      unmount();
+    }
+  });
+
+  it("⛔ as entregas não dependem de `canWrite`: quem lê a tela lê a contagem", () => {
+    renderTela(tela(), false);
+
+    expect(entregas()).toBeVisible();
+  });
+
+  it("vem abaixo das duas regiões, na ordem do DOM", () => {
+    renderTela(tela());
+
+    const cartao = screen.getByRole("heading", { name: "Entregas por canal" });
+    for (const region of screen.getAllByRole("region")) {
+      expect(
+        region.compareDocumentPosition(cartao) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).toBeTruthy();
+    }
   });
 });
