@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.assistant_metric_scope app.assistant_metric_scope.enabled app.ai_query.prompt_version_id app.ai_query.is_dry_run public.fn_assistant_catalog app.work_schedule_day -->
+<!-- verificar-docs: inexistentes-de-proposito app.ai_query.prompt_version_id app.ai_query.is_dry_run app.work_schedule_day -->
 <!-- `app.work_schedule_day` entra na lista porque este documento a CITA para
      contar o erro que ela causou na etapa DP. Ela nunca existiu — ver
      `SPEC-DP.md` §0-bis, que registra as três camadas que existem de verdade. -->
@@ -448,8 +448,20 @@ de segurança aqui, nos dois sentidos.
 ```sql
 create or replace function public.fn_assistant_catalog(p_tenant_id uuid)
 returns table (code text, title text, description text, domain app.sensitive_domain,
-               enabled boolean, visible_to_me boolean)
+               enabled boolean, visible_to_me boolean,
+               target_view text, dimensions text[], filters text[])
 ```
+
+`target_view`, `dimensions` e `filters` (o runtime precisa; decisão do dono em
+17/09/2026): o executor monta a consulta a partir delas, e sem as três teria de
+ler `app.metric` por conta própria — que é a segunda régua que a §4.3 proíbe.
+
+`security invoker`, porque as três réguas da §4.2 já são objetos que o usuário
+alcança — `app.metric` sob `metric_read`, `app.assistant_metric_scope` sob
+`assistant_scope_read`, `util.can_see_domain` (definer, concedido a
+`authenticated`) — e definer aqui seria privilégio sem necessidade. Quem não é
+membro de `p_tenant_id` recebe zero linhas, não erro: a RPC é Caminho 1 e o
+cliente escolhe o parâmetro.
 
 O catálogo efetivo do tenant, com os três filtros da §4 resolvidos numa
 resposta só. É o que a aba "Capacidades" lê **e** o que `catalogo.py` chama —

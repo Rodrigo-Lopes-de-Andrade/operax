@@ -273,6 +273,138 @@ uma invariante que precisa sobreviver a toda mudança futura (SPEC §4.1).
 - `catalogo.py` passa a **chamar a RPC** em vez de montar catálogo por query
   própria.
 
+**Despachada em 17/09/2026, sobre o A1 commitado (`9bf565e`).** Duas
+decisões minhas no despacho, além do que a parada fixou: a RPC é **`security
+invoker`** — as três réguas da §4.2 já são objetos que o usuário alcança
+(`metric_read`, a policy de leitura nova, `util.can_see_domain`), e definer
+aqui seria privilégio sem necessidade; e **quem não é membro do
+`p_tenant_id` recebe zero linhas**, não erro, porque a RPC é Caminho 1 e o
+cliente escolhe o parâmetro. As três policies por nome:
+`assistant_scope_read` (select, `has_tenant`), `assistant_scope_insert` e
+`assistant_scope_update` (`is_admin`) — sem `for all`, que cobriria delete.
+`reachable()`/`domains()` ficam no `agente.py` (fora do escopo; `choose`
+ainda usa `domains` para a recusa nomeada `sem_dominio`), e a redundância
+fica registrada como dívida. Gate 2 vira teste de texto sobre `executor.py`
+e `catalogo.py`: `from app.metric` reprova, `fn_assistant_catalog` ausente
+reprova.
+
+**Entregue em 17/09/2026, em revisão + guardião.** `20260917203425_assistant_metric_scope`
+e `20260917203429_assistant_catalog_fn` (RPC `language sql stable security
+invoker`, medida como `authenticated` antes dos testes: owner A vê 11
+métricas, `documents_expiring` de pii não visível; supervisor lê o escopo e
+vê `daily_trend`; owner B chamando A recebe zero). `executor._CATALOG_SQL`
+passa a `from public.fn_assistant_catalog(%(tenant_id)s) where visible_to_me`;
+`Metric` **não** ganhou campo (tudo o que chega ao `from_rows` já é visível;
+as duas colunas são da aba). `97` ganhou a seção A2 (41 asserções, 136 no
+total, contador no cabeçalho); `99` item 19; `test_agente_catalogo_rpc.py`
+com o gate 2 como teste de texto (distingue docstring de string de SQL por
+`ast`). Seis mutações do próprio implementador, todas mortas — a m5 em duas
+variantes, porque uma prova a checagem por nome e a outra por `cmd`. pytest
+1235, suíte 64 migrations RC=0. Achado dele que vira dívida nomeada: a
+segunda régua que ficou (`reachable`/`domains`) já tem um caso latente —
+`_PERMISSIONS_SQL` pergunta quatro domínios e o enum tem cinco desde
+`banking`; uma métrica futura `banking` viria visível pela RPC e seria
+descartada por `reachable`. Disponibilidade, não vazamento; nenhuma métrica
+é `banking` hoje.
+
+**Guardião: PASSA, seis de seis.** Suíte inteira no `operax_test` (64
+migrations, `97` 136, `98` 293, `99` 1–19, dicionário byte a byte igual ao
+da árvore, `verificar_docs` ✅ com o marcador do SPEC sem os dois objetos),
+doze checkpoints de hash limpos. Superfície: o diff de catálogo entre 62 e
+64 migrations é só o que a A2 cria — uma função em `public` (invoker,
+`search_path`, anon **f**), três policies, uma tabela em `app`; nenhuma
+view nova, nenhuma dependente da tabela; exposed schemas do ensaio
+inalterados. Matriz `visible_to_me` medida por seis pessoas como
+`authenticated` e cruzada independentemente com `domain_permission` ×
+`tenant_member`: dez de dez, zero violação; membro de A recebe 0 linhas de
+B e vice-versa; nove chaves no JSON, nenhum `tenant_id`/`updated_by`;
+métrica inativa com escopo `enabled = true` não devolve `target_view`.
+`delete` recusado por grant para owner, supervisor **e `service_role`**.
+Item 19 não-vácuo em cinco mutações. Observação registrada: a guarda de
+corpo do item 19 é textual (`like '%has_tenant%'`) — tirar o `has_tenant`
+do `where` e deixá-lo em comentário passa no `99` e cai no `97` (A2-e2).
+A suíte inteira é a régua; o `99` sozinho não é.
+
+**Revisão: REPROVADA por força de teste — código correto em tudo o que
+mediu.** 31 mutações. Um ALTO pela régua literal do despacho: o gate da §4.3
+passava verde com o catálogo vindo de `app.metric` — `"from app." +
+"metric"` e `from app . metric` escapavam do gate textual, um módulo novo
+lendo `app.metric` também, e as três asserções de runtime casavam substring
+no texto cru, então `-- from public.fn_assistant_catalog(…) where
+visible_to_me` num **comentário SQL** as satisfazia (21/21 verdes com a
+desabilitada chegando ao modelo, medido no Postgres); `where visible_to_me
+= false` e `is not null` também passavam. Um MÉDIO: o `left join` sem
+`s.tenant_id = p_tenant_id` sobrevivia a `97`, `99` e ao `do $$` — e não é
+equivalente: usuário membro de A **e** B, com B desligando o que A não
+desligou, recebe 12 linhas em vez de 11, `daily_trend` desligada por B e
+`payroll_summary` duas vezes, uma habilitada. BAIXOs: `A2-h1` aceitava
+qualquer `permission denied` (com grant a anon, a recusa vinha de
+`app.metric`); `where m.active` equivalente sob invoker (a RLS filtra) mas
+não sob definer; `grant execute … to service_role` é morto (`service_role`
+não tem select em `app.metric`); `order by` sobrevive e não importa. Falso
+verde acrescentado por ele: `coalesce(null, true)` converte "não pode ler o
+escopo" em "habilitada" — qualquer estreitamento futuro de
+`assistant_scope_read` abaixo do `has_tenant` do corpo faz a desligada
+**reaparecer** sem erro; `A2-0b`/`b5` e o `99` prendem a policy igual à
+condição do corpo.
+
+**Fechado por mim antes do commit, cada um provado na cópia:** o teste
+Python tira comentários SQL antes de casar, exige que a instrução executada
+**termine** em `where visible_to_me` e não contenha `app.metric` com
+qualquer espaçamento, junta os literais adjacentes antes de procurar, e o
+gate textual varre **todos** os módulos de `operax/` e `server/` (77
+arquivos parametrizados) — b4b cai em três asserções, b9/b10/b7a em uma
+cada, controle 83 verdes. `97` ganhou o bloco (j): quarto usuário, membro
+de A e de B, B desliga `daily_trend` e grava `payroll_summary`; cinco
+asserções (141 no total) — r2 cai em `A2-j2`. `99` item 19 cobra
+`s.tenant_id = p_tenant_id` e `m.active` no corpo — r2 e r1 caem nele.
+`A2-h1` exige `permission denied for function` — r6 cai "pelo motivo
+errado". O grant morto a `service_role` fica registrado como dívida, não
+retirado: o padrão das RPCs recentes o tem, e retirá-lo é decisão de
+padrão, não desta sprint.
+
+### ✅ A2 fechado no código em 17/09/2026
+
+Um ciclo de implementação e um de conserto meu. O que entrou:
+`20260917203425_assistant_metric_scope` (tabela em `app`, ausência =
+habilitada, três policies por nome, nenhum delete para papel nenhum,
+`trg_updated_at`) e `20260917203429_assistant_catalog_fn`
+(`public.fn_assistant_catalog`, `security invoker`, nove colunas, zero
+linhas para não-membro); `executor.load_catalog` lendo a RPC com `where
+visible_to_me` no SQL e nada de `app.metric` em módulo nenhum do backend
+(gate de texto sobre 77 arquivos + asserção sobre a instrução executada sem
+comentários); `97` com 141 asserções (46 da A2, inclusive o usuário em
+dois tenants); `99` item 19. Gates no fechamento: pytest 1312, ruff limpo,
+suíte de banco 64 migrations RC=0.
+
+Os dois gates da sprint, como pedidos: (1) desabilitar `payroll_summary`
+tira a métrica do catálogo do owner e do supervisor; reabilitar devolve ao
+owner e **não** ao supervisor, que continua sem `compensation` — medido
+como `authenticated` pelo implementador, pelo revisor e pelo guardião, e
+no alvo: com escopo `enabled = true` explícito o supervisor recebe
+`visible_to_me = false` **e** zero linhas de `vw_payroll_summary`. (2) O
+teste que falha se o runtime montar catálogo por conta própria, endurecido
+até o revisor não conseguir burlá-lo sem mudar o comportamento.
+
+O que **não** está em produção: as duas migrations entram na fila do dono —
+**onze** agora (5 C3, 2 C5, 2 A1, 2 A2). O runtime já lê a régua única em
+produção assim que a API subir com este commit — **e é por isso que a
+ordem importa**: o `executor.py` novo chama `public.fn_assistant_catalog`,
+que não existe lá; sem as migrations da A2 aplicadas, **o assistente inteiro
+responde "Não consegui carregar as métricas agora"** em produção. Push
+deste commit e aplicação das duas migrations têm de acontecer na mesma
+janela, migrations primeiro.
+
+Dívidas nomeadas: `reachable()`/`domains()` no `agente.py` são uma segunda
+régua que só esconde (quatro domínios de cinco; uma métrica `banking`
+futura viria visível pela RPC e seria descartada) — remover na A3/A4;
+`grant execute … to service_role` morto na RPC (sem select em
+`app.metric`); `_CATALOG_SQL` nunca roda contra o Postgres em gate nenhum
+(o `91` não importa o executor porque ele traz o driver); `app.metric.domain`
+é declarado, não derivado do alvo — quem semeia métrica com domínio errado
+vaza existência, não dado; lista de RPCs do Caminho 1 no `CLAUDE.md`
+defasada (pré-existente).
+
 **Gate — dois testes, e o segundo é o que importa:**
 
 1. desabilitar `payroll_summary` faz o assistente responder "não tenho esse

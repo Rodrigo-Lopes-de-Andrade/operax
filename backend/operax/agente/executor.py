@@ -9,10 +9,18 @@ so.
 
 WHAT REACHES THE SQL TEXT, AND WHAT DOES NOT
 The target name and the column names come from `catalogo.BINDINGS`, a frozen map
-in code, reached through a metric loaded from `app.metric`. Nothing the model
-said and nothing the user typed is ever interpolated: every value travels as a
-bound parameter. The db-test compiles the statement each metric generates against
-the real schema, which is what catches a column that stopped existing.
+in code, reached through a metric loaded from the catalogue RPC. Nothing the
+model said and nothing the user typed is ever interpolated: every value travels
+as a bound parameter. The db-test compiles the statement each metric generates
+against the real schema, which is what catches a column that stopped existing.
+
+WHERE THE CATALOGUE COMES FROM
+`public.fn_assistant_catalog`, and never a query of this module's own: it is the
+single ruler of SPEC-AGENTE §4.3 — the "Capacidades" tab reads the same function,
+so a metric the tenant disabled disappears from both at once instead of from one
+of them in the rare case nobody looks at. The RPC is `security invoker` and is
+called under `user_scope`: `active`, the tenant's scope and the person's domains
+are all resolved by the database, as the person asking.
 
 WHERE THE STATEMENT IS BUILT
 In `catalogo.py`, not here, and for a reason that is not tidiness: `build` is
@@ -29,10 +37,10 @@ from operax.agente.catalogo import MAX_ROWS, Choice, build
 from operax.core.tenant import TenantContext, user_scope
 
 _CATALOG_SQL = """
-select code, title, description, target_view, dimensions, filters, domain
-from app.metric
-where active
-order by code
+select code, title, description, target_view, dimensions, filters, domain,
+       enabled, visible_to_me
+from public.fn_assistant_catalog(%(tenant_id)s)
+where visible_to_me
 """
 
 _PERMISSIONS_SQL = """
@@ -44,9 +52,14 @@ select util.can_see_domain(%(tenant_id)s, 'pii')          as pii,
 
 
 async def load_catalog(tenant: TenantContext) -> list[dict[str, Any]]:
-    """O catálogo cru, lido como o usuário. `metric_read` só mostra o que está ativo."""
+    """O catálogo efetivo, lido como o usuário pela régua única.
+
+    Só o que `visible_to_me` — ativo, habilitado pelo tenant e no alcance de
+    domínio de quem pergunta. O filtro é no SQL, e não depois: uma métrica
+    desabilitada não chega nem à lista crua.
+    """
     async with user_scope(tenant) as scope:
-        await scope.execute(_CATALOG_SQL)
+        await scope.execute(_CATALOG_SQL, {"tenant_id": tenant.tenant_id})
         return [dict(row) for row in await scope.fetchall()]
 
 

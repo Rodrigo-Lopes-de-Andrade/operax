@@ -1,7 +1,8 @@
 -- ============================================================================
--- OperaX — TESTE DAS CAMADAS DO ASSISTENTE (SPEC-AGENTE §2, §3a, §3d)
+-- OperaX — TESTE DAS CAMADAS DO ASSISTENTE (SPEC-AGENTE §2, §3a, §3b, §3d, §3e, §4)
 -- ----------------------------------------------------------------------------
--- Quatro garantias que só valem se o banco as sustentar:
+-- 141 asserções (95 do A1 + 46 do A2), contadas pelas chamadas a assert_eq,
+-- deve_falhar e rpc_recusa. Garantias que só valem se o banco as sustentar:
 --
 --   A) As sete linhas da SPEC §3a — coerência de escopo, modelo só na
 --      plataforma, versão imutável, um ponteiro por escopo, versão apontada
@@ -22,6 +23,12 @@
 --      owner de outro tenant não aprende se este tem rascunho), `max + 1`
 --      sobrevivendo a uma versão apagada pelo dono, o `update` final do
 --      definer preso ao tenant, e `updated_at` do rascunho mantido por trigger.
+--   A2) Capacidades (SPEC-AGENTE §4.1, a invariante virada em teste): a
+--      tabela de escopo com as três policies da parada e ninguém apagando; o
+--      catálogo pela régua única `fn_assistant_catalog` — ausência = habilitada,
+--      desabilitar tira dos dois papéis, REABILITAR NÃO CONCEDE domínio ao
+--      supervisor; quem não é membro recebe zero linhas; métrica inativa não
+--      aparece nem com escopo `enabled = true` (a EURECA manda primeiro).
 --
 -- A fidelidade da transcrição da v1 (o texto da migration == agente._prompt)
 -- é pytest — `backend/tests/test_agente_prompt_seed.py` — porque só o Python
@@ -681,6 +688,313 @@ do $$ begin
     (select count(*) from app.assistant_draft), 1);
 end $$;
 reset request.jwt.claims;
+reset role;
+
+-- ===========================================================================
+\echo '--- A2. Capacidades: o escopo do tenant e a régua única (SPEC-AGENTE §3b, §3e, §4)'
+-- ===========================================================================
+-- A invariante da §4.1: habilitar uma métrica NÃO concede acesso a dado; a
+-- lista só estreita. Os três filtros da §4.2, nesta ordem e nunca ao
+-- contrário: app.metric.active → assistant_metric_scope.enabled (ausência =
+-- habilitada) → util.can_see_domain. Tudo lido pela RPC, como o papel — é a
+-- régua única da §4.3, a mesma que a aba Capacidades e o runtime leem.
+--
+-- Quem tem o quê: owner A recebe `compensation` aqui (o cenário lá em cima
+-- não semeia domain_permission); o supervisor de A não tem linha nenhuma, e
+-- sem linha é negado. É esse par que separa "desabilitado" de "sem domínio".
+-- Nada do que este bloco grava sai por delete como authenticated — não há
+-- grant, e é o ponto: sai pelo rollback da transação.
+
+-- --- Estrutura (como dono do banco)
+reset role;
+do $$
+declare pols text[]; v_n bigint;
+begin
+  select array_agg(policyname::text order by policyname) into pols
+    from pg_policies where schemaname = 'app' and tablename = 'assistant_metric_scope';
+  perform pg_temp.assert_eq('A2-0a. exatamente as três policies da parada, por nome',
+    case when pols = array['assistant_scope_insert', 'assistant_scope_read', 'assistant_scope_update'] then 1 else 0 end, 1);
+  select count(*) into v_n from pg_policies
+   where schemaname = 'app' and tablename = 'assistant_metric_scope'
+     and ((policyname = 'assistant_scope_read'   and cmd = 'SELECT' and qual like '%has_tenant%' and qual not like '%is_admin%')
+       or (policyname = 'assistant_scope_insert' and cmd = 'INSERT' and with_check like '%is_admin%')
+       or (policyname = 'assistant_scope_update' and cmd = 'UPDATE' and qual like '%is_admin%' and with_check like '%is_admin%'));
+  perform pg_temp.assert_eq('A2-0b. leitura por has_tenant (SELECT), escrita por is_admin (INSERT e UPDATE, não ALL)', v_n, 3);
+  select count(*) into v_n from (values ('anon'), ('authenticated'), ('service_role')) r(papel)
+   where has_table_privilege(r.papel, 'app.assistant_metric_scope', 'DELETE')
+      or has_table_privilege(r.papel, 'app.assistant_metric_scope', 'TRUNCATE');
+  perform pg_temp.assert_eq('A2-0c. ninguém apaga nem trunca (anon, authenticated, service_role)', v_n, 0);
+  select count(*) into v_n from (values ('SELECT'), ('INSERT'), ('UPDATE'), ('DELETE')) p(priv)
+   where has_table_privilege('anon', 'app.assistant_metric_scope', p.priv);
+  perform pg_temp.assert_eq('A2-0d. anon não tem nada na tabela', v_n, 0);
+  select count(*) into v_n from pg_constraint c
+   where c.conrelid = 'app.assistant_metric_scope'::regclass and c.contype = 'f' and c.confdeltype = 'c'
+     and c.confrelid in ('app.tenant'::regclass, 'app.metric'::regclass);
+  perform pg_temp.assert_eq('A2-0e. as duas FKs (tenant, metric) são on delete cascade', v_n, 2);
+end $$;
+
+-- O domínio: owner A vê compensation; o supervisor de A não tem linha (= negado).
+insert into app.domain_permission (tenant_id, role, domain, allowed)
+values ('a1a00000-0000-0000-0000-00000000000a', 'owner', 'compensation', true);
+
+-- --- (a) ausência de linha = habilitada; visível para quem tem o domínio
+\echo '    (a) owner A, sem linha de escopo'
+set local role authenticated;
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$
+declare v_a uuid := 'a1a00000-0000-0000-0000-00000000000a';
+begin
+  perform pg_temp.assert_eq('A2-a1. o catálogo do owner A não é vácuo (toda métrica ativa aparece)',
+    (select count(*) from public.fn_assistant_catalog(v_a)),
+    (select count(*) from app.metric where active));
+  perform pg_temp.assert_eq('A2-a2. sem linha de escopo, payroll_summary vem enabled = true',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and enabled), 1);
+  perform pg_temp.assert_eq('A2-a3. e visible_to_me = true para o owner (tem compensation)',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and visible_to_me), 1);
+  perform pg_temp.assert_eq('A2-a4. documents_expiring (pii) vem enabled e NÃO visível: domínio que o owner não recebeu aqui',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'documents_expiring' and enabled and not visible_to_me), 1);
+end $$;
+
+\echo '    (a) supervisor de A, sem linha de escopo'
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000002';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000002","role":"authenticated"}';
+do $$
+declare v_a uuid := 'a1a00000-0000-0000-0000-00000000000a';
+begin
+  perform pg_temp.assert_eq('A2-a5. o supervisor vê daily_trend (sem domínio): o catálogo dele não é vácuo',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'daily_trend' and visible_to_me), 1);
+  perform pg_temp.assert_eq('A2-a6. payroll_summary vem enabled = true para o supervisor também (o escopo é do tenant)',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and enabled), 1);
+  perform pg_temp.assert_eq('A2-a7. e visible_to_me = FALSE para o supervisor: sem compensation',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and not visible_to_me), 1);
+end $$;
+
+-- --- (b) o owner desabilita pela tabela: some para os dois
+\echo '    (b) owner A desabilita payroll_summary'
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$
+declare v_a uuid := 'a1a00000-0000-0000-0000-00000000000a';
+begin
+  -- updated_at explícito e velho: o trigger é before UPDATE, então o insert
+  -- guarda o valor — e é isso que deixa medir o religar em (c).
+  insert into app.assistant_metric_scope (tenant_id, metric_code, enabled, updated_by, updated_at)
+  values (v_a, 'payroll_summary', false, auth.uid(), '2000-01-01');
+  perform pg_temp.assert_eq('A2-b1. owner A gravou a exceção (insert pela tabela, is_admin)',
+    (select count(*) from app.assistant_metric_scope where tenant_id = v_a and metric_code = 'payroll_summary' and not enabled), 1);
+  perform pg_temp.assert_eq('A2-b2. payroll_summary vem enabled = false para o owner',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and not enabled), 1);
+  perform pg_temp.assert_eq('A2-b3. e visible_to_me = false para o owner — mesmo tendo compensation',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and not visible_to_me), 1);
+  perform pg_temp.assert_eq('A2-b4. as outras continuam no catálogo do owner (desabilitar é por métrica)',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code <> 'payroll_summary' and enabled),
+    (select count(*) from app.metric where active) - 1);
+end $$;
+
+\echo '    (b) supervisor de A, com payroll_summary desabilitada'
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000002';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000002","role":"authenticated"}';
+do $$
+declare v_a uuid := 'a1a00000-0000-0000-0000-00000000000a';
+begin
+  perform pg_temp.assert_eq('A2-b5. enabled = false para o supervisor',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and not enabled), 1);
+  perform pg_temp.assert_eq('A2-b6. e visible_to_me = false para o supervisor',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and not visible_to_me), 1);
+end $$;
+
+-- --- (c) o owner reabilita: volta para ele; o supervisor CONTINUA sem — a
+--     tela só estreita, habilitar não concedeu domínio nenhum (§4.1).
+\echo '    (c) owner A reabilita payroll_summary'
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$
+declare v_a uuid := 'a1a00000-0000-0000-0000-00000000000a'; v_n bigint;
+begin
+  update app.assistant_metric_scope set enabled = true, updated_by = auth.uid()
+   where tenant_id = v_a and metric_code = 'payroll_summary';
+  get diagnostics v_n = row_count;
+  perform pg_temp.assert_eq('A2-c1. owner A religou pela tabela (update, is_admin): 1 linha', v_n, 1);
+  perform pg_temp.assert_eq('A2-c2. a linha FICA (reabilitar não é apagar): enabled = true',
+    (select count(*) from app.assistant_metric_scope where tenant_id = v_a and metric_code = 'payroll_summary' and enabled), 1);
+  perform pg_temp.assert_eq('A2-c3. e updated_at mexeu sem ninguém tocar nele (trg_updated_at)',
+    (select count(*) from app.assistant_metric_scope where tenant_id = v_a and metric_code = 'payroll_summary' and updated_at = now()), 1);
+  perform pg_temp.assert_eq('A2-c4. payroll_summary volta a enabled = true e visible_to_me = true para o owner',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and enabled and visible_to_me), 1);
+end $$;
+
+\echo '    (c) supervisor de A, com payroll_summary reabilitada'
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000002';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000002","role":"authenticated"}';
+do $$
+declare v_a uuid := 'a1a00000-0000-0000-0000-00000000000a';
+begin
+  perform pg_temp.assert_eq('A2-c5. enabled = true para o supervisor',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and enabled), 1);
+  perform pg_temp.assert_eq('A2-c6. §4.1: e visible_to_me CONTINUA false — habilitar não concedeu compensation',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and not visible_to_me), 1);
+end $$;
+
+-- --- (d) o supervisor lê o escopo do próprio tenant e não escreve nele
+\echo '    (d) supervisor de A escrevendo e lendo o escopo'
+do $$
+declare v_a uuid := 'a1a00000-0000-0000-0000-00000000000a'; v_n bigint;
+begin
+  perform pg_temp.assert_eq('A2-d1. supervisor A LÊ a linha de escopo de A (has_tenant: o runtime lê como ele)',
+    (select count(*) from app.assistant_metric_scope where tenant_id = v_a), 1);
+  perform pg_temp.deve_falhar('A2-d2. supervisor A não insere escopo (with check is_admin)',
+    format($q$insert into app.assistant_metric_scope (tenant_id, metric_code, enabled) values (%L, 'daily_trend', false)$q$, v_a),
+    'row-level security');
+  update app.assistant_metric_scope set enabled = false where tenant_id = v_a and metric_code = 'payroll_summary';
+  get diagnostics v_n = row_count;
+  perform pg_temp.assert_eq('A2-d3. supervisor A não altera escopo (using is_admin: 0 linhas alcançadas)', v_n, 0);
+  perform pg_temp.assert_eq('A2-d4. e payroll_summary segue habilitada (o update do supervisor não pegou)',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and enabled), 1);
+end $$;
+
+-- --- (e) quem não é membro: zero linhas na RPC, zero na tabela, insert recusado
+\echo '    (e) owner B olhando para A'
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000004';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000004","role":"authenticated"}';
+do $$
+declare
+  v_a uuid := 'a1a00000-0000-0000-0000-00000000000a';
+  v_b uuid := 'a1b00000-0000-0000-0000-00000000000b';
+begin
+  perform pg_temp.assert_eq('A2-e1. owner B chamando fn_assistant_catalog(B) recebe o catálogo (o zero abaixo não é vácuo)',
+    (select count(*) from public.fn_assistant_catalog(v_b)),
+    (select count(*) from app.metric where active));
+  perform pg_temp.assert_eq('A2-e2. owner B chamando fn_assistant_catalog(A) recebe ZERO linhas (has_tenant no corpo)',
+    (select count(*) from public.fn_assistant_catalog(v_a)), 0);
+  perform pg_temp.assert_eq('A2-e3. owner B não lê o escopo de A pela tabela',
+    (select count(*) from app.assistant_metric_scope where tenant_id = v_a), 0);
+  perform pg_temp.deve_falhar('A2-e4. owner B não insere escopo em A (is_admin de A, não de B)',
+    format($q$insert into app.assistant_metric_scope (tenant_id, metric_code, enabled) values (%L, 'daily_trend', false)$q$, v_a),
+    'row-level security');
+end $$;
+
+-- --- (f) delete: recusado por GRANT, para o owner e para o backend
+\echo '    (f) delete como owner A e como service_role'
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$ begin
+  perform pg_temp.deve_falhar('A2-f1. owner A não apaga escopo (sem grant de delete: reabilitar é enabled = true)',
+    $q$delete from app.assistant_metric_scope where tenant_id = 'a1a00000-0000-0000-0000-00000000000a'$q$,
+    'permission denied');
+end $$;
+reset role;
+set local role service_role;
+do $$ begin
+  perform pg_temp.deve_falhar('A2-f2. service_role também não apaga escopo',
+    $q$delete from app.assistant_metric_scope$q$,
+    'permission denied');
+end $$;
+reset role;
+
+-- --- (g) as nove colunas, e as três do runtime batendo com app.metric
+\echo '    (g) o contrato da RPC, como owner A'
+set local role authenticated;
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$
+declare v_a uuid := 'a1a00000-0000-0000-0000-00000000000a'; v_result text;
+begin
+  select regexp_replace(pg_get_function_result('public.fn_assistant_catalog(uuid)'::regprocedure), '\s+', ' ', 'g') into v_result;
+  perform pg_temp.assert_eq('A2-g1. as nove colunas, nesta ordem: as seis da SPEC §3e + target_view, dimensions, filters',
+    case when v_result = 'TABLE(code text, title text, description text, domain app.sensitive_domain, enabled boolean, visible_to_me boolean, target_view text, dimensions text[], filters text[])' then 1 else 0 end, 1);
+  perform pg_temp.assert_eq('A2-g2. target_view, dimensions e filters de payroll_summary são os de app.metric',
+    (select count(*) from public.fn_assistant_catalog(v_a) c
+       join app.metric m on m.code = c.code
+      where c.code = 'payroll_summary'
+        and c.target_view = m.target_view and c.dimensions = m.dimensions and c.filters = m.filters
+        and c.domain = m.domain and c.title = m.title and c.description = m.description), 1);
+end $$;
+
+-- --- (h) anon
+\echo '    (h) anon'
+reset role;
+set local role anon;
+do $$ begin
+  -- 'for function', não só 'permission denied': com o grant a anon, ela
+  -- executaria e cairia em app.metric — recusa certa pelo guarda errado.
+  perform pg_temp.deve_falhar('A2-h1. anon não executa fn_assistant_catalog (recusa da própria função)',
+    $q$select * from public.fn_assistant_catalog('a1a00000-0000-0000-0000-00000000000a')$q$,
+    'permission denied for function');
+end $$;
+reset role;
+
+-- --- (i) a EURECA manda primeiro: métrica inativa não aparece, nem com
+--     escopo enabled = true. Como dono do banco, dentro de savepoint.
+\echo '    (i) métrica inativa em app.metric, com escopo enabled = true'
+savepoint metrica_inativa;
+update app.metric set active = false where code = 'daily_trend';
+insert into app.assistant_metric_scope (tenant_id, metric_code, enabled)
+values ('a1a00000-0000-0000-0000-00000000000a', 'daily_trend', true);
+set local role authenticated;
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$
+declare v_a uuid := 'a1a00000-0000-0000-0000-00000000000a';
+begin
+  perform pg_temp.assert_eq('A2-i1. daily_trend inativa não aparece no catálogo do owner, mesmo com escopo enabled = true',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'daily_trend'), 0);
+  perform pg_temp.assert_eq('A2-i2. e o resto do catálogo continua (uma a menos)',
+    (select count(*) from public.fn_assistant_catalog(v_a)),
+    (select count(*) from app.metric where active));
+end $$;
+rollback to savepoint metrica_inativa;
+-- (o rollback to savepoint desfez o set local; a identidade entra de novo)
+set local role authenticated;
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$
+declare v_a uuid := 'a1a00000-0000-0000-0000-00000000000a';
+begin
+  perform pg_temp.assert_eq('A2-i3. o savepoint religou daily_trend: volta ao catálogo do owner',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'daily_trend' and enabled and visible_to_me), 1);
+  perform pg_temp.assert_eq('A2-i4. e a linha de escopo de daily_trend foi embora com ele (só a de payroll_summary fica)',
+    (select count(*) from app.assistant_metric_scope where tenant_id = v_a), 1);
+end $$;
+reset role;
+
+-- --- (j) quem é membro de A E de B: o escopo de B não narra A. O join do
+--     escopo é por (tenant_id = p_tenant_id, metric_code); sem o tenant, a
+--     linha de B contaria para A — a métrica que A não desligou apareceria
+--     desligada, e a que os dois desligaram apareceria duas vezes, uma delas
+--     habilitada. Medido pelo revisor em 17/09/2026: 12 linhas em vez de 11.
+\echo '    (j) membro de A e de B: o escopo de B não narra A'
+insert into auth.users (id, email) values
+  ('a1000000-0000-0000-0000-000000000005', 'dois.tenants@assistente');
+insert into app.tenant_member (tenant_id, user_id, role) values
+  ('a1a00000-0000-0000-0000-00000000000a', 'a1000000-0000-0000-0000-000000000005', 'unit_supervisor'),
+  ('a1b00000-0000-0000-0000-00000000000b', 'a1000000-0000-0000-0000-000000000005', 'owner');
+set local role authenticated;
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000005';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000005","role":"authenticated"}';
+-- Como owner de B: B desliga daily_trend (A não desligou) e grava a sua
+-- própria linha de payroll_summary (A já tem uma, religada em (c)).
+insert into app.assistant_metric_scope (tenant_id, metric_code, enabled) values
+  ('a1b00000-0000-0000-0000-00000000000b', 'daily_trend', false),
+  ('a1b00000-0000-0000-0000-00000000000b', 'payroll_summary', false);
+do $$
+declare
+  v_a uuid := 'a1a00000-0000-0000-0000-00000000000a';
+  v_b uuid := 'a1b00000-0000-0000-0000-00000000000b';
+begin
+  perform pg_temp.assert_eq('A2-j1. em B, daily_trend vem desligada (a linha de B conta em B — o zero abaixo não é vácuo)',
+    (select count(*) from public.fn_assistant_catalog(v_b) where code = 'daily_trend' and not enabled), 1);
+  perform pg_temp.assert_eq('A2-j2. em A, daily_trend continua enabled = true: o escopo de B não narra A',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'daily_trend' and enabled), 1);
+  perform pg_temp.assert_eq('A2-j3. em A, payroll_summary aparece UMA vez, com o valor de A (enabled = true)',
+    (select count(*) from public.fn_assistant_catalog(v_a) where code = 'payroll_summary' and enabled), 1);
+  perform pg_temp.assert_eq('A2-j4. e o catálogo de A tem exatamente uma linha por métrica ativa (sem duplicata)',
+    (select count(*) from public.fn_assistant_catalog(v_a)),
+    (select count(*) from app.metric where active));
+  perform pg_temp.assert_eq('A2-j5. e cada código aparece uma vez só',
+    (select count(distinct code) from public.fn_assistant_catalog(v_a)),
+    (select count(*) from public.fn_assistant_catalog(v_a)));
+end $$;
 reset role;
 
 \echo ''

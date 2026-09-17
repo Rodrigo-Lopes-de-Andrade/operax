@@ -605,6 +605,135 @@ begin
   if falhas <> '' then raise exception 'FALHA: camadas do assistente -> %', falhas; end if;
 end $$;
 
+\echo '--- 19. Assistente / A2: o escopo de métricas com as três policies da parada, ninguém apaga, e a régua única é INVOKER'
+-- A parada da A2 foi aberta pelo dono em 17/09/2026 para EXATAMENTE
+-- `assistant_scope_read` (select, has_tenant: o runtime lê o catálogo como o
+-- usuário, e todo membro precisa ver o escopo do próprio tenant),
+-- `assistant_scope_insert` e `assistant_scope_update` (is_admin) — e sem
+-- delete para papel nenhum: reabilitar é `enabled = true`, a linha fica. Nada
+-- de `for all`, que cobre delete. E `public.fn_assistant_catalog` é a régua
+-- única da SPEC-AGENTE §4.3: a aba Capacidades e o runtime leem dela. Ela é
+-- INVOKER de propósito — `metric_read`, `assistant_scope_read` e
+-- `util.can_see_domain` já são o que o usuário alcança; um `create or replace`
+-- que a tornasse definer passaria no item 9 se lembrasse do search_path e
+-- responderia pelo catálogo de um tenant de que quem chama não é membro. Os
+-- três filtros da §4.2 têm de estar no corpo: `has_tenant` (quem não é membro
+-- recebe zero linhas), `can_see_domain` (habilitar nunca concede domínio) e
+-- `coalesce(` (ausência = habilitada).
+do $$
+declare
+  r record; falhas text := ''; pols text[]; v text; body text; v_result text;
+begin
+  select array_agg(policyname::text order by policyname) into pols
+    from pg_policies
+   where schemaname = 'app' and tablename = 'assistant_metric_scope';
+  if pols is distinct from array['assistant_scope_insert', 'assistant_scope_read', 'assistant_scope_update'] then
+    falhas := falhas || format('policies %s (esperava exatamente as três da parada) ', pols);
+  end if;
+  for r in
+    select policyname, cmd, qual, with_check from pg_policies
+     where schemaname = 'app' and tablename = 'assistant_metric_scope'
+  loop
+    if r.policyname = 'assistant_scope_read' then
+      if r.cmd <> 'SELECT' or r.qual not like '%has_tenant%' or r.qual like '%is_admin%' then
+        falhas := falhas || r.policyname || '(não é "select por util.has_tenant") ';
+      end if;
+    elsif r.policyname = 'assistant_scope_insert' then
+      if r.cmd <> 'INSERT' or coalesce(r.with_check, '') not like '%is_admin%' then
+        falhas := falhas || r.policyname || '(não é "insert with check util.is_admin") ';
+      end if;
+    elsif r.policyname = 'assistant_scope_update' then
+      if r.cmd <> 'UPDATE' or r.qual not like '%is_admin%' or coalesce(r.with_check, '') not like '%is_admin%' then
+        falhas := falhas || r.policyname || '(não é "update using e with check util.is_admin") ';
+      end if;
+    end if;
+    if r.cmd in ('ALL', 'DELETE') then
+      falhas := falhas || r.policyname || format('(cmd %s cobre delete — a parada disse sem delete) ', r.cmd);
+    end if;
+  end loop;
+  if not (select relrowsecurity from pg_class where oid = 'app.assistant_metric_scope'::regclass) then
+    falhas := falhas || 'assistant_metric_scope sem RLS ';
+  end if;
+  foreach v in array array['authenticated', 'service_role', 'anon'] loop
+    if has_table_privilege(v, 'app.assistant_metric_scope', 'DELETE')
+       or has_table_privilege(v, 'app.assistant_metric_scope', 'TRUNCATE') then
+      falhas := falhas || format('%s apaga em assistant_metric_scope ', v);
+    end if;
+  end loop;
+  foreach v in array array['SELECT', 'INSERT', 'UPDATE'] loop
+    if not has_table_privilege('authenticated', 'app.assistant_metric_scope', v)
+       or not has_table_privilege('service_role', 'app.assistant_metric_scope', v) then
+      falhas := falhas || format('authenticated/service_role sem %s em assistant_metric_scope ', v);
+    end if;
+    if has_table_privilege('anon', 'app.assistant_metric_scope', v) then
+      falhas := falhas || format('anon tem %s em assistant_metric_scope ', v);
+    end if;
+  end loop;
+  if (select count(*) from pg_constraint c
+       where c.conrelid = 'app.assistant_metric_scope'::regclass and c.contype = 'f' and c.confdeltype = 'c'
+         and c.confrelid in ('app.tenant'::regclass, 'app.metric'::regclass)) <> 2 then
+    falhas := falhas || 'assistant_metric_scope sem as duas FKs em cascade (tenant, metric) ';
+  end if;
+  if not exists (
+    select 1 from pg_trigger
+     where tgrelid = 'app.assistant_metric_scope'::regclass and tgname = 'trg_updated_at'
+       and not tgisinternal and tgenabled = 'O' and tgfoid = 'util.touch_updated_at'::regproc
+  ) then
+    falhas := falhas || 'assistant_metric_scope sem trg_updated_at ligado ';
+  end if;
+  -- A RPC: INVOKER com search_path, authenticated executa, anon não, as nove
+  -- colunas do contrato, e os três filtros no corpo.
+  select p.oid, p.prosecdef, p.proconfig, pg_get_functiondef(p.oid) as src,
+         regexp_replace(pg_get_function_result(p.oid), '\s+', ' ', 'g') as result
+    into r
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'fn_assistant_catalog';
+  if r.oid is null then
+    falhas := falhas || 'public.fn_assistant_catalog não existe ';
+  else
+    if r.prosecdef then
+      falhas := falhas || 'fn_assistant_catalog é DEFINER (responderia pelo catálogo de tenant de que quem chama não é membro) ';
+    end if;
+    if r.proconfig is null or not (r.proconfig::text like '%search_path=%') then
+      falhas := falhas || 'fn_assistant_catalog sem search_path ';
+    end if;
+    if not has_function_privilege('authenticated', r.oid, 'EXECUTE') then
+      falhas := falhas || 'authenticated não executa fn_assistant_catalog (o assistente ficaria sem catálogo e a aba daria 403 mudo) ';
+    end if;
+    if has_function_privilege('anon', r.oid, 'EXECUTE') or has_function_privilege('public', r.oid, 'EXECUTE') then
+      falhas := falhas || 'anon/public executa fn_assistant_catalog ';
+    end if;
+    if r.result <> 'TABLE(code text, title text, description text, domain app.sensitive_domain, enabled boolean, visible_to_me boolean, target_view text, dimensions text[], filters text[])' then
+      falhas := falhas || format('fn_assistant_catalog devolve "%s" — o contrato são as nove colunas na ordem ', r.result);
+    end if;
+    body := substr(r.src, position('$function$' in r.src));
+    if body not like '%has_tenant%' then
+      falhas := falhas || 'fn_assistant_catalog sem util.has_tenant (quem não é membro leria o catálogo de outro tenant) ';
+    end if;
+    if body not like '%can_see_domain%' then
+      falhas := falhas || 'fn_assistant_catalog sem util.can_see_domain (habilitar concederia domínio) ';
+    end if;
+    if body not like '%coalesce(%' or body not like '%assistant_metric_scope%' then
+      falhas := falhas || 'fn_assistant_catalog sem coalesce sobre assistant_metric_scope (ausência = habilitada) ';
+    end if;
+    -- O join do escopo leva o tenant: sem ele, a linha de outro tenant narra
+    -- este para quem é membro dos dois (o 97, bloco A2-j, mede o efeito).
+    if body !~ 's\.tenant_id\s*=\s*p_tenant_id' then
+      falhas := falhas || 'fn_assistant_catalog junta o escopo sem tenant_id = p_tenant_id ';
+    end if;
+    -- `active` no corpo, e não só na policy metric_read: sob invoker a RLS
+    -- filtra a inativa de qualquer jeito, mas a função não pode depender disso.
+    if body !~ 'm\.active' then
+      falhas := falhas || 'fn_assistant_catalog sem where m.active (a EURECA manda primeiro) ';
+    end if;
+    if (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname = 'fn_assistant_catalog') <> 1 then
+      falhas := falhas || 'fn_assistant_catalog com mais de uma assinatura ';
+    end if;
+  end if;
+  if falhas <> '' then raise exception 'FALHA: capacidades do assistente -> %', falhas; end if;
+end $$;
+
 \echo ''
 \echo '================================================'
 \echo ' TODAS AS VERIFICAÇÕES DE ISOLAMENTO PASSARAM'

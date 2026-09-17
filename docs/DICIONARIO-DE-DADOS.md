@@ -335,6 +335,29 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `assistant_draft_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
 
 
+## `app.assistant_metric_scope`
+
+> Exceções do tenant ao catálogo do assistente: uma linha por métrica que o cliente desligou (ou religou). Ausência = habilitada, de propósito: se ausência fosse "desabilitada", uma métrica nova semeada pela EURECA nasceria invisível para todo cliente existente, e o sintoma seria "o assistente parou de responder sobre X" sem nada nos logs — a falha silenciosa é o critério. Só estreita: habilitar nunca concede domínio que o papel não tem (SPEC AGENTE §4.1). Leitura por todo membro do tenant (o runtime lê como o usuário); insert e update pelo admin (owner, hr, personnel); ninguém apaga — reabilitar é enabled = true.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `tenant_id` 🔑 | uuid | não |  | `app.tenant` | O tenant dono da exceção. Cascade: some com o tenant. |
+| `metric_code` 🔑 | text | não |  | `app.metric` | A métrica de app.metric. Cascade: some com a métrica. |
+| `enabled` | boolean | não |  |  | false = o tenant desligou a métrica; true = religou (a linha fica). Sem linha = habilitada. |
+| `updated_at` | timestamp with time zone | não | `now()` |  | Mantido por trigger (util.touch_updated_at) a cada update. |
+| `updated_by` | uuid | sim |  | `auth.users` | Quem ligou ou desligou por último. Nulo quando veio por migration ou pelo backend. |
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `assistant_scope_insert` | INSERT | `-` | `util.is_admin(tenant_id)` |
+| `assistant_scope_read` | SELECT | `util.has_tenant(tenant_id)` | `-` |
+| `assistant_scope_update` | UPDATE | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+
+
 ## `app.assistant_prompt_pointer`
 
 > Qual versão está no ar, uma linha por escopo (tenant_id nulo = plataforma). O runtime lê daqui; nunca vê rascunho. Publicar move o ponteiro; rollback também. version_id sem cascade: versão apontada não some. Escrita só pela RPC fn_publish_assistant_prompt (e service_role); leitura como a versão.
@@ -3702,6 +3725,16 @@ que consulta continua valendo. `anon` não lê nada — o painel autentica antes
 ## RPCs
 
 Funções com período parametrizado. `security invoker`: herdam a RLS de quem chama.
+
+
+### `fn_assistant_catalog`
+
+```sql
+public.fn_assistant_catalog(p_tenant_id uuid)
+  returns TABLE(code text, title text, description text, domain app.sensitive_domain, enabled boolean, visible_to_me boolean, target_view text, dimensions text[], filters text[])
+```
+
+O catálogo efetivo do assistente para o tenant, como quem chama. Os três filtros da SPEC-AGENTE §4.2 numa resposta: só app.metric.active; enabled = coalesce(escopo do tenant, true) — ausência é habilitada; visible_to_me = enabled e (sem domínio ou util.can_see_domain). É a régua única (§4.3): a aba Capacidades e o runtime (executor.load_catalog) leem daqui. Security INVOKER: metric_read, assistant_scope_read e can_see_domain já são o que o usuário alcança. Quem não é membro do tenant recebe zero linhas, não erro. target_view, dimensions e filters entram por decisão do dono (17/09/2026): o runtime precisa deles para montar a consulta.
 
 
 ### `fn_channel_readiness`
