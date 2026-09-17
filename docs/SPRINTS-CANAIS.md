@@ -942,10 +942,86 @@ com nome); `alert_rule.channel`/`alert_queue.channel` sem `'telegram'`;
 do `/start`, por template; exigir `connected` (e não só ativo) para emitir
 convite, se o desenho quiser — é uma linha em `_bot_state`.
 
+### Produção, 17/09/2026 — o que saiu com o "autorizo todos" e o que ficou
+
+O dono autorizou os quatro itens de uma vez. Executado, na ordem em que a
+premissa de cada um foi conferida:
+
+- **Ledger de produção medido antes de tudo:** 64 registros, terminando em
+  `38_alert_release`; as cinco `ch_*` são as únicas que faltam — a premissa da
+  autorização das migrations está de pé.
+- **Captura `2026-09-17T1131-antes-do-c3`** (`8fab825`): contra a de 08/09 a
+  deriva é +115/-1 e **tudo é a 37 e a 38** — nada de terceiro em nove dias.
+- **Push `def9450..8fab825`** (9 commits: C3, C4, captura). Railway subiu os
+  três serviços; `/health` 200; as cinco rotas `/canais/telegram/*` no schema;
+  webhook com path falso → 404 seco. **Consequência conhecida e aceita:** até
+  as migrations entrarem, `GET /canais/conexoes` falha no SQL e o painel
+  promovido (`78892f0`) mostra "As conexões não puderam ser lidas" — só isso.
+- **`API_PUBLIC_URL`** gravada no `operax-api` (a URL do Railway, `https`, sem
+  barra).
+- **`operax-vigia`** criado: quarto serviço, mesma branch e root, variáveis
+  por referência ao `operax-api`, `python -m operax.alertas.vigia`,
+  `*/15 * * * *`, restart `NEVER`. Build do `8fab825` em SUCCESS.
+
+**Ficou, e cada um tem o motivo:**
+
+1. **As cinco migrations em produção — barradas pelo classificador do
+   harness** ("Protected-Scope IaC Apply"), antes mesmo de montar os arquivos
+   de aplicação. O caminho que funcionou para a 36 (Management API,
+   transacional, com o `insert` no ledger na mesma chamada) é o mesmo; quem
+   executa precisa da permissão. Os cinco arquivos estão em `supabase/
+   migrations/20260915200001..05_ch_*.sql`; cada um vai numa chamada de
+   `scripts/sb_sql.sh nklobmlxyidqxarzisph -f <arquivo>` com a linha
+   `insert into supabase_migrations.schema_migrations (version, name) values
+   ('<versão>', '<nome>');` no fim, na ordem 01→05; depois `python3
+   scripts/capturar_producao.py nklobmlxyidqxarzisph --rotulo depois-do-c3`
+   e o diff tem de ser só as cinco.
+2. **`vercel promote` — segurado por mim até as migrations entrarem**, e não
+   por falta de autorização: o painel novo chama `GET /canais/telegram/
+   vinculos/{id}` na ficha de **todo** colaborador, e sem `app.messaging_identity`
+   isso é 500 → a ficha inteira cai no error boundary. Promover antes do
+   banco quebra a tela mais usada do RH.
+3. **`FORWARDED_ALLOW_IPS` — barrada pelo classificador** ("Security Weaken").
+   Minha recomendação, com o tradeoff: **`*`**. O contêiner só é alcançável
+   pelo edge do Railway; sem a variável o limitador por IP do webhook é um
+   balde global de 300/min, e qualquer um que bata em `/webhooks/telegram/
+   qualquer-coisa` 300 vezes por minuto segura as entregas do Telegram de
+   verdade (o IP é checado **antes** do token). Com `*`, um atacante que
+   forje `X-Forwarded-For` consegue driblar o limitador por IP — e só ele; o
+   de token (120/min) é o que separa. `*` é estritamente melhor contra o
+   ataque ingênuo e igual contra o sofisticado.
+
 ## C5 — Roteamento e medição
 
 - `Telegram se houver identidade vigente; WhatsApp caso contrário.`
 - Entrega por canal em `app.alert_sent`.
+
+### ⏳ C5, onda 1 — despachada em 17/09/2026, duas metades de backend em paralelo
+
+Contrato fixado antes do despacho, e já na árvore: `Message.language`
+(`pt_BR`) e `Message.provider_template` (o `meta_template_name`), com defaults
+— 131 testes de sender/outbox/provedores verdes sem mudança.
+
+- **Metade A — roteamento, sender, medição:** duas migrations
+  (`'telegram'` no check de `alert_queue.channel`; `fn_delivery_by_channel`
+  em `public` + `order by` em `fn_telegram_adhesion`); `route` puro no outbox
+  (identidade vigente **e** bot ativo → Telegram; senão WhatsApp; `email`
+  intacto); o sender em **três fases com HTTP fora de transação**, que **não
+  reserva com o gate aberto** (hoje ele reserva e queima os convites em
+  cinco tentativas), passa `body`/`language`/`provider_template`, limpa
+  `payload.link` em `sent` e `discarded`, e trata `blocked` revogando a
+  identidade e re-roteando para WhatsApp. Guardião obrigatório.
+- **Metade B — os três `enviar` de WhatsApp e a fábrica:** `meta_cloud`
+  (template + parâmetros ordenados, nunca `render`), `z_api` e `uazapi`
+  (`render(body, message)` local — o mesmo do Telegram); `fabrica.build`
+  cobrindo os quatro pela matriz, sem literal novo; token e número em lugar
+  nenhum de erro/log, `httpx` incluído.
+- **Onda 2 (frontend, depois):** "Entregas por canal" em Conexões pela RPC.
+- **Decisão que fica com o dono, sem bloquear:** o convite do C4 sai pela
+  mesma fila e o mesmo gate G4 — um convite não é alerta, e poderia sair
+  antes do G4 (linha com `rule_id null` e `template_code = 'telegram_invite'`).
+  O desenho desta onda mantém o gate para tudo, como o C4 registrou; abrir a
+  exceção é uma cláusula no `_GATE_SQL`/reserva, se o dono quiser.
 
 **Gate:** o relatório mostra a queda de volume no número de WhatsApp conforme a
 adesão sobe. **É a métrica que justifica a etapa** — cada pessoa que sai do

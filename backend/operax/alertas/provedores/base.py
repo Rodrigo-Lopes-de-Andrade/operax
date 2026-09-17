@@ -46,6 +46,12 @@ class Message:
     #: `uazapi`, `telegram`). É dado do template, não frase montada: o provedor
     #: só o passa por `render`. `None` para o oficial, cuja frase vive na WABA.
     body: str | None = None
+    #: `app.message_template.language` — the language the official provider
+    #: approved the template under. Local renderers ignore it.
+    language: str = "pt_BR"
+    #: `app.message_template.meta_template_name` — the name the WABA knows,
+    #: when it differs from `template`. Only the official provider reads it.
+    provider_template: str | None = None
 
     def ordered(self) -> list[str]:
         """Os valores na ordem em que o template os declarou."""
