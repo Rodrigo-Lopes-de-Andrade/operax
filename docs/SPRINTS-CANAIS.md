@@ -996,7 +996,7 @@ premissa de cada um foi conferida:
 - `Telegram se houver identidade vigente; WhatsApp caso contrário.`
 - Entrega por canal em `app.alert_sent`.
 
-### ⏳ C5, onda 1 — despachada em 17/09/2026, duas metades de backend em paralelo
+### ✅ C5, onda 1 — fechada em 17/09/2026 (`a56732d` metade B, `524f786` metade A)
 
 Contrato fixado antes do despacho, e já na árvore: `Message.language`
 (`pt_BR`) e `Message.provider_template` (o `meta_template_name`), com defaults
@@ -1016,7 +1016,202 @@ Contrato fixado antes do despacho, e já na árvore: `Message.language`
   (`render(body, message)` local — o mesmo do Telegram); `fabrica.build`
   cobrindo os quatro pela matriz, sem literal novo; token e número em lugar
   nenhum de erro/log, `httpx` incluído.
-- **Onda 2 (frontend, depois):** "Entregas por canal" em Conexões pela RPC.
+- **Onda 2 (frontend) — despachada em 17/09/2026, em paralelo com o ciclo 2
+  da metade A:** o cartão "Entregas por canal" em Conexões, uma linha por
+  semana, WhatsApp / Telegram / (E-mail) / Falhas / **Telegram %** — a
+  agregação por canal vem do campo `channel` da RPC, nunca do nome do
+  provedor; `week_start` é `date` e não se desloca por fuso. **É o gate da
+  sprint em forma de tela**: a coluna de WhatsApp caindo enquanto a de
+  Telegram sobe. Sem gráfico nesta onda. Só `frontend/**`.
+
+  **✅ Fechada em 17/09/2026 (`9151554`).** Vitest **914 → 953 / 50**, prettier,
+  `tsc`, lint (os 3 warnings de sempre). `database.types.ts` regenerado
+  contra o `operax_test` (porta 55322 nesta máquina): **+10 linhas**, só
+  `fn_delivery_by_channel`. Premissas do implementador aceitas: `email` não
+  está em `CHANNELS` (o `labels.test.ts` prende exatamente os dois canais)
+  — o componente tem um mapa local só para o rótulo, e todo canal fora de
+  `CHANNELS` vira coluna extra na ordem em que aparece, para a tabela sempre
+  fechar com "Falhas"; a semana é formatada por split de string, e o teste
+  troca `TZ` em runtime nos três fusos com um positivo ao lado; o cartão
+  renderiza o `Card` inteiro, para a frase fixa existir nos três estados
+  sem repetição. Falso verde respondido e medido: `meta_cloud` e `z_api` na
+  mesma semana somando numa coluna só; provedor com `channel` invertido
+  contando pelo canal declarado; `%` com e-mail presente usando só
+  WhatsApp + Telegram no denominador; semana só de e-mail dá `—`.
+  Revisão (ciclo 1, overlay): **APROVADA**, 40 mutações, 38 mortas; o único
+  sobrevivente com peso era o `%` do rodapé — o teste dizia prender "razão
+  das somas", mas na fixture a média dos `%` semanais também dava 35%
+  (coincidência aritmética); fechei com a fixture 12/0 e 0/8, em que a razão
+  é 40% e a média seria 50%, e provei no overlay que a mutação morre. Aceito
+  como está: `channel: "sms"` (desconhecido) vira coluna com o código cru,
+  como `label()` já faz — esconder faria "Falhas" não fechar. Dívida
+  pequena: o rótulo "E-mail" mora no componente porque `email` não está em
+  `CHANNELS`; vai para `labels.ts` quando ele for tocado.
+
+**✅ Metade B fechada em 17/09/2026 (`a56732d`).** pytest **1066 → 1149** (83
+novos em `tests/test_provedores_whatsapp.py`), ruff limpo; só os cinco
+arquivos. `meta_cloud` manda `template.name` (`meta_template_name` vence o
+`code`), `language` como veio e `parameters` na ordem de `variables` —
+`render` não é sequer importado; `z_api`/`uazapi` mandam `render(body,
+message)` byte a byte. Mapa de erro idêntico nos três, só código. `fabrica.
+build` mapeia por módulo, sem literal de provedor, lendo cada campo do lado
+que `FieldSpec.secret` declara. Premissas que ficam: a forma de resposta do
+uazapi (`messageid → id → key.id`) e do Z-API (`messageId`, `zaapId` reserva)
+nunca foram chamadas deste repositório; **a Meta responde token morto com
+400, não 401** — pela tabela isso é `http_400`, e o sender não deve decidir
+"descartar" por `unauthorized`; `cost_cents` é `None` nos três (a Meta cobra
+por conversa e informa por webhook).
+Revisão (ciclo 1, overlay): **APROVADA**, 61 mutações, as 20 do despacho
+mortas; quatro sobreviventes de força de teste, fechadas por mim e provadas
+mortas no overlay: `components` decidido por `variables` e não por `facts`
+(o outbox manda sempre oito fatos — um template com zero variáveis viraria
+`parameters: []`, o erro que a Graph API recusa); 2xx/3xx ≠ 200 recusado
+(fail-closed, como o Telegram); `DecodingError` capturado (é `RequestError`,
+não `TransportError`). 93 testes. Nota do revisor para quem puser outro
+módulo não-provedor em `provedores/`: o `ast` do C1 permite literal em
+`provedores/*.py` inteiro — a fábrica fecha a brecha com teste próprio, e o
+próximo precisa do mesmo.
+
+**Metade A entregue em 17/09/2026, em revisão + guardião.** pytest **1207**,
+ruff, suíte de banco `SUÍTE COMPLETA OK` com **60** migrations (833 `ok`; `97`
+sétima parte 64; `98` seção C5 21; `99` item 17). Duas migrations: `'telegram'`
+no check da fila (**e uma cláusula em `util.validate_alert_template`** — o
+gatilho é `before insert or update` e recusava `payload - 'link'`; agora o
+update que leva a linha a `sent`/`discarded` não valida, e o `97` prova que
+`failed`, `sending`, re-rota e insert continuam validando — fora da lista,
+necessária, aceita por mim: não é policy, view de `public` nem grão de
+`deviation_event`); `fn_delivery_by_channel` (invoker, `search_path = ''`,
+sem `anon`, cinco colunas, lê só `alert_sent`) e `fn_telegram_adhesion` com
+`order by`. `route` puro (identidade vigente **e** bot ativo); a chave de
+idempotência **perdeu o destino** (quem aderisse entre duas execuções
+ganharia duas mensagens) — produção medida em 17/09 com **zero** linhas em
+`alert_queue`/`alert_sent`/`alert_rule`, nada colide. Sender em três fases,
+gate aberto sem escrita, `sending` presa recuperada em 10 min com carimbo
+na reserva, scrub em `sent`/`discarded`, `blocked` revoga e re-roteia na
+mesma linha. `__main__.py` deixou de imprimir `destination` (era o `chat_id`
+no stdout do Railway). **Limite conhecido, nomeado pelo implementador:** a
+re-rota que o gatilho recusa (meta_cloud com template não aprovado) derruba a
+fase (c) inteira. Três perguntas de desenho foram ao revisor com pedido de
+medição: bot **ativo** vs. **pronto** no roteamento; último backoff de uma
+linha Telegram cair para WhatsApp em vez de descartar; a degradação do
+`blocked` em transação própria por linha.
+
+**Guardião de superfície: PASSA**, 13 de 13, zero janelas sujas (21
+conferências de hash). A RPC nova medida como papel, nas duas grafias de
+claim: admin A vê só A, admin B só B, supervisor vê zero, `anon` recusado;
+colunas exatamente as cinco; nenhuma view ou função de `public` alcança
+`external_id`, `chat_id`, `alert_queue` ou `destination` (varredura com
+controle positivo). O `chat_id` em claro fica só em `app.alert_queue.
+destination`, que não sai por `public`. Segredos: uma leitura (`read_secret`),
+um destino (`fabrica.build`), nenhum log. Observação aceita para o ciclo 2:
+`_Batch` carrega `secrets` com `repr` padrão — `field(repr=False)` custa zero.
+
+**Revisão (ciclo 1, overlay, `operax_rev_c5a`): APROVADA com um ALTO de
+desenho.** 61 mutações, 55 mortas; os oito critérios medidos. O ALTO é o
+"limite conhecido" com consequência maior do que a reportada: uma re-rota
+recusada pelo gatilho (meta_cloud com template não aprovado) derruba a fase
+(c) inteira, as linhas já entregues ficam `sending`, e **são reentregues a
+cada retomada** enquanto a condição durar — medido com lote de 5. As três
+perguntas de desenho, medidas: (D1) com token morto do bot, todo gestor
+aderido perde toda mensagem por ~8 h por vez, sem cair para WhatsApp, e o
+ciclo seguinte roteia por Telegram de novo; (D2) o último backoff de uma
+linha Telegram descarta em vez de degradar, e `_REROUTE_SQL` soma `attempts`
+(um `blocked` na 4ª re-roteia com 5 e a 1ª falha de WhatsApp descarta); (D3)
+a degradação precisa de fronteira própria. Falso verde novo, medido: o chat
+reatribuído — a ordem de `_IDENTITY_HOLDER_SQL` é load-bearing e nenhum teste
+a segura (com a ordem invertida a mensagem de B iria para o WhatsApp de A).
+
+**Ciclo 2 despachado em 17/09/2026, minhas decisões:** a degradação em dois
+passos sem savepoint (c1 log+marcas de todas, commit; c2 um escopo por linha
+a degradar, recusa → `discarded` com a frase do gatilho em outro escopo) —
+`core/tenant.py` fica intocado; Telegram degrada por **três** causas —
+`blocked` (revoga + re-roteia), erro de credencial do bot (re-roteia sem
+revogar) e último backoff (re-roteia sem revogar) — e `_REROUTE_SQL` zera
+`attempts` (a re-rota é só telegram → whatsapp, no máximo uma vez por linha);
+o roteamento passa a exigir bot **pronto** (`active` **e** saúde `connected`,
+o mesmo predicado de `fn_channel_readiness` — sem saúde, WhatsApp; o vigia
+está agendado desde hoje); as oito sobreviventes fechadas; `repr=False` nos
+segredos do lote. Registrado, não feito: `STUCK_MINUTES` é por requisição,
+não por lote — vale enquanto há um sender só; o Sentry, quando for ligado,
+precisa de `include_local_variables=False`.
+
+**Ciclo 2 entregue em 17/09/2026, em re-revisão + re-gate.** pytest **1223**,
+suíte de banco OK com **853** `ok` (`97` sétima parte 84), 14/14 mutações
+mortas pelo implementador (inclusive o gatilho mutado no banco de ensaio).
+A fase (c) virou dois passos: (c1) log e marca de todo o lote, com a linha a
+degradar **estacionada** (`_PARK_SQL`: `failed`, tentativa contada, sem
+`next_attempt_at`), commit; (c2) por linha, três escopos pequenos —
+revogação + auditoria **antes** da re-rota, em escopo próprio (sobrevive à
+recusa); a re-rota; e o descarte, que quando é recusa do gatilho deixa uma
+**segunda linha em `alert_sent`** com `reroute_refused: <frase do gatilho>`
+(a fila não tem coluna de erro; o log é o lugar durável). Telegram degrada
+por três causas, só `blocked` revoga, `attempts = 0` na re-rota, uma vez por
+linha. Roteamento por bot pronto: `join app.channel_health … status =
+'connected'`, o predicado de `fn_channel_readiness`, provado no `97` com a
+saúde mudando. O que ainda sairia duas vezes, nomeado e aceito: a janela
+dos 10 minutos (processo morto entre o `enviar` e o (c1)) e uma exceção que
+não seja `Delivery` no meio da fase (b) — ambos "retomada de `sending`
+presa", o preço de não deixar a fila travada, válido enquanto há **um**
+sender.
+
+**Guardião, re-gate do ciclo 2: PASSA**, zero janelas sujas (25
+conferências). A segunda linha de `alert_sent` da recusa foi provada por
+três vias — o teste (o sender acrescenta só o prefixo), o `97` contra o
+gatilho real (*"Template deviation_summary está draft e o provedor é
+meta_cloud."*, sem link), e o **catálogo**: os dois gatilhos de
+`alert_queue` foram enumerados linha a linha de `raise`/`format`, e nenhuma
+mensagem interpola `destination` ou `payload` — só código de template,
+nomes de variável e status. Revogação e auditoria em escopo próprio antes
+da re-rota, provado pelo `FakeDB` transacional (`rolled_back == {4}` com a
+revogação de pé). Uma lacuna de cobertura, não de comportamento: o teste
+"identidade já revogada entre a fila e o envio" saiu no ciclo 2 sem
+substituto; o guardião provou por sonda que a propriedade se mantém
+(revoke 1, auditoria 0, re-rota 1). Restauro eu antes do commit.
+
+**Revisão, ciclo 2: APROVADA.** O ALTO fechado e medido; 36 mutações, 33
+mortas; três sobreviventes de força de teste, todos fechados por mim antes
+do commit: a ordem dos escopos afirmada como **timeline** inteira (uma (c2)
+aninhada dentro de (c1) daria a mesma contagem — e no banco real esperaria
+para sempre pela linha que o `_PARK_SQL` deixou travada); um erro do banco
+na re-rota provado a **propagar** em vez de virar descarte (o `except`
+largo seria perda de mensagem silenciosa); o `str()` do stub do gatilho com
+`HINT`/`CONTEXT`, para só `message_primary` satisfazer o teste; a asserção
+do carimbo do `_PARK_SQL` com dois lados; saúde `unknown` e saúde
+`connected` de **outra** integração provadas a não deixar o bot pronto, no
+`97`; e o teste da identidade revogada entre a fila e o envio restaurado.
+Registrado, não feito: `run()` não isola tenants (uma exceção pula os
+seguintes naquela execução) — `try/except` por tenant quando o sender for
+agendado; a segunda linha de `alert_sent` da recusa leva o hash do `chat_id`
+rotulado `whatsapp` (opaco, nada vaza; semântica torta, documentada).
+Portões finais: pytest **1225**, ruff, `SUÍTE COMPLETA OK` (60 migrations).
+
+### ✅ C5 fechado no código em 17/09/2026
+
+Três commits (`a56732d`, `9151554`, `524f786`), dois revisores em overlay
+(quatro ciclos somados: 61 + 36 + 61 + 40 mutações), dois guardiões com zero
+janelas sujas. Duas migrations novas: `20260917115527_ch_queue_telegram` e
+`20260917115529_ch_delivery_by_channel` — **não estão em produção**.
+
+**O que o C5 entrega quando o resto chegar:** um alerta de unidade sai pelo
+Telegram de quem aderiu e pelo WhatsApp de quem não aderiu, a partir do
+mesmo template; quem bloqueia o bot, ou cujo bot morre, volta para o
+WhatsApp sozinho; a tela de Conexões mostra semana a semana a coluna de
+WhatsApp caindo enquanto a de Telegram sobe — o argumento comercial da
+etapa. **Nada disso sai hoje**: o sender e o outbox não estão agendados, e o
+gate G4 segura tudo, inclusive o convite do C4 (decisão que continua com o
+dono: abrir a exceção para o convite é uma cláusula na reserva).
+
+**O que fica para o dono:** as **sete** migrations em produção (cinco do C3 +
+duas do C5), na ordem captura → aplicar → captura → diff — e enquanto elas
+não entram, o painel promovido não pode avançar; `FORWARDED_ALLOW_IPS=*`;
+push de `524f786` (autorização própria); `vercel promote` depois das
+migrations; agendar o sender depois do G4 — e nesse dia, `try/except` por
+tenant no `run()`, e a janela dos 10 minutos passa a ser um risco com nome.
+
+**O que a etapa Canais ainda não fechou** ("um alerta real chegando no
+Telegram de um supervisor e o mesmo no WhatsApp de outro"): depende do G4,
+das migrations em produção, da primeira credencial real e do primeiro
+`/start` real — quatro coisas que só acontecem em produção, com o dono.
 - **Decisão que fica com o dono, sem bloquear:** o convite do C4 sai pela
   mesma fila e o mesmo gate G4 — um convite não é alerta, e poderia sair
   antes do G4 (linha com `rule_id null` e `template_code = 'telegram_invite'`).
