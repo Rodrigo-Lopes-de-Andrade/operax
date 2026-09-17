@@ -22,9 +22,8 @@ async def _montar_e_enfileirar(base_url: str) -> str:
         if not ciclos:
             continue
         enfileiradas = await outbox.enqueue(context, ciclos, base_url=base_url)
-        linhas.append(f"  {len(enfileiradas)} mensagem(ns) na fila")
-        for q in enfileiradas:
-            linhas.append(f"    {q.rule_name} · {q.channel} · {q.destination}")
+        # Por canal, sem destino: o de uma linha `telegram` é o chat_id.
+        linhas.append(f"  {outbox.relatorio(enfileiradas)}")
     return "\n".join(linhas) or "nenhum tenant ativo"
 
 

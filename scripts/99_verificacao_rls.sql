@@ -398,6 +398,60 @@ begin
   if falhas <> '' then raise exception 'FALHA: RPCs do C3 -> %', falhas; end if;
 end $$;
 
+\echo '--- 17. Canais / C5: fn_delivery_by_channel é INVOKER (a policy é o recorte), com grant a authenticated e sem destino'
+-- O item 9 varre `public` por anon e por definer sem search_path; o 16 cobre
+-- as duas definer do C3. Esta é a primeira RPC de canais que NÃO é definer, e
+-- é por isso que ganha item próprio: a garantia dela é o INVERSO da do 16 —
+-- ela tem de rodar como quem chama, para que `alert_sent_read` (`is_admin`)
+-- seja o recorte. Um `create or replace` que a tornasse definer "para o
+-- supervisor também ver" abriria o log de entrega de todo tenant a qualquer
+-- autenticado, e passaria no item 9 se lembrasse do search_path. E o retorno
+-- é contagem: nem destino, nem hash, nem pessoa — por nome exato.
+do $$
+declare r record; falhas text := ''; cols text[];
+begin
+  select p.oid, p.proname, p.prosecdef, p.proargnames, p.proargmodes, pg_get_functiondef(p.oid) as src
+    into r
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'fn_delivery_by_channel';
+  if r.oid is null then
+    raise exception 'FALHA: public.fn_delivery_by_channel não existe';
+  end if;
+  if r.prosecdef then
+    falhas := falhas || 'é definer (leria o log de todo tenant para qualquer autenticado) ';
+  end if;
+  if not has_function_privilege('authenticated', r.oid, 'EXECUTE') then
+    falhas := falhas || 'authenticated não executa (o relatório não abre) ';
+  end if;
+  if has_function_privilege('anon', r.oid, 'EXECUTE') or has_function_privilege('public', r.oid, 'EXECUTE') then
+    falhas := falhas || 'anon/public executa ';
+  end if;
+  select array_agg(a.n order by a.n) into cols
+    from unnest(r.proargnames, r.proargmodes) as a(n, m) where a.m = 't';
+  if cols is distinct from array['channel', 'failed', 'provider', 'sent', 'week_start'] then
+    falhas := falhas || format('contrato mudou: %s ', cols);
+  end if;
+  if r.src !~ 'from app\.alert_sent' then
+    falhas := falhas || 'não lê app.alert_sent ';
+  end if;
+  if r.src ~* 'destination|external_id|chat_id|app\.contact|app\.employee|app\.alert_queue' then
+    falhas := falhas || 'alcança destino ou pessoa ';
+  end if;
+  if (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+       where n.nspname = 'public' and p.proname = 'fn_delivery_by_channel') <> 1 then
+    falhas := falhas || 'mais de uma assinatura ';
+  end if;
+  -- E a policy que ela depende continua sendo a do administrador.
+  if not exists (
+    select 1 from pg_policies
+     where schemaname = 'app' and tablename = 'alert_sent' and policyname = 'alert_sent_read'
+       and qual like '%is_admin%'
+  ) then
+    falhas := falhas || 'alert_sent_read não é mais util.is_admin — a RPC invoker herdaria o recorte errado ';
+  end if;
+  if falhas <> '' then raise exception 'FALHA: fn_delivery_by_channel -> %', falhas; end if;
+end $$;
+
 \echo ''
 \echo '================================================'
 \echo ' TODAS AS VERIFICAÇÕES DE ISOLAMENTO PASSARAM'

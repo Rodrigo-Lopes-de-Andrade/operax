@@ -3,19 +3,21 @@
 Um desvio em exatamente um ciclo, uma mensagem entregue exatamente uma vez, e
 nenhuma mensagem antes do gate G4. As duas primeiras são cláusulas de SQL e estão
 conferidas no texto do statement; a terceira é uma pergunta ao banco, e está
-conferida rodando o remetente contra um banco que responde as duas respostas.
+conferida em `tests/test_alertas_sender.py`, rodando o remetente contra um banco
+que responde as duas respostas. O roteamento por pessoa (C5) está em
+`tests/test_alertas_outbox.py`.
 """
 
 from __future__ import annotations
 
+import inspect
 from datetime import date
-from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
 
 from operax.alertas import ciclo, outbox, sender
-from operax.alertas.provedores.base import Delivery, Message, NullProvider, render
+from operax.alertas.provedores.base import Message, NullProvider, render
 from operax.core.tenant import SystemContext, bind_tenant
 
 TENANT = UUID("dddddddd-0000-0000-0000-000000000001")
@@ -108,20 +110,30 @@ def test_os_fatos_saem_como_texto_e_nunca_como_frase_pronta():
     assert all(isinstance(v, str) for v in dados.values())
 
 
-def test_a_chave_de_idempotencia_muda_com_o_conteudo():
+def test_a_chave_de_idempotencia_muda_com_o_conteudo_e_o_contato_nao_com_a_rota():
+    """A chave nomeia regra, período, contato e metade da regra. O destino ficou
+    de fora de propósito (C5): a rota é atributo, e a pessoa que adere ao
+    Telegram entre duas execuções não pode transformar uma mensagem em duas."""
     c = _ciclo()
     base = outbox.facts(c, base_url="https://x")
     outro = {**base, "total_events": "8"}
+    contato, outro_contato = uuid4(), uuid4()
 
-    assert outbox._key(RULE, c, "+5511999999999", base) == outbox._key(
-        RULE, c, "+5511999999999", base
+    assert outbox._key(RULE, c, contato, "whatsapp", base) == outbox._key(
+        RULE, c, contato, "whatsapp", base
     )
-    assert outbox._key(RULE, c, "+5511999999999", base) != outbox._key(
-        RULE, c, "+5511999999999", outro
+    assert outbox._key(RULE, c, contato, "whatsapp", base) != outbox._key(
+        RULE, c, contato, "whatsapp", outro
     )
-    assert outbox._key(RULE, c, "+5511999999999", base) != outbox._key(
-        RULE, c, "+5511888888888", base
+    assert outbox._key(RULE, c, contato, "whatsapp", base) != outbox._key(
+        RULE, c, outro_contato, "whatsapp", base
     )
+    # As duas metades de `both` são duas mensagens para o mesmo contato.
+    assert outbox._key(RULE, c, contato, "whatsapp", base) != outbox._key(
+        RULE, c, contato, "email", base
+    )
+    # E a assinatura não aceita destino: não há como a rota entrar na chave.
+    assert "destination" not in inspect.signature(outbox._key).parameters
 
 
 def test_reenfileirar_o_mesmo_nao_duplica():
@@ -200,162 +212,3 @@ def test_o_gate_pergunta_ao_banco_em_vez_de_ler_uma_flag():
     # fechou". A liberação é uma linha, e uma linha revogada não conta.
     assert "from app.alert_release" in sender._GATE_SQL
     assert "revoked_at is null" in sender._GATE_SQL
-
-
-class FakeCursor:
-    """Um banco endereçado por statement, com a fila em memória."""
-
-    def __init__(self, estado: FakeDB, context: Any) -> None:
-        self.estado = estado
-        self.context = context
-        self.linhas: list[dict[str, Any]] = []
-
-    async def execute(self, statement: str, params: Any = None) -> None:
-        bind_tenant(statement, params or {}, self.context)
-        self.linhas = self.estado.responder(" ".join(statement.split()), params or {})
-
-    async def fetchone(self):
-        return self.linhas[0] if self.linhas else None
-
-    async def fetchall(self):
-        return self.linhas
-
-
-class FakeScope:
-    def __init__(self, cursor: FakeCursor) -> None:
-        self.cursor = cursor
-
-    async def __aenter__(self) -> FakeCursor:
-        return self.cursor
-
-    async def __aexit__(self, *exc: object) -> None:
-        return None
-
-
-class FakeDB:
-    def __init__(
-        self, *, promovido: bool, fila: list[dict[str, Any]], liberado: bool = True
-    ) -> None:
-        self.promovido = promovido
-        self.liberado = liberado
-        self.fila = fila
-        self.log: list[dict[str, Any]] = []
-        self.marcadas: list[tuple[str, Any]] = []
-
-    def responder(self, sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-        if "from app.detection_run" in sql:
-            return [{"promovido": self.promovido, "liberado": self.liberado}]
-        if "update app.alert_queue q" in sql:
-            return list(self.fila)
-        if "insert into app.alert_sent" in sql:
-            self.log.append(dict(params))
-            return []
-        if "set status = 'sent'" in sql:
-            self.marcadas.append(("sent", params["queue_id"]))
-            return []
-        if "then 'discarded' else 'failed'" in sql:
-            final = "discarded" if params["max_attempts"] <= 1 else "failed"
-            self.marcadas.append((final, params["queue_id"]))
-            return [{"status": final}]
-        if "from app.message_template" in sql:
-            return [{"variables": ["unit"], "body": "{{1}}"}]
-        return []
-
-
-def _fila(**kwargs) -> dict[str, Any]:
-    base = dict(
-        id=uuid4(),
-        rule_id=RULE,
-        channel="whatsapp",
-        destination="+5511999999999",
-        payload={"unit": "Centro"},
-        template_code="deviation_summary",
-        provider="meta_cloud",
-        attempts=0,
-    )
-    return {**base, **kwargs}
-
-
-def _sender_db(monkeypatch: pytest.MonkeyPatch, estado: FakeDB) -> FakeDB:
-    monkeypatch.setattr(
-        sender, "tenant_scope", lambda context, schema="app": FakeScope(FakeCursor(estado, context))
-    )
-    return estado
-
-
-class SpyProvider:
-    name = "meta_cloud"
-
-    def __init__(self) -> None:
-        self.enviadas: list[Message] = []
-
-    async def enviar(self, message: Message) -> Delivery:
-        self.enviadas.append(message)
-        return Delivery(status="sent", provider_message_id="wamid.1", cost_cents=4)
-
-
-@pytest.mark.anyio
-async def test_com_o_gate_aberto_nada_sai_da_fila(monkeypatch: pytest.MonkeyPatch):
-    """A regra 8 é perguntada, não lembrada: sem execução em produção, ninguém entrega."""
-    estado = _sender_db(monkeypatch, FakeDB(promovido=False, fila=[_fila()]))
-    espiao = SpyProvider()
-
-    resultado = await sender.dispatch(
-        SystemContext(tenant_id=TENANT, task="teste"), {"meta_cloud": espiao}
-    )
-
-    assert resultado.gate_open is True
-    assert resultado.sent == 0
-    assert espiao.enviadas == []
-    # E a tentativa fica registrada com o motivo — silêncio não é resultado.
-    assert "gate G4 aberto" in estado.log[0]["error"]
-
-
-@pytest.mark.anyio
-async def test_promovido_sem_liberacao_nada_sai(monkeypatch: pytest.MonkeyPatch):
-    """O estado de 09/09/2026: motor em produção, censo em zero, porta aberta.
-
-    Era exatamente isto que o gate antigo deixava passar. Com a segunda metade,
-    o motor promovido sem liberação registrada entrega nada — e diz por quê.
-    """
-    estado = _sender_db(monkeypatch, FakeDB(promovido=True, liberado=False, fila=[_fila()]))
-    espiao = SpyProvider()
-
-    resultado = await sender.dispatch(
-        SystemContext(tenant_id=TENANT, task="teste"), {"meta_cloud": espiao}
-    )
-
-    assert resultado.gate_open is True
-    assert resultado.sent == 0
-    assert espiao.enviadas == []
-    assert "nunca foi liberada" in estado.log[0]["error"]
-
-
-@pytest.mark.anyio
-async def test_com_o_motor_promovido_a_mensagem_sai(monkeypatch: pytest.MonkeyPatch):
-    estado = _sender_db(monkeypatch, FakeDB(promovido=True, fila=[_fila()]))
-    espiao = SpyProvider()
-
-    resultado = await sender.dispatch(
-        SystemContext(tenant_id=TENANT, task="teste"), {"meta_cloud": espiao}
-    )
-
-    assert (resultado.gate_open, resultado.sent, resultado.failed) == (False, 1, 0)
-    assert espiao.enviadas[0].destination == "+5511999999999"
-    assert espiao.enviadas[0].variables == ("unit",)
-    # O custo entra desde o primeiro envio, e o telefone não vai para o log.
-    assert estado.log[0]["cost_cents"] == 4
-    assert estado.log[0]["destination_hash"] == sender.destination_hash("+5511999999999")
-    assert "999999999" not in estado.log[0]["destination_hash"]
-
-
-@pytest.mark.anyio
-async def test_provedor_nao_configurado_volta_para_a_fila_com_o_motivo(
-    monkeypatch: pytest.MonkeyPatch,
-):
-    estado = _sender_db(monkeypatch, FakeDB(promovido=True, fila=[_fila(provider="z_api")]))
-
-    resultado = await sender.dispatch(SystemContext(tenant_id=TENANT, task="teste"), {})
-
-    assert resultado.failed == 1
-    assert "não configurado" in estado.log[0]["error"]

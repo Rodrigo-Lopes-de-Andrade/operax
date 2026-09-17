@@ -125,6 +125,53 @@ convites`, o `GET` e o `revogar` as executam:
   convite em aberto expira junto, 1 linha) → e revogar de novo é 0 linhas
   (o 409) → e um convite novo reabre a ficha ao lado da revogação.
 
+SÉTIMA PARTE — O ROTEAMENTO E O SENDER (C5, onda 1, metade A), CONTRA O BANCO
+`outbox._TARGETS_SQL` (as duas entradas de `route`) e as doze instruções de
+`sender.py`, mais o `_REVOKE_PREVIOUS_SQL` do webhook e o `_PROVIDER_SQL` do
+outbox, executadas como o sender as executa — e o gatilho de verdade no meio:
+
+* **as duas entradas de `route`**: o contato com identidade vigente traz o
+  `external_id`; o revogado e o sem identidade trazem nulo; `telegram_ready`
+  é o predicado de `fn_channel_readiness` — bot ativo E `channel_health` em
+  `connected` pela porta `app.fn_record_channel_health`: sem medição é
+  `false`, `connected` é `true`, `disconnected` volta a `false`, bot
+  desligado com saúde boa é `false` — e o `external_id` continua vindo em
+  todos (quem decide é `route`, e ele exige os dois); ligado ao outro tenant,
+  zero linhas;
+* **a re-rota recusada pelo gatilho** (o ALTO da revisão do ciclo 1): z_api
+  desligada, meta_cloud ativa, template em `draft`; a linha de Telegram é
+  estacionada por `_PARK_SQL`, a `_REROUTE_SQL` para meta_cloud é RECUSADA
+  pelo gatilho de verdade com a frase que nomeia template e provedor (sem
+  payload), a linha continua como (c1) a deixou, vai a `_DISCARD_SQL` com o
+  motivo no log — e as outras linhas do lote continuam `sent`;
+* **os pinos da revisão**: uma integração de canal desligada e uma `secullum`
+  ativa ficam fora de `_INTEGRATIONS_SQL`; o mesmo chat_id revogado de outro
+  contato não desvia o titular; `_WAITING_SQL` cai a 0 depois das marcas; o
+  gatilho recusa o scrub numa `sending`; `_PARK_SQL` conta a tentativa sem
+  mexer no horário e `_REROUTE_SQL` zera as tentativas; `_DISCARD_SQL` não
+  conta de novo;
+* **o check novo**: a linha de fila com `channel = 'telegram'` entra;
+* **a espera e a reserva**: `_WAITING_SQL` conta só `pending`/`failed`
+  vencidas; `_CLAIM_SQL` reserva essas E a `sending` presa há mais de 10
+  minutos (com `previous_status = 'sending'`), e NÃO a `sending` fresca nem a
+  agendada para o futuro — e carimba `next_attempt_at = now()`;
+* **os cinco campos do template** e as integrações dos provedores de canal
+  (o e-mail fica de fora; o outro tenant, zero);
+* **o scrub contra o gatilho de verdade**: `sent` no convite tira `link` e
+  deixa `nome`; `sent` no alerta mantém o link do painel; `discarded` (quinta
+  falha) tira o link do convite; `failed` (primeira) o mantém — e o gatilho
+  ainda RECUSA `payload - 'link'` numa linha `pending` (o negativo: a abertura
+  é só para o estado terminal);
+* **`blocked`, passo a passo**: o titular pelo chat_id (vigente e revogado; o
+  inventado é zero), a revogação do webhook com a razão, a auditoria sem o
+  chat_id, o WhatsApp ativo, e o re-roteamento — a MESMA linha vira `whatsapp`,
+  para o número do contato, `failed`, devida já; o contato sem número devolve
+  zero e a linha é descartada; e `_TARGETS_SQL` depois da revogação já não traz
+  o `external_id` (o próximo ciclo degrada sozinho);
+* **`alert_sent` com os quatro provedores**, pela `_LOG_SQL`, e
+  `fn_delivery_by_channel` como o owner: conta por semana, canal e provedor, e
+  o owner do outro tenant vê zero.
+
 O valor de teste é uma string óbvia; nenhum segredo real passa por aqui.
 """
 
@@ -151,6 +198,7 @@ SAUDE = RAIZ / "backend" / "operax" / "alertas" / "saude.py"
 WEBHOOK = RAIZ / "backend" / "server" / "routers" / "webhooks.py"
 TENANT_PY = RAIZ / "backend" / "operax" / "core" / "tenant.py"
 OUTBOX = RAIZ / "backend" / "operax" / "alertas" / "outbox.py"
+SENDER = RAIZ / "backend" / "operax" / "alertas" / "sender.py"
 
 USUARIO = "7c000000-0000-0000-0000-000000000001"
 TENANT = "7ca70000-0000-0000-0000-0000000000a1"
@@ -221,6 +269,39 @@ I_CHAT = "987654321303"
 #: O token do convite novo — só o hash chega ao SQL; o token vai no `link`.
 I_TOKEN = "convite-novo-de-teste-000000000000000000000"
 I_LINK = "https://t.me/ConviteBot?start=" + I_TOKEN
+# O roteamento: um tenant com bot e WhatsApp ativos, uma regra agregada com três
+# contatos (aderiu, revogou, nunca aderiu), um owner; e um segundo tenant com o
+# próprio owner, só para provar o recorte.
+R_TENANT = "7ca70000-0000-0000-0000-000000000401"
+R_OUTRO = "7ca70000-0000-0000-0000-000000000402"
+R_OWNER = "7c000000-0000-0000-0000-000000000401"
+R_OUTRO_OWNER = "7c000000-0000-0000-0000-000000000402"
+R_COMPANY = "7ca70000-0000-0000-0000-0000000004e1"
+R_UNIT = "7ca70000-0000-0000-0000-0000000004c1"
+R_RULE = "7ca70000-0000-0000-0000-0000000004d1"
+R_ADERIU = "7ca70000-0000-0000-0000-00000000f401"
+R_REVOGOU = "7ca70000-0000-0000-0000-00000000f402"
+R_SEM = "7ca70000-0000-0000-0000-00000000f403"
+R_SEM_NUMERO = "7ca70000-0000-0000-0000-00000000f404"
+R_BOT = "7ca70000-0000-0000-0000-0000000004b1"
+R_ZAPI = "7ca70000-0000-0000-0000-0000000004b2"
+R_CHAT_ADERIU = "987654321401"
+R_CHAT_REVOGOU = "987654321402"
+R_CHAT_SEM_NUMERO = "987654321404"
+Q_TELEGRAM = "7ca70000-0000-0000-0000-0000000004a1"
+Q_WHATSAPP = "7ca70000-0000-0000-0000-0000000004a2"
+Q_INVITE = "7ca70000-0000-0000-0000-0000000004a3"
+Q_PRESA = "7ca70000-0000-0000-0000-0000000004a4"
+Q_FRESCA = "7ca70000-0000-0000-0000-0000000004a5"
+Q_FUTURA = "7ca70000-0000-0000-0000-0000000004a6"
+Q_INVITE_5 = "7ca70000-0000-0000-0000-0000000004a7"
+Q_INVITE_1 = "7ca70000-0000-0000-0000-0000000004a8"
+Q_SEM_NUMERO = "7ca70000-0000-0000-0000-0000000004a9"
+Q_RECUSADA = "7ca70000-0000-0000-0000-0000000004aa"
+R_META = "7ca70000-0000-0000-0000-0000000004b3"
+R_UAZAPI_INATIVA = "7ca70000-0000-0000-0000-0000000004b4"
+R_SECULLUM = "7ca70000-0000-0000-0000-0000000004b5"
+R_INVITE_LINK = "https://t.me/RotaBot?start=token-que-nao-pode-ficar-na-fila-0000"
 
 
 def _hash(token: str) -> str:
@@ -1707,6 +1788,509 @@ end $$;
 rollback;
 """
 
+CENARIO_ROTEAMENTO = """
+begin;
+
+create or replace function pg_temp.assert_eq(rotulo text, obtido text, esperado text)
+returns void language plpgsql as $$
+begin
+  if obtido is distinct from esperado then
+    raise exception 'FALHA [%]: esperado %, obtido %', rotulo, esperado, obtido;
+  end if;
+  raise notice '  ok  % (%)', rotulo, obtido;
+end $$;
+
+create or replace function pg_temp.assert_not_in(rotulo text, palheiro text, agulha text)
+returns void language plpgsql as $$
+begin
+  if position(agulha in palheiro) > 0 then
+    raise exception 'FALHA [%]: o valor apareceu', rotulo;
+  end if;
+  raise notice '  ok  %', rotulo;
+end $$;
+
+insert into auth.users (id, email) values
+  ('{R_OWNER}',       'owner@rota'),
+  ('{R_OUTRO_OWNER}', 'owner@rota-outro');
+insert into app.tenant (id, slug, name) values
+  ('{R_TENANT}', 'rota-teste', 'Rota'),
+  ('{R_OUTRO}',  'rota-outro', 'Outro');
+insert into app.tenant_member (tenant_id, user_id, role) values
+  ('{R_TENANT}', '{R_OWNER}',       'owner'),
+  ('{R_OUTRO}',  '{R_OUTRO_OWNER}', 'owner');
+insert into app.company (id, tenant_id, legal_name) values
+  ('{R_COMPANY}', '{R_TENANT}', 'Empresa Rota LTDA');
+insert into app.unit (id, tenant_id, company_id, code, name) values
+  ('{R_UNIT}', '{R_TENANT}', '{R_COMPANY}', 'RT-1', 'Unidade Rota');
+
+-- Quatro responsáveis: aderiu (vigente), revogou, nunca aderiu, e um que
+-- aderiu mas NÃO tem número de WhatsApp — o par do "sem para onde ir".
+insert into app.contact (id, tenant_id, name, type, whatsapp) values
+  ('{R_ADERIU}',     '{R_TENANT}', 'Gestora Aderiu',     'person', '+5511999990401'),
+  ('{R_REVOGOU}',    '{R_TENANT}', 'Gestor Revogou',     'person', '+5511999990402'),
+  ('{R_SEM}',        '{R_TENANT}', 'Gestora Sem Adesao', 'person', '+5511999990403'),
+  ('{R_SEM_NUMERO}', '{R_TENANT}', 'Gestor Sem Numero',  'person', null);
+insert into app.messaging_identity (tenant_id, channel, contact_id, external_id, revoked_at, revoked_reason, opted_in_at) values
+  ('{R_TENANT}', 'telegram', '{R_ADERIU}',     '{R_CHAT_ADERIU}',     null, null, now()),
+  ('{R_TENANT}', 'telegram', '{R_REVOGOU}',    '{R_CHAT_REVOGOU}',    now() - interval '1 day', 'desvinculado pelo administrador', now() - interval '2 days'),
+  ('{R_TENANT}', 'telegram', '{R_SEM_NUMERO}', '{R_CHAT_SEM_NUMERO}', null, null, now()),
+  -- ⛔ O chat reatribuído (S26 da revisão): o MESMO chat_id de quem aderiu já
+  --    foi de outro contato, e está revogado. O titular tem de ser quem o tem
+  --    VIGENTE — com a ordem invertida, a mensagem iria para o WhatsApp errado.
+  ('{R_TENANT}', 'telegram', '{R_SEM}',        '{R_CHAT_ADERIU}',     now() - interval '30 days', 'novo /start', now() - interval '60 days');
+
+-- Bot ativo e WhatsApp ativo (z_api: não oficial, o gatilho não exige aprovação).
+-- Mais uma de canal DESLIGADA e uma que não é de canal (secullum, como em
+-- produção): nenhuma das duas pode chegar à fábrica (S24a/S45 da revisão).
+insert into app.integration (id, tenant_id, provider, alias, config, active) values
+  ('{R_BOT}',            '{R_TENANT}', 'telegram', 'telegram', '{"public_identity": "@RotaBot"}', true),
+  ('{R_ZAPI}',           '{R_TENANT}', 'z_api',    'z_api',    '{"instance_id": "X"}',            true),
+  ('{R_UAZAPI_INATIVA}', '{R_TENANT}', 'uazapi',   'uazapi',   '{"base_url": "https://x"}',       false),
+  ('{R_SECULLUM}',       '{R_TENANT}', 'secullum', 'secullum', '{}',                              true);
+insert into app.message_template (tenant_id, code, variables, body, language, meta_template_name) values
+  ('{R_TENANT}', 'deviation_summary', array['unit','link'],
+   'FastPark: {{1}} — {{2}}', 'pt_BR', 'fastpark_resumo'),
+  ('{R_TENANT}', 'telegram_invite', array['nome','link'],
+   'Olá {{1}}, abra {{2}}.', 'pt_BR', null);
+
+-- A regra agregada, por mensageria, para os quatro.
+insert into app.alert_rule (id, tenant_id, name, content, channel, active, template_code) values
+  ('{R_RULE}', '{R_TENANT}', 'Resumo por mensageria', 'aggregate', 'whatsapp', true, 'deviation_summary');
+insert into app.alert_rule_target (rule_id, contact_id) values
+  ('{R_RULE}', '{R_ADERIU}'), ('{R_RULE}', '{R_REVOGOU}'), ('{R_RULE}', '{R_SEM}'), ('{R_RULE}', '{R_SEM_NUMERO}');
+
+-- ---------------------------------------------------------------------------
+-- 1. As duas entradas de `route`, pela `_TARGETS_SQL` — e o bot PRONTO
+-- ---------------------------------------------------------------------------
+-- Sem linha de saúde: o bot está ativo e NÃO está pronto (fail-closed, o
+-- mesmo `coalesce(..., false)` da fn_channel_readiness).
+create temp table alvo as {TARGETS};
+do $$ begin
+  perform pg_temp.assert_eq('bot ativo SEM medição de saúde: telegram_ready = false em todas',
+    (select count(*) from alvo where not telegram_ready)::text, '4');
+  perform pg_temp.assert_eq('e o external_id de quem aderiu vem mesmo assim (route é quem nega)',
+    (select telegram_external_id from alvo where contact_id = '{R_ADERIU}'), '{R_CHAT_ADERIU}');
+end $$;
+drop table alvo;
+
+-- O vigia (ou a conexão pelo painel) mede `connected`: agora está pronto.
+select app.fn_record_channel_health('{R_BOT}', 'connected', 'ensaio');
+create temp table alvo as {TARGETS};
+do $$ begin
+  perform pg_temp.assert_eq('_TARGETS_SQL: a regra alcança os 4 contatos', (select count(*) from alvo)::text, '4');
+  perform pg_temp.assert_eq('quem aderiu traz o external_id',
+    (select telegram_external_id from alvo where contact_id = '{R_ADERIU}'), '{R_CHAT_ADERIU}');
+  perform pg_temp.assert_eq('e telegram_ready = true (bot ativo E connected)',
+    (select telegram_ready::text from alvo where contact_id = '{R_ADERIU}'), 'true');
+  perform pg_temp.assert_eq('quem revogou NÃO traz external_id (só a vigente conta)',
+    (select coalesce(telegram_external_id, 'nulo') from alvo where contact_id = '{R_REVOGOU}'), 'nulo');
+  perform pg_temp.assert_eq('quem nunca aderiu tampouco',
+    (select coalesce(telegram_external_id, 'nulo') from alvo where contact_id = '{R_SEM}'), 'nulo');
+  perform pg_temp.assert_eq('e o número continua vindo para todos que o têm',
+    (select count(*) from alvo where whatsapp is not null)::text, '3');
+end $$;
+drop table alvo;
+
+-- O vigia mede `disconnected`: a identidade continua, `telegram_ready` cai —
+-- quem decide é `route`, e ele exige os dois (o par do falso verde).
+select app.fn_record_channel_health('{R_BOT}', 'disconnected', 'webhook ausente');
+create temp table alvo as {TARGETS};
+do $$ begin
+  perform pg_temp.assert_eq('bot ativo mas disconnected: telegram_ready = false em todas as linhas',
+    (select count(*) from alvo where not telegram_ready)::text, '4');
+  perform pg_temp.assert_eq('e o external_id de quem aderiu CONTINUA vindo (route é quem nega)',
+    (select telegram_external_id from alvo where contact_id = '{R_ADERIU}'), '{R_CHAT_ADERIU}');
+end $$;
+drop table alvo;
+
+-- `unknown` (token ausente, getWebhookInfo recusado) também não é pronto: só
+-- `connected` é.
+select app.fn_record_channel_health('{R_BOT}', 'unknown', 'getWebhookInfo: unauthorized');
+create temp table alvo as {TARGETS};
+do $$ begin
+  perform pg_temp.assert_eq('saúde unknown: telegram_ready = false em todas as linhas',
+    (select count(*) from alvo where not telegram_ready)::text, '4');
+end $$;
+drop table alvo;
+
+-- A saúde é POR INTEGRAÇÃO: um `connected` de outra integração do tenant não
+-- empresta prontidão ao bot que está `disconnected`.
+select app.fn_record_channel_health('{R_BOT}', 'disconnected', 'webhook ausente');
+select app.fn_record_channel_health('{R_ZAPI}', 'connected', 'ensaio');
+create temp table alvo as {TARGETS};
+do $$ begin
+  perform pg_temp.assert_eq('saúde connected de OUTRA integração não conta para o bot',
+    (select count(*) from alvo where not telegram_ready)::text, '4');
+end $$;
+drop table alvo;
+select app.fn_record_channel_health('{R_ZAPI}', 'disconnected', 'ensaio: devolvido');
+select app.fn_record_channel_health('{R_BOT}', 'connected', 'ensaio');
+
+-- Bot desligado, mesmo com a saúde em `connected`: não pronto.
+update app.integration set active = false where id = '{R_BOT}';
+create temp table alvo as {TARGETS};
+do $$ begin
+  perform pg_temp.assert_eq('bot desligado (saúde connected): telegram_ready = false em todas',
+    (select count(*) from alvo where not telegram_ready)::text, '4');
+end $$;
+drop table alvo;
+update app.integration set active = true where id = '{R_BOT}';
+create temp table alvo as {TARGETS};
+do $$ begin
+  perform pg_temp.assert_eq('religado: pronto de novo',
+    (select telegram_ready::text from alvo where contact_id = '{R_ADERIU}'), 'true');
+end $$;
+drop table alvo;
+
+do $$ begin
+  perform pg_temp.assert_eq('ligada ao OUTRO tenant, _TARGETS_SQL é zero linhas',
+    (select count(*) from ({TARGETS_OUTRO}) o)::text, '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 2. A fila: o check novo, a espera, a reserva (com a presa) e o template
+-- ---------------------------------------------------------------------------
+insert into app.alert_queue
+  (id, tenant_id, rule_id, channel, destination, payload, idempotency_key, template_code, provider,
+   status, attempts, next_attempt_at, scheduled_for) values
+  ('{Q_TELEGRAM}', '{R_TENANT}', '{R_RULE}', 'telegram', '{R_CHAT_ADERIU}',
+   '{"unit": "Rota", "link": "https://app.x/dashboard?un=1"}', 'k-telegram', 'deviation_summary', 'telegram',
+   'pending', 0, now() - interval '1 minute', now() - interval '1 minute'),
+  ('{Q_WHATSAPP}', '{R_TENANT}', '{R_RULE}', 'whatsapp', '+5511999990403',
+   '{"unit": "Rota", "link": "https://app.x/dashboard?un=1"}', 'k-whatsapp', 'deviation_summary', 'z_api',
+   'pending', 0, now() - interval '1 minute', now() - interval '1 minute'),
+  ('{Q_INVITE}', '{R_TENANT}', null, 'whatsapp', '+5511999990403',
+   '{"nome": "Gestora", "link": "{R_INVITE_LINK}"}', 'k-invite', 'telegram_invite', 'z_api',
+   'pending', 0, now() - interval '1 minute', now() - interval '1 minute'),
+  ('{Q_PRESA}', '{R_TENANT}', '{R_RULE}', 'whatsapp', '+5511999990403',
+   '{"unit": "Rota", "link": "https://app.x/dashboard?un=1"}', 'k-presa', 'deviation_summary', 'z_api',
+   'sending', 1, now() - interval '11 minutes', now() - interval '1 hour'),
+  ('{Q_FRESCA}', '{R_TENANT}', '{R_RULE}', 'whatsapp', '+5511999990403',
+   '{"unit": "Rota", "link": "https://app.x/dashboard?un=1"}', 'k-fresca', 'deviation_summary', 'z_api',
+   'sending', 1, now() - interval '2 minutes', now() - interval '1 hour'),
+  ('{Q_FUTURA}', '{R_TENANT}', '{R_RULE}', 'whatsapp', '+5511999990403',
+   '{"unit": "Rota", "link": "https://app.x/dashboard?un=1"}', 'k-futura', 'deviation_summary', 'z_api',
+   'pending', 0, now() - interval '1 minute', now() + interval '1 hour');
+do $$ begin
+  perform pg_temp.assert_eq('a linha com channel = telegram passou no check novo',
+    (select count(*) from app.alert_queue where id = '{Q_TELEGRAM}' and channel = 'telegram')::text, '1');
+  perform pg_temp.assert_eq('_WAITING_SQL: 3 esperam (pending vencidas; a presa e a futura não)',
+    (select waiting from ({WAITING}) w)::text, '3');
+end $$;
+
+create temp table reservadas (id uuid, previous_status text);
+with r as ({CLAIM}) insert into reservadas select id, previous_status from r;
+create temp table reservadas2 (id uuid);
+with r as ({CLAIM}) insert into reservadas2 select id from r;
+do $$ begin
+  perform pg_temp.assert_eq('_CLAIM_SQL: reservou 4 — as 3 pending vencidas e a sending PRESA',
+    (select count(*) from reservadas)::text, '4');
+  perform pg_temp.assert_eq('a presa vem com previous_status = sending',
+    (select previous_status from reservadas where id = '{Q_PRESA}'), 'sending');
+  perform pg_temp.assert_eq('as outras três vêm de pending',
+    (select count(*) from reservadas where previous_status = 'pending')::text, '3');
+  perform pg_temp.assert_eq('a sending FRESCA não foi tomada',
+    (select count(*) from reservadas where id = '{Q_FRESCA}')::text, '0');
+  perform pg_temp.assert_eq('nem a agendada para o futuro',
+    (select count(*) from reservadas where id = '{Q_FUTURA}')::text, '0');
+  perform pg_temp.assert_eq('as 4 estão sending, com a reserva carimbada em next_attempt_at',
+    (select count(*) from app.alert_queue
+      where id in (select id from reservadas) and status = 'sending'
+        and next_attempt_at > now() - interval '5 seconds')::text, '4');
+  perform pg_temp.assert_eq('e a segunda reserva, logo em seguida, não pega nada (skip do sending fresco)',
+    (select count(*) from reservadas2)::text, '0');
+end $$;
+
+do $$ begin
+  perform pg_temp.assert_eq('_TEMPLATE_SQL traz os quatro campos do template',
+    (select array_to_string(variables, ',') || '|' || body || '|' || language || '|' || meta_template_name
+       from ({TEMPLATE}) t), 'unit,link|FastPark: {{1}} — {{2}}|pt_BR|fastpark_resumo');
+  perform pg_temp.assert_eq('_INTEGRATIONS_SQL: as 2 integrações de canal ATIVAS (bot e z_api) — a uazapi desligada e a secullum ficam fora',
+    (select string_agg(provider, ',' order by provider) from ({INTEGRATIONS}) i), 'telegram,z_api');
+  perform pg_temp.assert_eq('(o anti-vácuo: o tenant tem 4 integrações na tabela)',
+    (select count(*) from app.integration where tenant_id = '{R_TENANT}')::text, '4');
+  perform pg_temp.assert_eq('e o config vem inteiro (a fábrica escolhe o que ler)',
+    (select config ->> 'public_identity' from ({INTEGRATIONS}) i where id = '{R_BOT}'), '@RotaBot');
+  perform pg_temp.assert_eq('ligada ao outro tenant: zero integrações',
+    (select count(*) from ({INTEGRATIONS_OUTRO}) i)::text, '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 3. O scrub, contra o gatilho de verdade
+-- ---------------------------------------------------------------------------
+{MARK_SENT_INVITE};
+{MARK_SENT_WHATSAPP};
+do $$ begin
+  perform pg_temp.assert_eq('o convite entregue está sent',
+    (select status from app.alert_queue where id = '{Q_INVITE}'), 'sent');
+  perform pg_temp.assert_eq('e o payload dele NÃO tem link (o gatilho deixou o terminal passar)',
+    (select (payload ? 'link')::text from app.alert_queue where id = '{Q_INVITE}'), 'false');
+  perform pg_temp.assert_eq('mas ainda tem nome',
+    (select payload ->> 'nome' from app.alert_queue where id = '{Q_INVITE}'), 'Gestora');
+  perform pg_temp.assert_not_in('o token do convite não está mais na fila',
+    (select string_agg(payload::text, ' ') from app.alert_queue), 'token-que-nao-pode-ficar-na-fila');
+  perform pg_temp.assert_eq('o alerta entregue MANTÉM o link do painel',
+    (select payload ->> 'link' from app.alert_queue where id = '{Q_WHATSAPP}'), 'https://app.x/dashboard?un=1');
+  -- `_WAITING_SQL` depois das marcas: as duas `sent` e as duas `sending` não
+  -- contam, a futura tampouco — 3 virou 0 (S10b da revisão).
+  perform pg_temp.assert_eq('_WAITING_SQL depois das marcas: 0 (sent, sending e futura não contam)',
+    (select waiting from ({WAITING}) w)::text, '0');
+end $$;
+
+-- O negativo do gatilho numa `sending`: a abertura é só para sent/discarded.
+do $$
+declare v_recusou boolean := false;
+begin
+  begin
+    update app.alert_queue set payload = payload - 'link' where id = '{Q_PRESA}';
+  exception when raise_exception then v_recusou := true; end;
+  perform pg_temp.assert_eq('o gatilho RECUSA payload - link numa linha sending',
+    v_recusou::text, 'true');
+end $$;
+
+-- A quinta falha descarta e tira o link; a primeira devolve e o mantém.
+insert into app.alert_queue
+  (id, tenant_id, rule_id, channel, destination, payload, idempotency_key, template_code, provider, status, attempts) values
+  ('{Q_INVITE_5}', '{R_TENANT}', null, 'whatsapp', '+5511999990403',
+   '{"nome": "Gestora", "link": "{R_INVITE_LINK}"}', 'k-invite-5', 'telegram_invite', 'z_api', 'sending', 4),
+  ('{Q_INVITE_1}', '{R_TENANT}', null, 'whatsapp', '+5511999990403',
+   '{"nome": "Gestora", "link": "{R_INVITE_LINK}"}', 'k-invite-1', 'telegram_invite', 'z_api', 'sending', 0);
+create temp table marcas (queue_id uuid, status text);
+with r as ({MARK_FAILED_5}) insert into marcas select '{Q_INVITE_5}', status from r;
+with r as ({MARK_FAILED_1}) insert into marcas select '{Q_INVITE_1}', status from r;
+do $$ begin
+  perform pg_temp.assert_eq('_MARK_FAILED_SQL na quinta tentativa devolve discarded',
+    (select status from marcas where queue_id = '{Q_INVITE_5}'), 'discarded');
+  perform pg_temp.assert_eq('e o convite descartado perdeu o link',
+    (select (payload ? 'link')::text from app.alert_queue where id = '{Q_INVITE_5}'), 'false');
+  perform pg_temp.assert_eq('na primeira devolve failed',
+    (select status from marcas where queue_id = '{Q_INVITE_1}'), 'failed');
+  perform pg_temp.assert_eq('e o convite que volta para a fila MANTÉM o link (a próxima tentativa precisa dele)',
+    (select payload ->> 'link' from app.alert_queue where id = '{Q_INVITE_1}'), '{R_INVITE_LINK}');
+  perform pg_temp.assert_eq('com o backoff de 1 minuto',
+    (select (next_attempt_at between now() + interval '50 seconds' and now() + interval '70 seconds')::text
+       from app.alert_queue where id = '{Q_INVITE_1}'), 'true');
+end $$;
+
+-- O negativo: numa linha que NÃO é terminal, o gatilho ainda recusa o scrub.
+do $$
+declare v_recusou boolean := false;
+begin
+  begin
+    update app.alert_queue set payload = payload - 'link' where id = '{Q_INVITE_1}';
+  exception when raise_exception then v_recusou := true; end;
+  perform pg_temp.assert_eq('o gatilho RECUSA payload - link numa linha failed (a abertura é só para sent/discarded)',
+    v_recusou::text, 'true');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 4. `blocked`, passo a passo
+-- ---------------------------------------------------------------------------
+do $$ begin
+  perform pg_temp.assert_eq('_IDENTITY_HOLDER_SQL: o chat de quem aderiu aponta quem o tem VIGENTE (não o revogado de outro contato)',
+    (select contact_id::text from ({HOLDER_ADERIU}) h), '{R_ADERIU}');
+  perform pg_temp.assert_eq('(o anti-vácuo: esse chat_id tem 2 linhas, uma revogada de outro contato)',
+    (select count(*) from app.messaging_identity where external_id = '{R_CHAT_ADERIU}')::text, '2');
+  perform pg_temp.assert_eq('o chat REVOGADO ainda diz quem era (para o re-roteamento)',
+    (select contact_id::text from ({HOLDER_REVOGOU}) h), '{R_REVOGOU}');
+  perform pg_temp.assert_eq('um chat inventado é zero linhas',
+    (select count(*) from ({HOLDER_INVENTADO}) h)::text, '0');
+  perform pg_temp.assert_eq('e ligado ao outro tenant, o chat de quem aderiu é zero',
+    (select count(*) from ({HOLDER_OUTRO}) h)::text, '0');
+end $$;
+
+-- O provedor de Telegram respondeu blocked para Q_TELEGRAM (que está sending):
+-- (c1) o log e o estacionamento; (c2) a revogação, a auditoria, o WhatsApp
+-- ativo e o re-roteamento.
+{LOG_BLOCKED};
+{PARK_TELEGRAM};
+do $$ begin
+  perform pg_temp.assert_eq('_PARK_SQL: failed, tentativa contada, horário intocado (a reserva)',
+    (select status || '/' || attempts || '/'
+         || (next_attempt_at between now() - interval '5 seconds' and now())::text
+       from app.alert_queue where id = '{Q_TELEGRAM}'), 'failed/1/true');
+end $$;
+create temp table revogadas (id uuid);
+with r as ({REVOKE_ADERIU}) insert into revogadas select id from r;
+do $$
+declare v_id text; v_depois text;
+begin
+  perform pg_temp.assert_eq('_LOG_SQL gravou a tentativa de Telegram como failed/blocked',
+    (select count(*) from app.alert_sent
+      where queue_id = '{Q_TELEGRAM}' and channel = 'telegram' and provider = 'telegram'
+        and status = 'failed' and error = 'blocked')::text, '1');
+  perform pg_temp.assert_not_in('e sem o chat_id em claro (só o hash)',
+    (select string_agg(destination_hash, ' ') from app.alert_sent where queue_id = '{Q_TELEGRAM}'), '{R_CHAT_ADERIU}');
+  perform pg_temp.assert_eq('_REVOKE_PREVIOUS_SQL (do webhook) revogou a vigente de quem aderiu: 1 linha',
+    (select count(*) from revogadas)::text, '1');
+  perform pg_temp.assert_eq('com a razão',
+    (select revoked_reason from app.messaging_identity where contact_id = '{R_ADERIU}'), 'bloqueou o bot');
+  perform pg_temp.assert_eq('e nada foi apagado',
+    (select count(*) from app.messaging_identity where tenant_id = '{R_TENANT}')::text, '4');
+  select id::text into v_id from revogadas;
+  execute replace($q${AUDIT}$q$, '%(entity_id)s', quote_literal(v_id));
+  select depois::text into v_depois from app.audit_log
+   where tenant_id = '{R_TENANT}' and entity = 'messaging_identity' and entity_id = v_id;
+  perform pg_temp.assert_eq('a auditoria leva canal e razão',
+    (select depois ->> 'reason' from app.audit_log where entity_id = v_id), 'bloqueou o bot');
+  perform pg_temp.assert_not_in('e NÃO o chat_id', v_depois, '{R_CHAT_ADERIU}');
+  perform pg_temp.assert_eq('e sem pessoa autenticada (user_id nulo)',
+    (select (user_id is null)::text from app.audit_log where entity_id = v_id), 'true');
+  perform pg_temp.assert_eq('_PROVIDER_SQL: o WhatsApp ativo é z_api',
+    (select provider from ({PROVIDER}) p), 'z_api');
+end $$;
+drop table revogadas;
+
+create temp table reroteadas (id uuid);
+with r as ({REROUTE_ADERIU}) insert into reroteadas select id from r;
+do $$ begin
+  perform pg_temp.assert_eq('_REROUTE_SQL: a MESMA linha foi re-roteada (1 linha)',
+    (select count(*) from reroteadas)::text, '1');
+  perform pg_temp.assert_eq('agora é whatsapp / z_api, para o número do contato',
+    (select channel || '/' || provider || '/' || destination from app.alert_queue where id = '{Q_TELEGRAM}'),
+    'whatsapp/z_api/+5511999990401');
+  perform pg_temp.assert_eq('failed, devida já, com as tentativas ZERADAS (as de Telegram eram do outro canal)',
+    (select status || '/' || attempts || '/' || (next_attempt_at <= now())::text
+       from app.alert_queue where id = '{Q_TELEGRAM}'), 'failed/0/true');
+  perform pg_temp.assert_eq('e com a mesma chave de idempotência (a rota é atributo)',
+    (select idempotency_key from app.alert_queue where id = '{Q_TELEGRAM}'), 'k-telegram');
+end $$;
+create temp table reservadas3 (id uuid);
+with r as ({CLAIM}) insert into reservadas3 select id from r;
+do $$ begin
+  perform pg_temp.assert_eq('a próxima reserva a pega de volta (o próximo lote entrega)',
+    (select count(*) from reservadas3 where id = '{Q_TELEGRAM}')::text, '1');
+end $$;
+
+-- O contato sem número: o re-roteamento devolve zero e a linha é descartada.
+insert into app.alert_queue
+  (id, tenant_id, rule_id, channel, destination, payload, idempotency_key, template_code, provider, status, attempts) values
+  ('{Q_SEM_NUMERO}', '{R_TENANT}', '{R_RULE}', 'telegram', '{R_CHAT_SEM_NUMERO}',
+   '{"unit": "Rota", "link": "https://app.x/dashboard?un=1"}', 'k-sem-numero', 'deviation_summary', 'telegram', 'sending', 0);
+{PARK_SEM_NUMERO};
+create temp table reroteadas2 (id uuid);
+with r as ({REROUTE_SEM_NUMERO}) insert into reroteadas2 select id from r;
+do $$ begin
+  perform pg_temp.assert_eq('_REROUTE_SQL para o contato SEM número: zero linhas',
+    (select count(*) from reroteadas2)::text, '0');
+  perform pg_temp.assert_eq('a linha continua telegram, estacionada (nada mais mudou nela)',
+    (select channel || '/' || status || '/' || attempts from app.alert_queue where id = '{Q_SEM_NUMERO}'), 'telegram/failed/1');
+end $$;
+{DISCARD_SEM_NUMERO};
+do $$ begin
+  perform pg_temp.assert_eq('_DISCARD_SQL: descartada, e a tentativa (contada no PARK) não conta de novo',
+    (select status || '/' || attempts from app.alert_queue where id = '{Q_SEM_NUMERO}'), 'discarded/1');
+  perform pg_temp.assert_eq('e o alerta descartado MANTÉM o link (o scrub é só do convite)',
+    (select (payload ? 'link')::text from app.alert_queue where id = '{Q_SEM_NUMERO}'), 'true');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 4b. A re-rota RECUSADA pelo gatilho — o ALTO do ciclo 1, contra o gatilho real
+-- ---------------------------------------------------------------------------
+-- O tenant troca de z_api para meta_cloud (oficial) com o template em `draft`.
+-- Uma linha de Telegram bloqueada é estacionada em (c1); a re-rota de (c2) é
+-- recusada pelo gatilho ("Template … está draft e o provedor é meta_cloud"),
+-- desfeita, e a linha vai para `_DISCARD_SQL` com o motivo no log. As outras
+-- linhas do lote (Q_WHATSAPP, Q_INVITE) continuam `sent`: nada é reentregue.
+update app.integration set active = false where id = '{R_ZAPI}';
+insert into app.integration (id, tenant_id, provider, alias, config, active) values
+  ('{R_META}', '{R_TENANT}', 'meta_cloud', 'meta_cloud', '{"phone_number_id": "1", "waba_id": "2"}', true);
+insert into app.alert_queue
+  (id, tenant_id, rule_id, channel, destination, payload, idempotency_key, template_code, provider, status, attempts) values
+  ('{Q_RECUSADA}', '{R_TENANT}', '{R_RULE}', 'telegram', '{R_CHAT_ADERIU}',
+   '{"unit": "Rota", "link": "https://app.x/dashboard?un=1"}', 'k-recusada', 'deviation_summary', 'telegram', 'sending', 2);
+{PARK_RECUSADA};
+do $$
+declare v_recusou boolean := false; v_msg text := '';
+begin
+  perform pg_temp.assert_eq('_PROVIDER_SQL agora devolve meta_cloud',
+    (select provider from ({PROVIDER}) p), 'meta_cloud');
+  perform pg_temp.assert_eq('o template está draft',
+    (select meta_status from app.message_template where tenant_id = '{R_TENANT}' and code = 'deviation_summary'), 'draft');
+  begin
+    execute $q$with r as ({REROUTE_META}) select id from r$q$;
+  exception when raise_exception then
+    v_recusou := true;
+    get stacked diagnostics v_msg = message_text;
+  end;
+  perform pg_temp.assert_eq('o gatilho RECUSA a re-rota para meta_cloud com template draft', v_recusou::text, 'true');
+  perform pg_temp.assert_eq('e a frase nomeia o template e o provedor, sem payload',
+    v_msg, 'Template deviation_summary está draft e o provedor é meta_cloud.');
+  perform pg_temp.assert_not_in('(sem o link)', v_msg, 'app.x');
+  perform pg_temp.assert_eq('a linha ficou como (c1) a deixou: telegram, failed, estacionada',
+    (select channel || '/' || provider || '/' || status || '/' || attempts from app.alert_queue where id = '{Q_RECUSADA}'),
+    'telegram/telegram/failed/3');
+end $$;
+{LOG_REFUSED};
+{DISCARD_RECUSADA};
+do $$ begin
+  perform pg_temp.assert_eq('a recusada foi descartada',
+    (select status from app.alert_queue where id = '{Q_RECUSADA}'), 'discarded');
+  perform pg_temp.assert_eq('com o motivo no log, pelo canal que recusou (whatsapp/meta_cloud/failed)',
+    (select channel || '/' || provider || '/' || status from app.alert_sent
+      where queue_id = '{Q_RECUSADA}' and error like 'reroute_refused: %'), 'whatsapp/meta_cloud/failed');
+  perform pg_temp.assert_eq('as outras linhas do lote continuam entregues (nada a reentregar)',
+    (select count(*) from app.alert_queue where id in ('{Q_WHATSAPP}', '{Q_INVITE}') and status = 'sent')::text, '2');
+  -- As `sending` do tenant são só as 3 reservadas antes (presa, fresca e a
+  -- re-roteada que a terceira reserva pegou): a recusa não deixou nenhuma.
+  perform pg_temp.assert_eq('e nenhuma linha ficou sending por causa da recusa',
+    (select string_agg(id::text, ',' order by id) from app.alert_queue
+      where tenant_id = '{R_TENANT}' and status = 'sending'),
+    '{Q_TELEGRAM}' || ',' || '{Q_PRESA}' || ',' || '{Q_FRESCA}');
+end $$;
+update app.integration set active = false where id = '{R_META}';
+update app.integration set active = true where id = '{R_ZAPI}';
+
+-- Depois da revogação, `_TARGETS_SQL` já não traz o chat: o próximo ciclo vai por WhatsApp.
+create temp table alvo as {TARGETS};
+do $$ begin
+  perform pg_temp.assert_eq('depois do blocked, quem aderiu já não traz external_id (§8 degrada sozinho)',
+    (select coalesce(telegram_external_id, 'nulo') from alvo where contact_id = '{R_ADERIU}'), 'nulo');
+end $$;
+drop table alvo;
+
+-- ---------------------------------------------------------------------------
+-- 5. `alert_sent` com os quatro provedores, e o relatório por canal
+-- ---------------------------------------------------------------------------
+{LOG_META};
+{LOG_ZAPI};
+{LOG_UAZAPI};
+{LOG_OUTRO};
+do $$ begin
+  perform pg_temp.assert_eq('alert_sent aceita os quatro provedores de canal',
+    (select count(distinct provider) from app.alert_sent where tenant_id = '{R_TENANT}')::text, '4');
+end $$;
+
+set local role authenticated;
+set local request.jwt.claims = '{"sub": "{R_OWNER}", "role": "authenticated"}';
+set local request.jwt.claim.sub = '{R_OWNER}';
+do $$ begin
+  perform pg_temp.assert_eq('fn_delivery_by_channel (owner): 4 linhas desta semana, uma por canal/provedor',
+    (select count(*) from public.fn_delivery_by_channel())::text, '4');
+  perform pg_temp.assert_eq('telegram: 0 sent, 1 failed (o blocked)',
+    (select sent || '/' || failed from public.fn_delivery_by_channel() where provider = 'telegram'), '0/1');
+  perform pg_temp.assert_eq('meta_cloud: 1 sent, 1 failed (a re-rota recusada aparece como falha de WhatsApp)',
+    (select sent || '/' || failed from public.fn_delivery_by_channel() where provider = 'meta_cloud'), '1/1');
+  perform pg_temp.assert_eq('z_api: 1 sent, 0 failed',
+    (select sent || '/' || failed from public.fn_delivery_by_channel() where provider = 'z_api'), '1/0');
+  perform pg_temp.assert_eq('todas desta semana',
+    (select count(*) from public.fn_delivery_by_channel() where week_start = date_trunc('week', now())::date)::text, '4');
+  perform pg_temp.assert_eq('e nenhuma do outro tenant (uazapi de lá não entra na contagem daqui)',
+    (select coalesce(sum(sent + failed), 0) from public.fn_delivery_by_channel() where provider = 'uazapi')::text, '1');
+end $$;
+set local request.jwt.claims = '{"sub": "{R_OUTRO_OWNER}", "role": "authenticated"}';
+set local request.jwt.claim.sub = '{R_OUTRO_OWNER}';
+do $$ begin
+  perform pg_temp.assert_eq('o owner do outro tenant vê só a linha dele (uazapi, 1)',
+    (select count(*) from public.fn_delivery_by_channel())::text, '1');
+  perform pg_temp.assert_eq('e é uazapi/1',
+    (select provider || '/' || sent from public.fn_delivery_by_channel()), 'uazapi/1');
+end $$;
+reset role;
+
+rollback;
+"""
+
 
 def webhook(webhook_sql: dict[str, str], tenant_sql: dict[str, str]) -> str:
     """O cenário do webhook, com o SQL real de `webhooks.py` e `tenant.py`."""
@@ -2078,6 +2662,173 @@ def templates(fixas: dict[str, str]) -> str:
     return script
 
 
+def roteamento(outbox_sql: dict[str, str], sender_sql: dict[str, str], webhook_sql: dict[str, str]) -> str:
+    """O cenário do roteamento e do sender, com o SQL real de `outbox.py`,
+    `sender.py` e `webhooks.py` ligado aos valores."""
+
+    def nulls(sql: str, *nomes: str) -> str:
+        for nome in nomes:
+            sql = sql.replace(f"%({nome})s", "null")
+        return sql
+
+    def targets(tenant: str) -> str:
+        return ligar(
+            outbox_sql["_TARGETS_SQL"],
+            tenant_id=tenant,
+            unit_id=R_UNIT,
+            telegram_channel="telegram",
+            telegram_providers="{telegram}",
+            telegram_health="connected",
+        )
+
+    def park(queue_id: str) -> str:
+        return ligar(sender_sql["_PARK_SQL"], tenant_id=R_TENANT, queue_id=queue_id)
+
+    def claim() -> str:
+        return ligar(sender_sql["_CLAIM_SQL"], tenant_id=R_TENANT, batch="50", stuck_minutes="10")
+
+    def mark_sent(queue_id: str) -> str:
+        return ligar(sender_sql["_MARK_SENT_SQL"], tenant_id=R_TENANT, queue_id=queue_id)
+
+    def mark_failed(queue_id: str, wait: str) -> str:
+        return ligar(
+            sender_sql["_MARK_FAILED_SQL"],
+            tenant_id=R_TENANT,
+            queue_id=queue_id,
+            max_attempts="5",
+            wait_minutes=wait,
+        )
+
+    def holder(tenant: str, chat: str) -> str:
+        return ligar(
+            sender_sql["_IDENTITY_HOLDER_SQL"], tenant_id=tenant, channel="telegram", external_id=chat
+        )
+
+    def reroute(queue_id: str, contact_id: str, provider: str = "z_api") -> str:
+        return ligar(
+            sender_sql["_REROUTE_SQL"],
+            tenant_id=R_TENANT,
+            queue_id=queue_id,
+            contact_id=contact_id,
+            channel="whatsapp",
+            provider=provider,
+        )
+
+    def log(
+        tenant: str, queue_id: str | None, channel: str, provider: str, status: str, error: str | None
+    ) -> str:
+        sql = ligar(
+            sender_sql["_LOG_SQL"],
+            tenant_id=tenant,
+            channel=channel,
+            provider=provider,
+            destination_hash="f" * 64,
+            provider_message_id="m-1",
+            status=status,
+        )
+        sql = sql.replace("%(queue_id)s", "null" if queue_id is None else f"'{queue_id}'")
+        sql = sql.replace("%(error)s", "null" if error is None else f"'{error}'")
+        return nulls(sql, "rule_id", "cost_cents")
+
+    revoke = ligar(
+        webhook_sql["_REVOKE_PREVIOUS_SQL"],
+        tenant_id=R_TENANT,
+        channel="telegram",
+        reason="bloqueou o bot",
+        contact_id=R_ADERIU,
+    )
+    revoke = nulls(revoke, "employee_id")
+    audit = ligar(
+        sender_sql["_AUDIT_SQL"],
+        tenant_id=R_TENANT,
+        depois='{"channel": "telegram", "reason": "bloqueou o bot"}',
+    )
+    substituicoes = {
+        "{TARGETS_OUTRO}": targets(R_OUTRO),
+        "{TARGETS}": targets(R_TENANT),
+        "{WAITING}": ligar(sender_sql["_WAITING_SQL"], tenant_id=R_TENANT),
+        "{CLAIM}": claim(),
+        "{TEMPLATE}": ligar(sender_sql["_TEMPLATE_SQL"], tenant_id=R_TENANT, code="deviation_summary"),
+        "{INTEGRATIONS_OUTRO}": ligar(
+            sender_sql["_INTEGRATIONS_SQL"], tenant_id=R_OUTRO, providers="{" + provider_list_plain() + "}"
+        ),
+        "{INTEGRATIONS}": ligar(
+            sender_sql["_INTEGRATIONS_SQL"], tenant_id=R_TENANT, providers="{" + provider_list_plain() + "}"
+        ),
+        "{MARK_SENT_INVITE}": mark_sent(Q_INVITE),
+        "{MARK_SENT_WHATSAPP}": mark_sent(Q_WHATSAPP),
+        "{MARK_FAILED_5}": mark_failed(Q_INVITE_5, "360"),
+        "{MARK_FAILED_1}": mark_failed(Q_INVITE_1, "1"),
+        "{HOLDER_ADERIU}": holder(R_TENANT, R_CHAT_ADERIU),
+        "{HOLDER_REVOGOU}": holder(R_TENANT, R_CHAT_REVOGOU),
+        "{HOLDER_INVENTADO}": holder(R_TENANT, "000000000000"),
+        "{HOLDER_OUTRO}": holder(R_OUTRO, R_CHAT_ADERIU),
+        "{LOG_BLOCKED}": log(R_TENANT, Q_TELEGRAM, "telegram", "telegram", "failed", "blocked"),
+        "{PARK_TELEGRAM}": park(Q_TELEGRAM),
+        "{PARK_SEM_NUMERO}": park(Q_SEM_NUMERO),
+        "{PARK_RECUSADA}": park(Q_RECUSADA),
+        "{REROUTE_META}": reroute(Q_RECUSADA, R_ADERIU, "meta_cloud"),
+        "{LOG_REFUSED}": log(
+            R_TENANT, Q_RECUSADA, "whatsapp", "meta_cloud", "failed",
+            "reroute_refused: Template deviation_summary está draft e o provedor é meta_cloud.",
+        ),
+        "{DISCARD_RECUSADA}": ligar(sender_sql["_DISCARD_SQL"], tenant_id=R_TENANT, queue_id=Q_RECUSADA),
+        "{REVOKE_ADERIU}": revoke,
+        "{AUDIT}": audit,
+        "{PROVIDER}": ligar(outbox_sql["_PROVIDER_SQL"], tenant_id=R_TENANT),
+        "{REROUTE_ADERIU}": reroute(Q_TELEGRAM, R_ADERIU),
+        "{REROUTE_SEM_NUMERO}": reroute(Q_SEM_NUMERO, R_SEM_NUMERO),
+        "{DISCARD_SEM_NUMERO}": ligar(sender_sql["_DISCARD_SQL"], tenant_id=R_TENANT, queue_id=Q_SEM_NUMERO),
+        "{LOG_META}": log(R_TENANT, None, "whatsapp", "meta_cloud", "sent", None),
+        "{LOG_ZAPI}": log(R_TENANT, Q_WHATSAPP, "whatsapp", "z_api", "sent", None),
+        "{LOG_UAZAPI}": log(R_TENANT, None, "whatsapp", "uazapi", "sent", None),
+        "{LOG_OUTRO}": log(R_OUTRO, None, "whatsapp", "uazapi", "sent", None),
+    }
+    script = CENARIO_ROTEAMENTO
+    for marcador, texto in substituicoes.items():
+        script = script.replace(marcador, texto)
+    for nome, valor in {
+        "{R_TENANT}": R_TENANT,
+        "{R_OUTRO}": R_OUTRO,
+        "{R_OWNER}": R_OWNER,
+        "{R_OUTRO_OWNER}": R_OUTRO_OWNER,
+        "{R_COMPANY}": R_COMPANY,
+        "{R_UNIT}": R_UNIT,
+        "{R_RULE}": R_RULE,
+        "{R_ADERIU}": R_ADERIU,
+        "{R_REVOGOU}": R_REVOGOU,
+        "{R_SEM}": R_SEM,
+        "{R_SEM_NUMERO}": R_SEM_NUMERO,
+        "{R_BOT}": R_BOT,
+        "{R_ZAPI}": R_ZAPI,
+        "{R_CHAT_ADERIU}": R_CHAT_ADERIU,
+        "{R_CHAT_REVOGOU}": R_CHAT_REVOGOU,
+        "{R_CHAT_SEM_NUMERO}": R_CHAT_SEM_NUMERO,
+        "{Q_TELEGRAM}": Q_TELEGRAM,
+        "{Q_WHATSAPP}": Q_WHATSAPP,
+        "{Q_INVITE}": Q_INVITE,
+        "{Q_PRESA}": Q_PRESA,
+        "{Q_FRESCA}": Q_FRESCA,
+        "{Q_FUTURA}": Q_FUTURA,
+        "{Q_INVITE_5}": Q_INVITE_5,
+        "{Q_INVITE_1}": Q_INVITE_1,
+        "{Q_SEM_NUMERO}": Q_SEM_NUMERO,
+        "{Q_RECUSADA}": Q_RECUSADA,
+        "{R_META}": R_META,
+        "{R_UAZAPI_INATIVA}": R_UAZAPI_INATIVA,
+        "{R_SECULLUM}": R_SECULLUM,
+        "{R_INVITE_LINK}": R_INVITE_LINK,
+    }.items():
+        script = script.replace(nome, valor)
+    return script
+
+
+def provider_list_plain() -> str:
+    """`meta_cloud,z_api,uazapi,telegram` — o array de `CHANNEL_PROVIDERS` como o
+    driver o renderiza para `%(providers)s`."""
+    return ",".join(_capacidades().CHANNEL_PROVIDERS)
+
+
 def rodar(script: str) -> None:
     r = psql([], script)
     saida = "\n".join(
@@ -2179,6 +2930,13 @@ def main() -> None:
         for nome, sql in instrucoes(OUTBOX).items()
         if nome in ("_PROVIDER_SQL", "_TEMPLATE_SQL", "_ENQUEUE_SQL")
     }
+    # O C5: `_TARGETS_SQL` do outbox (que o `93` só compila) e as doze do sender.
+    outbox_rota = {
+        nome: sql.replace("{whatsapp_providers}", whatsapp_providers())
+        for nome, sql in instrucoes(OUTBOX).items()
+        if nome in ("_TARGETS_SQL", "_PROVIDER_SQL")
+    }
+    sender_sql = instrucoes(SENDER)
     # Só a do webhook: as outras três de `tenant.py` são o bootstrap e o
     # `set_config`, que nenhum cenário daqui executa.
     tenant_sql = {
@@ -2234,6 +2992,31 @@ def main() -> None:
         sys.exit(1)
     if set(outbox_sql) != {"_PROVIDER_SQL", "_TEMPLATE_SQL", "_ENQUEUE_SQL"}:
         print(f"  ✖ esperava as três instruções do convite em outbox.py, achei {sorted(outbox_sql)}")
+        sys.exit(1)
+    esperadas_sender = {
+        "_GATE_SQL",
+        "_WAITING_SQL",
+        "_CLAIM_SQL",
+        "_TEMPLATE_SQL",
+        "_INTEGRATIONS_SQL",
+        "_MARK_SENT_SQL",
+        "_MARK_FAILED_SQL",
+        "_PARK_SQL",
+        "_DISCARD_SQL",
+        "_IDENTITY_HOLDER_SQL",
+        "_AUDIT_SQL",
+        "_REROUTE_SQL",
+        "_LOG_SQL",
+    }
+    if set(sender_sql) != esperadas_sender:
+        print(f"  ✖ esperava {sorted(esperadas_sender)} em sender.py, achei {sorted(sender_sql)}")
+        sys.exit(1)
+    if set(outbox_rota) != {"_TARGETS_SQL", "_PROVIDER_SQL"}:
+        print("  ✖ _TARGETS_SQL ou _PROVIDER_SQL não está em outbox.py")
+        sys.exit(1)
+    # ⛔ O titular pelo chat_id não seleciona o chat_id; o log não guarda destino.
+    if "external_id" in sender_sql["_IDENTITY_HOLDER_SQL"].split("from")[0]:
+        print("  ✖ _IDENTITY_HOLDER_SQL seleciona external_id")
         sys.exit(1)
     # ⛔ O chat_id nunca sai (SPEC-CANAIS §3.2): a ficha não seleciona a coluna.
     if "external_id" in fixas["_LINK_SQL"]:
@@ -2298,8 +3081,11 @@ def main() -> None:
     print("\n--- o convite de adesão: titular, número, as quatro condições, a fila pelo gatilho, a ficha")
     rodar(convite(fixas, outbox_sql, webhook_sql))
 
+    print("\n--- o roteamento e o sender: as entradas de route, a reserva, o scrub, o blocked, o relatório")
+    rodar(roteamento(outbox_rota, sender_sql, webhook_sql))
+
     print("\n================================================")
-    print(" TELA DE CONEXÕES, CREDENCIAL, TEMPLATES, BOT, WEBHOOK E CONVITE: TODOS OS TESTES OK")
+    print(" CONEXÕES, CREDENCIAL, TEMPLATES, BOT, WEBHOOK, CONVITE E ROTEAMENTO: TODOS OS TESTES OK")
     print("================================================")
 
 

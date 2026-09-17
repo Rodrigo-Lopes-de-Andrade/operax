@@ -129,7 +129,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `rule_id` | uuid | sim |  | `app.alert_rule` |  |
 | `deviation_event_id` | uuid | sim |  | `app.deviation_event` |  |
 | `report_cycle_id` | uuid | sim |  | `app.report_cycle` |  |
-| `channel` | text | não |  |  |  |
+| `channel` | text | não |  |  | O canal ROTEADO desta mensagem: whatsapp, email ou telegram. A regra (app.alert_rule.channel) nunca diz telegram — ela diz mensageria, e quem decide o canal é a identidade vigente da pessoa (app.messaging_identity), em outbox.route. Sem identidade, ou sem bot ativo, a mensagem vai por WhatsApp como sempre foi. |
 | `destination` | text | não |  |  |  |
 | `payload` | jsonb | não |  |  |  |
 | `idempotency_key` | text | não |  |  | Reprocessar o mesmo período não reenvia. Consuma a fila com SELECT ... FOR UPDATE SKIP LOCKED. |
@@ -144,7 +144,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 **Restrições**
 
 - `CHECK (((provider IS NULL) OR (provider = ANY (ARRAY['meta_cloud'::text, 'z_api'::text, 'uazapi'::text, 'telegram'::text, 'smtp'::text, 'resend'::text]))))`
-- `CHECK ((channel = ANY (ARRAY['whatsapp'::text, 'email'::text])))`
+- `CHECK ((channel = ANY (ARRAY['whatsapp'::text, 'email'::text, 'telegram'::text])))`
 - `CHECK ((status = ANY (ARRAY['pending'::text, 'sending'::text, 'sent'::text, 'failed'::text, 'discarded'::text])))`
 
 **Policies**
@@ -3622,6 +3622,16 @@ public.fn_data_freshness(p_stale_after_minutes integer DEFAULT NULL::integer)
 ```
 
 Idade do dado por entidade sincronizada, e o deadman da ingestão. Sem argumento, o limiar é 1,5x a cadência da entidade — 25 min para Batida (cadência 15), 2160 para Foto (cadência diária) e 45 para as demais (cadência 30) — de modo que uma execução perdida não alarma e duas seguidas alarmam. Com argumento, ele vale para todas. Ver docs/DECISAO-CADENCIA-SYNC.md.
+
+
+### `fn_delivery_by_channel`
+
+```sql
+public.fn_delivery_by_channel(p_weeks integer DEFAULT 8)
+  returns TABLE(week_start date, channel text, provider text, sent integer, failed integer)
+```
+
+Entregas por semana, canal e provedor, nas últimas p_weeks semanas (a atual inclusa): sent conta sent/delivered/read, failed conta failed. É o relatório da SPEC-CANAIS §8 (consequência 3) — a coluna de WhatsApp cai conforme a adesão ao Telegram sobe. Security INVOKER: lê app.alert_sent pela policy alert_sent_read (util.is_admin), então quem não é owner/hr/personnel recebe zero linhas. Nem nome, nem destino, nem hash: só contagens.
 
 
 ### `fn_detection_health`

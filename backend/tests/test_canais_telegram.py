@@ -1317,15 +1317,19 @@ def test_as_instrucoes_do_bot_ligam_o_tenant_pela_integracao() -> None:
 
 def test_o_bot_nao_e_provedor_de_whatsapp_no_sender() -> None:
     """O par de `test_o_sender_conhece_todo_provedor_de_whatsapp_da_matriz`:
-    `TelegramProvider.enviar` existe desde a onda 2b, mas quem o liga ao sender
-    — Telegram se houver identidade vigente, WhatsApp se não (SPEC §8) — é o
-    C5. Até lá `PROVIDERS` (verificação) é quatro e o mapa do sender continua
-    nos três: um provedor no mapa sem roteamento entregaria a um `chat_id`
-    que ninguém resolveu."""
-    from operax.alertas.sender import default_providers
+    desde o C5 o sender constrói o bot pela fábrica como os outros três, mas
+    o bot NÃO é provedor de WhatsApp — `outbox.route` só o escolhe para quem
+    tem identidade vigente (SPEC §8), e `outbox._PROVIDER_SQL` (o WhatsApp
+    ativo do tenant, também o destino do re-roteamento após `blocked`) nunca o
+    devolve. Um bot na lista de WhatsApp entregaria a um `chat_id` que ninguém
+    resolveu."""
+    from operax.alertas import capacidades, outbox
 
     assert telegram.NAME in PROVIDERS
-    assert telegram.NAME not in default_providers()
+    assert telegram.NAME in capacidades.CHANNEL_PROVIDERS
+    assert telegram.NAME not in capacidades.WHATSAPP_PROVIDERS
+    assert f"'{telegram.NAME}'" not in outbox._PROVIDER_SQL
+    assert outbox.TELEGRAM_PROVIDER == telegram.NAME
     assert callable(telegram.TelegramProvider.enviar)
 
 

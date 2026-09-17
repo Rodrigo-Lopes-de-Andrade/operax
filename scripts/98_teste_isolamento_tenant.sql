@@ -1846,6 +1846,124 @@ end $$;
 
 reset role;
 
+\echo '--- Canais / C5: entregas por canal — o admin vê a semana do próprio tenant, e só ela'
+-- ---------------------------------------------------------------------------
+-- `public.fn_delivery_by_channel` (migration `ch_delivery_by_channel`) é
+-- security INVOKER: lê `app.alert_sent` pela policy `alert_sent_read`
+-- (`util.is_admin` — owner, hr, personnel). Então o que se afirma aqui é a
+-- policy, vista pela RPC: owner e RH de A veem a semana de A; o supervisor vê
+-- ZERO linhas (é o desenho: log de entrega é instrumento do administrador);
+-- owner de B vê só B; anon recebe permission denied na função.
+--
+-- Os valores diferem por tenant (A: telegram + meta_cloud; B: z_api) para que
+-- "owner A não vê B" não seja indistinguível de "vê o dele duas vezes". E uma
+-- linha de A está NOVE semanas atrás: fora da janela padrão de 8, dentro da de
+-- 10 — sem ela, um `where` apagado ficaria verde.
+savepoint prova_c5;
+reset role;
+
+insert into app.alert_sent (tenant_id, channel, provider, destination_hash, status, error, sent_at) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'telegram', 'telegram',   repeat('a', 64), 'sent',   null,      now()),
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'whatsapp', 'meta_cloud', repeat('b', 64), 'failed', 'blocked', now()),
+  ('aaaaaaaa-0000-0000-0000-000000000001', 'whatsapp', 'meta_cloud', repeat('c', 64), 'sent',   null,      now() - interval '9 weeks'),
+  ('bbbbbbbb-0000-0000-0000-000000000002', 'whatsapp', 'z_api',      repeat('d', 64), 'sent',   null,      now());
+
+-- O anti-vácuo, como dono: as 4 linhas estão lá, e `telegram` passou no check
+-- de provedor (`ch_telegram_provider`).
+do $$ begin
+  perform pg_temp.assert_eq('as 4 linhas de alert_sent foram semeadas (2 tenants, 3 provedores)',
+    (select count(*) from app.alert_sent), 4);
+  perform pg_temp.assert_eq('e uma delas é telegram/telegram',
+    (select count(*) from app.alert_sent where channel = 'telegram' and provider = 'telegram'), 1);
+end $$;
+
+-- --- owner de A ---------------------------------------------------------------
+set local role authenticated;
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform pg_temp.assert_eq('owner A lê 3 linhas de alert_sent (as dele, pela policy)',
+    (select count(*) from app.alert_sent), 3);
+  perform pg_temp.assert_eq('fn_delivery_by_channel: owner A vê 2 linhas nesta semana (telegram, whatsapp)',
+    (select count(*) from public.fn_delivery_by_channel()), 2);
+  perform pg_temp.assert_eq('a linha telegram: sent 1, failed 0',
+    (select count(*) from public.fn_delivery_by_channel()
+      where channel = 'telegram' and provider = 'telegram' and sent = 1 and failed = 0), 1);
+  perform pg_temp.assert_eq('a linha whatsapp/meta_cloud: sent 0, failed 1 (o blocked)',
+    (select count(*) from public.fn_delivery_by_channel()
+      where channel = 'whatsapp' and provider = 'meta_cloud' and sent = 0 and failed = 1), 1);
+  perform pg_temp.assert_eq('as duas são desta semana',
+    (select count(*) from public.fn_delivery_by_channel()
+      where week_start = date_trunc('week', now())::date), 2);
+  perform pg_temp.assert_eq('a de 9 semanas atrás fica FORA da janela padrão (8)',
+    (select count(*) from public.fn_delivery_by_channel()
+      where week_start < date_trunc('week', now())::date), 0);
+  perform pg_temp.assert_eq('e ENTRA com p_weeks = 10, como semana própria',
+    (select count(*) from public.fn_delivery_by_channel(10)), 3);
+  perform pg_temp.assert_eq('p_weeks = 0 é a semana atual, não tudo',
+    (select count(*) from public.fn_delivery_by_channel(0)), 2);
+  -- A ordem é week_start, channel, provider: a semana antiga primeiro, depois
+  -- telegram antes de whatsapp na atual. Conferida pela lista inteira.
+  perform pg_temp.assert_eq('e vem ordenada: week_start, channel, provider',
+    case when (select array_agg(channel || '/' || provider) from public.fn_delivery_by_channel(10))
+              = array['whatsapp/meta_cloud', 'telegram/telegram', 'whatsapp/meta_cloud']
+         then 1 else 0 end, 1);
+  perform pg_temp.assert_eq('owner A NÃO vê a linha z_api (é de B)',
+    (select count(*) from public.fn_delivery_by_channel(10) where provider = 'z_api'), 0);
+end $$;
+
+-- --- RH de A (is_admin) e supervisor de A (não é) ----------------------------
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ begin
+  perform pg_temp.assert_eq('RH A vê as 2 linhas da semana (util.is_admin inclui hr)',
+    (select count(*) from public.fn_delivery_by_channel()), 2);
+end $$;
+
+set local request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+do $$ begin
+  -- O positivo ao lado: o supervisor VÊ a unidade dele — não é um papel vazio.
+  perform pg_temp.assert_eq('supervisor A vê a unidade dele (o positivo)',
+    (select count(*) from public.vw_unit), 1);
+  perform pg_temp.assert_eq('supervisor A: ZERO linhas de alert_sent (alert_sent_read é is_admin)',
+    (select count(*) from app.alert_sent), 0);
+  perform pg_temp.assert_eq('e ZERO na RPC — invoker, a policy é o recorte (o desenho, não bug)',
+    (select count(*) from public.fn_delivery_by_channel(10)), 0);
+end $$;
+
+-- --- owner de B: só B ---------------------------------------------------------
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_eq('owner B vê 1 linha: z_api, sent 1',
+    (select count(*) from public.fn_delivery_by_channel(10)
+      where channel = 'whatsapp' and provider = 'z_api' and sent = 1 and failed = 0), 1);
+  perform pg_temp.assert_eq('e só ela',
+    (select count(*) from public.fn_delivery_by_channel(10)), 1);
+  perform pg_temp.assert_eq('nenhuma telegram (a de A) chega a B',
+    (select count(*) from public.fn_delivery_by_channel(10) where channel = 'telegram'), 0);
+end $$;
+
+-- --- anon: permission denied na função ----------------------------------------
+reset request.jwt.claim.sub;
+set local role anon;
+do $$
+declare v_negado boolean := false;
+begin
+  begin
+    perform * from public.fn_delivery_by_channel();
+  exception when insufficient_privilege then v_negado := true; end;
+  perform pg_temp.assert_eq('anon recebe permission denied em fn_delivery_by_channel (não zero linhas)',
+    case when v_negado then 1 else 0 end, 1);
+end $$;
+
+rollback to savepoint prova_c5;
+
+reset role;
+do $$ begin
+  perform pg_temp.assert_eq('a prova do C5 não deixou rastro em alert_sent',
+    (select count(*) from app.alert_sent), 0);
+end $$;
+
+reset role;
+
 \echo ''
 \echo '================================================'
 \echo ' ISOLAMENTO MULTI-TENANT: TODOS OS TESTES OK'

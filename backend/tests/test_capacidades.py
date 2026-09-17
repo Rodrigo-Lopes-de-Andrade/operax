@@ -306,9 +306,16 @@ def test_nenhum_arquivo_do_backend_escreve_um_provedor_como_literal() -> None:
 
 
 def test_o_sender_conhece_todo_provedor_de_whatsapp_da_matriz() -> None:
-    """`default_providers()` é o mapa que o sender consulta por nome. Um provedor
-    que a matriz conhece e o mapa não faz toda linha daquele canal virar `failed`
-    "provedor não configurado" — degrada bem, e por isso ninguém vê."""
-    from operax.alertas.sender import default_providers
+    """Desde o C5 o sender não tem mapa próprio: ele carrega as integrações
+    ativas de `CHANNEL_PROVIDERS` e constrói cada uma pela fábrica. Um provedor
+    que a matriz conhece e a lista não faz toda linha daquele canal virar
+    `failed` "provedor não configurado" — degrada bem, e por isso ninguém vê.
+    A lista é a da matriz, por identidade, e as chaves do cofre saem do módulo
+    de cada um."""
+    from operax.alertas import sender
 
-    assert set(WHATSAPP_PROVIDERS) <= set(default_providers())
+    assert sender.CHANNEL_PROVIDERS is CHANNEL_PROVIDERS
+    assert set(WHATSAPP_PROVIDERS) <= set(sender.CHANNEL_PROVIDERS)
+    assert "list(CHANNEL_PROVIDERS)" in Path(sender.__file__).read_text(encoding="utf-8")
+    for provider in WHATSAPP_PROVIDERS:
+        assert sender._secret_keys(provider)
