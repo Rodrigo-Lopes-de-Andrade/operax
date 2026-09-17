@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.assistant_prompt_version app.assistant_prompt_pointer app.assistant_draft app.assistant_draft.frozen_from_version_id app.assistant_metric_scope app.assistant_metric_scope.enabled app.ai_query.prompt_version_id app.ai_query.is_dry_run public.fn_publish_assistant_prompt public.fn_assistant_catalog util.assistant_version_immutable app.work_schedule_day -->
+<!-- verificar-docs: inexistentes-de-proposito app.assistant_metric_scope app.assistant_metric_scope.enabled app.ai_query.prompt_version_id app.ai_query.is_dry_run public.fn_assistant_catalog app.work_schedule_day -->
 <!-- `app.work_schedule_day` entra na lista porque este documento a CITA para
      contar o erro que ela causou na etapa DP. Ela nunca existiu — ver
      `SPEC-DP.md` §0-bis, que registra as três camadas que existem de verdade. -->
@@ -412,10 +412,12 @@ as $$ ... $$;
 Validações, na ordem, cada uma com código de erro próprio (`P0001`, mensagem =
 código, como no DeskcommCRM):
 
-1. `draft_not_found` — não há rascunho para o tenant;
-2. `not_admin` — `util.is_admin(p_tenant_id)` falso. **A função é `security
+1. `not_admin` — `util.is_admin(p_tenant_id)` falso. **A função é `security
    definer`: ela precisa checar o papel ela mesma**, porque não herda a RLS de
-   quem chamou;
+   quem chamou. Vem **antes** de tudo, inclusive de saber se há rascunho: o
+   owner de outro tenant não aprende se este tem rascunho (nem se existe) —
+   medido em 17/09/2026, com a ordem invertida os dois códigos vazavam o bit;
+2. `draft_not_found` — não há rascunho para o tenant;
 3. `draft_empty` — conteúdo em branco;
 4. `platform_layer_missing` — não há ponteiro de plataforma. Publicar camada de
    tenant sem doutrina embaixo produziria um assistente sem contrato de recusa;
@@ -432,6 +434,7 @@ existe no momento de publicar (o ponteiro não existe na primeira publicação):
 select content, frozen_from_version_id into v_draft
 from app.assistant_draft where tenant_id = p_tenant_id
 for update;                                  -- serializa daqui em diante
+v_found := found;                            -- julgado só depois do papel
 ```
 
 ⚠️ **`set search_path = ''`** e todo objeto qualificado, como todas as funções

@@ -452,6 +452,159 @@ begin
   if falhas <> '' then raise exception 'FALHA: fn_delivery_by_channel -> %', falhas; end if;
 end $$;
 
+\echo '--- 18. Assistente / A1: três tabelas com exatamente três policies, ninguém apaga, escopo amarrado à versão, e a RPC de publicação'
+-- A parada de RLS foi aberta pelo dono em 17/09/2026 para EXATAMENTE
+-- `assistant_version_read`, `assistant_pointer_read` e `assistant_draft_admin`
+-- (SPRINTS-AGENTE §A1). Uma quarta policy, ou uma a menos, é escopo sem
+-- decisão — por isso a lista é comparada por nome, não contada. E `delete` não
+-- é de ninguém: a versão é append-only por GRANT, não só pelo trigger, e o
+-- único delete que passa é o cascade de `app.tenant`, que é FK. O item 9 já
+-- varre a RPC por search_path, anon e retorno por pessoa; aqui entra o
+-- positivo (`grant execute` a authenticated, que o trigger de lock-down não
+-- escreve em `public`) e o que faz dela a única porta: `is_admin` no corpo e
+-- o `for update` no rascunho antes de qualquer decisão.
+do $$
+declare
+  r record; falhas text := ''; pols text[]; v text; t text; body text;
+begin
+  select array_agg(policyname::text order by policyname) into pols
+    from pg_policies
+   where schemaname = 'app'
+     and tablename in ('assistant_prompt_version', 'assistant_prompt_pointer', 'assistant_draft');
+  if pols is distinct from array['assistant_draft_admin', 'assistant_pointer_read', 'assistant_version_read'] then
+    falhas := falhas || format('policies %s (esperava exatamente as três da parada) ', pols);
+  end if;
+  for r in
+    select tablename, policyname, cmd, qual, with_check from pg_policies
+     where schemaname = 'app'
+       and tablename in ('assistant_prompt_version', 'assistant_prompt_pointer', 'assistant_draft')
+  loop
+    if r.tablename in ('assistant_prompt_version', 'assistant_prompt_pointer') then
+      if r.cmd <> 'SELECT' or r.qual not like '%tenant_id IS NULL%' or r.qual not like '%has_tenant%' then
+        falhas := falhas || r.policyname || '(não é "plataforma para todos, tenant por has_tenant", só leitura) ';
+      end if;
+    elsif r.cmd <> 'ALL' or r.qual not like '%is_admin%' or coalesce(r.with_check, '') not like '%is_admin%' then
+      falhas := falhas || r.policyname || '(não é util.is_admin em using E with check) ';
+    end if;
+  end loop;
+  foreach t in array array['assistant_prompt_version', 'assistant_prompt_pointer', 'assistant_draft'] loop
+    if not (select relrowsecurity from pg_class where oid = ('app.' || t)::regclass) then
+      falhas := falhas || t || '(sem RLS) ';
+    end if;
+    foreach v in array array['authenticated', 'service_role', 'anon'] loop
+      if has_table_privilege(v, 'app.' || t, 'DELETE') or has_table_privilege(v, 'app.' || t, 'TRUNCATE') then
+        falhas := falhas || format('%s apaga em %s ', v, t);
+      end if;
+    end loop;
+    foreach v in array array['SELECT', 'INSERT', 'UPDATE'] loop
+      if not has_table_privilege('service_role', 'app.' || t, v) then
+        falhas := falhas || format('service_role sem %s em %s ', v, t);
+      end if;
+    end loop;
+    if not has_table_privilege('authenticated', 'app.' || t, 'SELECT') then
+      falhas := falhas || format('authenticated não lê %s ', t);
+    end if;
+  end loop;
+  -- Versão e ponteiro: o painel só lê; escrever é pela RPC. Rascunho: S/I/U.
+  foreach t in array array['assistant_prompt_version', 'assistant_prompt_pointer'] loop
+    if has_table_privilege('authenticated', 'app.' || t, 'INSERT')
+       or has_table_privilege('authenticated', 'app.' || t, 'UPDATE') then
+      falhas := falhas || format('authenticated escreve %s pela tabela ', t);
+    end if;
+  end loop;
+  if not (has_table_privilege('authenticated', 'app.assistant_draft', 'INSERT')
+          and has_table_privilege('authenticated', 'app.assistant_draft', 'UPDATE')) then
+    falhas := falhas || 'authenticated não escreve o rascunho (§7.3: o owner edita desde o dia 1) ';
+  end if;
+  -- O trigger de imutabilidade: before update, LIGADO, e NENHUM trigger de delete.
+  -- `tgenabled = 'O'`: um `alter table … disable trigger` deixa tudo o mais
+  -- verde e a versão mutável — até 17/09 só o `97` pegava isso.
+  if not exists (
+    select 1 from pg_trigger
+     where tgrelid = 'app.assistant_prompt_version'::regclass and tgname = 'trg_assistant_version_immutable'
+       and not tgisinternal and tgenabled = 'O'
+       and (tgtype & 2) <> 0 and (tgtype & 16) <> 0 and (tgtype & 8) = 0
+  ) then
+    falhas := falhas || 'trg_assistant_version_immutable ausente, desligado, ou não é só before update ';
+  end if;
+  if exists (
+    select 1 from pg_trigger
+     where tgrelid = 'app.assistant_prompt_version'::regclass and not tgisinternal and (tgtype & 8) <> 0
+  ) then
+    falhas := falhas || 'versão tem trigger de delete (o cascade de app.tenant travaria) ';
+  end if;
+  -- O escopo amarrado à versão (ciclo 2): um trigger em cada uma de ponteiro
+  -- e rascunho, before insert OR update, ligado, no helper definer. Sem ele a
+  -- FK aceita ponteiro de um tenant na versão de outro — e a FK ignora RLS.
+  foreach t in array array['assistant_prompt_pointer', 'assistant_draft'] loop
+    if not exists (
+      select 1 from pg_trigger
+       where tgrelid = ('app.' || t)::regclass and not tgisinternal and tgenabled = 'O'
+         and tgfoid = 'util.assistant_scope_matches'::regproc
+         and (tgtype & 1) <> 0 and (tgtype & 2) <> 0 and (tgtype & 4) <> 0 and (tgtype & 16) <> 0
+    ) then
+      falhas := falhas || format('%s sem trigger de escopo ligado (before insert or update, util.assistant_scope_matches) ', t);
+    end if;
+  end loop;
+  if not exists (
+    select 1 from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'util' and p.proname = 'assistant_scope_matches'
+       and p.prosecdef and p.proconfig::text like '%search_path=%'
+       and not has_function_privilege('anon', p.oid, 'EXECUTE')
+  ) then
+    falhas := falhas || 'util.assistant_scope_matches ausente, não definer, sem search_path, ou executável por anon ';
+  end if;
+  -- E o rascunho mantém a própria data (a A3 compara com o ponteiro).
+  if not exists (
+    select 1 from pg_trigger
+     where tgrelid = 'app.assistant_draft'::regclass and tgname = 'trg_updated_at'
+       and not tgisinternal and tgenabled = 'O' and tgfoid = 'util.touch_updated_at'::regproc
+  ) then
+    falhas := falhas || 'assistant_draft sem trg_updated_at ligado ';
+  end if;
+  -- A RPC: definer travado, authenticated executa, anon não, e o corpo é o esperado.
+  select p.oid, p.prosecdef, p.proconfig, pg_get_functiondef(p.oid) as src into r
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'fn_publish_assistant_prompt';
+  if r.oid is null then
+    falhas := falhas || 'public.fn_publish_assistant_prompt não existe ';
+  else
+    if not r.prosecdef then falhas := falhas || 'fn_publish_assistant_prompt não é definer '; end if;
+    if r.proconfig is null or not (r.proconfig::text like '%search_path=%') then
+      falhas := falhas || 'fn_publish_assistant_prompt sem search_path ';
+    end if;
+    if not has_function_privilege('authenticated', r.oid, 'EXECUTE') then
+      falhas := falhas || 'authenticated não executa fn_publish_assistant_prompt (o Publicar daria 403 mudo) ';
+    end if;
+    if has_function_privilege('anon', r.oid, 'EXECUTE') then
+      falhas := falhas || 'anon executa fn_publish_assistant_prompt ';
+    end if;
+    body := substr(r.src, position('begin' in lower(r.src)));
+    if body not like '%util.is_admin(p_tenant_id)%' then
+      falhas := falhas || 'fn_publish_assistant_prompt não checa util.is_admin ela mesma (definer não herda RLS) ';
+    end if;
+    if position('for update' in lower(body)) = 0
+       or position('for update' in lower(body)) > position('is_admin' in body) then
+      falhas := falhas || 'fn_publish_assistant_prompt decide antes de travar o rascunho ';
+    end if;
+    -- As CINCO posições, pinadas aqui e não só no bloco de prova da migration (que
+    -- roda uma vez): `not_admin` antes de tudo — senão o owner de outro tenant
+    -- aprende se este tem rascunho, e o supervisor aprende que está em branco.
+    if not (position('not_admin' in body) > 0
+        and position('not_admin' in body) < position('draft_not_found' in body)
+        and position('draft_not_found' in body) < position('draft_empty' in body)
+        and position('draft_empty' in body) < position('platform_layer_missing' in body)
+        and position('platform_layer_missing' in body) < position('draft_unchanged' in body)) then
+      falhas := falhas || 'fn_publish_assistant_prompt recusa fora da ordem not_admin < draft_not_found < draft_empty < platform_layer_missing < draft_unchanged ';
+    end if;
+    -- max + 1, não count + 1: uma versão apagada pelo dono faria a contagem colidir.
+    if body not like '%max(v.version_number)%' then
+      falhas := falhas || 'fn_publish_assistant_prompt não numera por max(v.version_number) + 1 ';
+    end if;
+  end if;
+  if falhas <> '' then raise exception 'FALHA: camadas do assistente -> %', falhas; end if;
+end $$;
+
 \echo ''
 \echo '================================================'
 \echo ' TODAS AS VERIFICAÇÕES DE ISOLAMENTO PASSARAM'

@@ -310,6 +310,106 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.assistant_draft`
+
+> O rascunho da camada tenant — o único texto mutável, uma linha por tenant. O editor sempre abre este; sem rascunho, ele nasce da versão apontada. Só o admin do tenant (util.is_admin: owner, hr, personnel) lê e escreve. Nunca é apagado por caminho de aplicação; segue o tenant no cascade.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `tenant_id` 🔑 | uuid | não |  | `app.tenant` |  |
+| `content` | text | não |  |  |  |
+| `frozen_from_version_id` | uuid | sim |  | `app.assistant_prompt_version` | A versão de que o rascunho partiu (a última publicada a partir dele). Quando difere da versão apontada pelo ponteiro, a tela mostra as duas e diz qual o botão substitui — o rascunho pode ser mais novo do que o que está no ar. |
+| `updated_at` | timestamp with time zone | não | `now()` |  |  |
+| `updated_by` | uuid | sim |  | `auth.users` |  |
+
+**Restrições**
+
+- `CHECK ((length(content) <= 12000))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `assistant_draft_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
+
+
+## `app.assistant_prompt_pointer`
+
+> Qual versão está no ar, uma linha por escopo (tenant_id nulo = plataforma). O runtime lê daqui; nunca vê rascunho. Publicar move o ponteiro; rollback também. version_id sem cascade: versão apontada não some. Escrita só pela RPC fn_publish_assistant_prompt (e service_role); leitura como a versão.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `tenant_id` | uuid | sim |  | `app.tenant` |  |
+| `layer` | text | não |  |  |  |
+| `version_id` | uuid | não |  | `app.assistant_prompt_version` | A versão no ar. FK sem cascade: apagar a versão apontada é recusado. |
+| `updated_at` | timestamp with time zone | não | `now()` |  |  |
+| `updated_by` | uuid | sim |  | `auth.users` |  |
+
+**Restrições**
+
+- `CHECK (((layer = 'platform'::text) = (tenant_id IS NULL)))`
+- `CHECK ((layer = ANY (ARRAY['platform'::text, 'tenant'::text])))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `assistant_pointer_read` | SELECT | `((tenant_id IS NULL) OR util.has_tenant(tenant_id))` | `-` |
+
+<details><summary>Índices</summary>
+
+- `UNIQUE assistant_pointer_platform_uk` — `app.assistant_prompt_pointer USING btree (layer) WHERE (tenant_id IS NULL)`
+- `UNIQUE assistant_pointer_tenant_uk` — `app.assistant_prompt_pointer USING btree (tenant_id, layer) WHERE (tenant_id IS NOT NULL)`
+
+</details>
+
+
+## `app.assistant_prompt_version`
+
+> Histórico do prompt do assistente, append-only e imutável (trigger before update). Duas camadas: platform (tenant_id nulo; doutrina, semeada por migration, ninguém edita pelo painel) e tenant (vocabulário local, publicado pelo admin do tenant via fn_publish_assistant_prompt). O prompt efetivo é platform seguido de tenant. Leitura: plataforma para todo autenticado; tenant só pelo próprio tenant. Ninguém apaga versão — nem por grant.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | sim |  | `app.tenant` |  |
+| `layer` | text | não |  |  | platform ou tenant. platform exige tenant_id nulo e é a única que escolhe provider/model/max_steps. |
+| `version_number` | integer | não |  |  | Sequencial por escopo (tenant ou plataforma), 1 na primeira publicação. |
+| `content` | text | não |  |  | Texto da camada. Na camada platform, três tokens marcam as partes que o runtime preenche a cada turno: {{hoje}} = a data de hoje no formato DD/MM/AAAA (AAAA-MM-DD), inteira, com os dois formatos; {{catalogo}} = o texto do catálogo de métricas alcançáveis, tal como o backend o descreve; {{unidades}} = o bloco inteiro de linhas "- Nome (CODIGO): uuid", uma por unidade — ou, sem unidade cadastrada, a linha fixa que manda não usar `unit`. O bloco (inclusive a linha de fallback) é do renderizador, não do texto. Limite de 12000 caracteres. |
+| `provider` | text | sim |  |  | Só na camada platform: openai, anthropic ou google. Nulo na camada tenant. |
+| `model` | text | sim |  |  | Só na camada platform: o id do modelo na allowlist do backend. Nulo na tenant. |
+| `max_steps` | smallint | sim |  |  | Só na camada platform, 1 a 10. Nulo quando o runtime não fixa um teto — é o caso da v1, transcrita de um código que não define teto. |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+| `created_by` | uuid | sim |  | `auth.users` | Quem publicou. Nulo quando a versão veio por migration (camada platform). |
+
+**Restrições**
+
+- `CHECK (((layer = 'platform'::text) = (tenant_id IS NULL)))`
+- `CHECK (((layer = 'platform'::text) OR ((provider IS NULL) AND (model IS NULL) AND (max_steps IS NULL))))`
+- `CHECK (((max_steps >= 1) AND (max_steps <= 10)))`
+- `CHECK ((layer = ANY (ARRAY['platform'::text, 'tenant'::text])))`
+- `CHECK ((length(content) <= 12000))`
+- `CHECK ((provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'google'::text])))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `assistant_version_read` | SELECT | `((tenant_id IS NULL) OR util.has_tenant(tenant_id))` | `-` |
+
+<details><summary>Índices</summary>
+
+- `UNIQUE assistant_prompt_version_platform_uk` — `app.assistant_prompt_version USING btree (layer, version_number) WHERE (tenant_id IS NULL)`
+- `UNIQUE assistant_prompt_version_tenant_uk` — `app.assistant_prompt_version USING btree (tenant_id, layer, version_number) WHERE (tenant_id IS NOT NULL)`
+
+</details>
+
+
 ## `app.audit_log`
 
 > Cresce rápido. Quando passar de ~50M linhas, particionar por mês (created_at) e mover partição antiga para armazenamento frio.
@@ -3671,6 +3771,16 @@ public.fn_pending_justification(p_de date, p_ate date, p_unit_id uuid DEFAULT NU
 Desvio ativo, de tipo que exige justificativa, sem nenhuma justificativa aceita. Devolve a existência da pendência, nunca o texto de justificativa nenhuma.
 
 
+### `fn_publish_assistant_prompt`
+
+```sql
+public.fn_publish_assistant_prompt(p_tenant_id uuid)
+  returns TABLE(version_id uuid, version_number integer, previous_version_id uuid)
+```
+
+Publica o rascunho do tenant: congela em versão nova (imutável) e move o ponteiro, na mesma transação. Cinco recusas, nesta ordem, cada uma P0001 com a mensagem = código: not_admin, draft_not_found, draft_empty, platform_layer_missing, draft_unchanged (idêntico à versão APONTADA, não à última). not_admin vem antes de tudo: o owner de outro tenant não aprende se este tem rascunho. A primeira instrução trava o rascunho (for update) e serializa publicações concorrentes do mesmo tenant. Definer: checa util.is_admin ela mesma. Devolve (version_id, version_number, previous_version_id).
+
+
 ### `fn_ranking_by_employee`
 
 ```sql
@@ -3725,6 +3835,8 @@ Não são API. `security definer` com `search_path` travado, `EXECUTE` revogado 
 
 | Função | Assinatura | Retorno |
 |---|---|---|
+| `util.assistant_scope_matches` | `` | `trigger` |
+| `util.assistant_version_immutable` | `` | `trigger` |
 | `util.block_table_in_public` | `` | `event_trigger` |
 | `util.can_see_company` | `p_company_id uuid` | `boolean` |
 | `util.can_see_domain` | `p_tenant_id uuid, p_domain app.sensitive_domain` | `boolean` |

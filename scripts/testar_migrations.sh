@@ -50,6 +50,8 @@ echo "--- exclusividade dos canais (as oito linhas da SPEC-CANAIS §2.2)"
 psql -q -v ON_ERROR_STOP=1 -f scripts/86_teste_canais_exclusividade.sql 2>&1 | grep -Ev "^(INSERT|UPDATE|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- tela de Conexões (a lista é a decomposição da contagem)"
 python3 scripts/97_teste_canais.py || exit 1
+echo "--- camadas do assistente (as sete linhas da SPEC-AGENTE §3a, a RPC e a RLS como os papéis)"
+psql -q -v ON_ERROR_STOP=1 -f scripts/97_teste_assistente.sql 2>&1 | grep -Ev "^(INSERT|UPDATE|DELETE|DO|SET|BEGIN|ROLLBACK|CREATE|SAVEPOINT|RESET)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- teste funcional multi-tenant"
 psql -q -v ON_ERROR_STOP=1 -f scripts/98_teste_isolamento_tenant.sql 2>&1 | grep -Ev "^(INSERT|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- verificação de isolamento"
