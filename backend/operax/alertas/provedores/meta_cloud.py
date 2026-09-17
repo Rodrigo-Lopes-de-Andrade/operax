@@ -1,18 +1,24 @@
-"""Meta Cloud API — the official provider. Verification and template listing; `enviar` is C5.
+"""Meta Cloud API — the official provider. Verification, template listing and `enviar`.
 
 ⏳ ENDPOINTS AS PREMISE, NOT AS MEASUREMENT
 No request has been made against the Graph API from this repository, by rule:
 the first real credential is the owner's stop (SPRINTS-CANAIS, C2). What is
 written here is the documented shape of *"read the phone number object"*,
-*"read the WABA object"* and *"list the WABA's message templates"*, and a wrong
-shape fails to the safe side — the credential is refused and nothing is stored;
-the sync is refused and no status changes.
+*"read the WABA object"*, *"list the WABA's message templates"* and *"send a
+template message"*, and a wrong shape fails to the safe side — the credential
+is refused and nothing is stored; the sync is refused and no status changes;
+the delivery is `failed` with a code and the queue row is retried or discarded
+by the sender.
 
     GET https://graph.facebook.com/v21.0/{phone_number_id}
         ?fields=verified_name,display_phone_number
     GET https://graph.facebook.com/v21.0/{waba_id}?fields=id
     GET https://graph.facebook.com/v21.0/{waba_id}/message_templates
         ?fields=name,status,language,category,rejected_reason&limit=100
+    POST https://graph.facebook.com/v21.0/{phone_number_id}/messages
+        {messaging_product, to, type: "template", template: {name, language,
+         components: [{type: "body", parameters: [{type: "text", text}…]}]}}
+        → {"messages": [{"id": "wamid.…"}]}
     Authorization: Bearer {token}
 
 The Graph API answers an invalid token with **400** (`OAuthException`, code
@@ -35,7 +41,7 @@ from typing import Any
 
 import httpx
 
-from operax.alertas.provedores.base import FieldSpec, InvalidCredentialError
+from operax.alertas.provedores.base import Delivery, FieldSpec, InvalidCredentialError, Message
 
 NAME = "meta_cloud"
 
@@ -218,3 +224,79 @@ async def list_templates(
             raise InvalidCredentialError("malformed") from None
 
     return templates
+
+
+# ---------------------------------------------------------------------------
+# Delivery — the template and its ordered parameters, never a sentence (rule 11)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True, slots=True)
+class MetaCloudProvider:
+    """The official channel: `POST /{phone_number_id}/messages` with a template.
+
+    This is the provider rule 11 exists for. The Graph API takes the name of a
+    template approved in the WABA plus its parameters **in order**; it does not
+    take a sentence, and this class has no way to build one — `render` is not
+    imported here, and `message.body` is never read. A `Message` without a
+    `template` is refused before any HTTP: the official provider has no other
+    source of a phrase, on purpose.
+
+    `provider_template` (the `meta_template_name` the WABA knows) wins over
+    `template` (our `code`) when present; `language` goes as it came, because it
+    is the language the template was approved under. `components` is omitted
+    when the template declares no variables — sending an empty `parameters`
+    list is a Graph API error, not a no-op.
+
+    The Graph API does not return the price of a message in the send response
+    (it arrives later, by webhook, per conversation), so `cost_cents` is `None`.
+    The token lives in the `Authorization` header and nowhere else: no exception
+    leaves this method, and a refusal is a code — never the response body,
+    which the Graph API fills with the request it refused.
+    """
+
+    phone_number_id: str
+    token: str
+    http: httpx.AsyncClient
+    name: str = NAME
+
+    async def enviar(self, message: Message) -> Delivery:
+        if message.template is None:
+            return Delivery(status="failed", error="no_template")
+        template: dict[str, Any] = {
+            "name": message.provider_template or message.template,
+            "language": {"code": message.language},
+        }
+        if message.variables:
+            template["components"] = [
+                {
+                    "type": "body",
+                    "parameters": [{"type": "text", "text": v} for v in message.ordered()],
+                }
+            ]
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": message.destination.removeprefix("+"),
+            "type": "template",
+            "template": template,
+        }
+        try:
+            response = await self.http.post(
+                f"{_GRAPH}/{self.phone_number_id}/messages",
+                json=payload,
+                headers={"Authorization": f"Bearer {self.token}"},
+            )
+        except httpx.HTTPError:
+            return Delivery(status="failed", error="unreachable")
+
+        if response.status_code >= 500 or response.status_code == 429:
+            return Delivery(status="failed", error="unreachable")
+        if response.status_code in (401, 403):
+            return Delivery(status="failed", error="unauthorized")
+        if response.status_code != 200:
+            return Delivery(status="failed", error=f"http_{response.status_code}")
+        try:
+            message_id = response.json()["messages"][0]["id"]
+        except (ValueError, KeyError, TypeError, IndexError):
+            return Delivery(status="failed", error="malformed")
+        if not isinstance(message_id, str) or not message_id:
+            return Delivery(status="failed", error="malformed")
+        return Delivery(status="sent", provider_message_id=message_id)
