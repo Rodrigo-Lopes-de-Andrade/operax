@@ -431,6 +431,129 @@ defasada (pré-existente).
   supervisor" se responde listando as métricas que ele alcança — nunca
   executando como ele.
 
+**Onda backend despachada em 17/09/2026, sobre a A2 commitada (`88b7c4d`).**
+Duas coisas mudaram no plano, e o porquê: a migration §3c
+(`assistant_run_link`) **sobe da A4 para cá**, porque a aba Teste grava
+`is_dry_run` e não há como testar sem a coluna; e a **SPEC §7.1 foi decidida
+pelo dono em 17/09/2026: terceira via**, `draft_content_hash` em
+`app.ai_query` — o teste de rascunho fica rastreável sem virar versão.
+Decisões minhas no despacho: `prompt_version_id` = a versão de tenant no
+ar, senão a de plataforma (nulo continua sendo "antes do versionamento");
+o texto em código **sai** e não há fallback — sem ponteiro de plataforma o
+turno emite `error` e não grava (em produção é a ordem migrations → push,
+já registrada); escrita pelo padrão de `canais.py` (`is_admin` como o
+usuário, gravação + `audit_log` sob `service_role`), não pela policy da
+tabela; publicar chama a RPC como o usuário e mapeia os cinco `P0001`;
+rollback **não** é RPC nova — 404 antes de qualquer escrita, `update` do
+ponteiro sob `service_role`, o trigger de escopo como rede; o teste roda
+sempre como quem chamou. A onda 2 (as quatro abas) é escrita a partir do
+contrato que esta onda deixar em `models.py`.
+
+**Onda backend entregue em 17/09/2026, em revisão + guardião.** Migration
+`20260918001032_assistant_run_link` (três colunas em `app.ai_query`, duas
+checks nomeadas, índice parcial, FK sem cascade, policies pinadas em
+`{ai_query_read}`); `operax/agente/prompt.py` (`load_layers` sob
+`user_scope`, `render` puro, token desconhecido → erro de configuração);
+`agente._prompt` **saiu** — o pino da v1 virou a fixture
+`tests/fixtures/prompt_v1_rendered.txt`, gerada pelo `_prompt` antigo antes
+de apagá-lo e sem gerador no repositório de propósito; `build_model` usa
+provider/model da plataforma como default pela mesma allowlist, e modelo
+que a instalação não roda é **503**, nunca outro modelo em silêncio;
+`max_steps` medido no LangGraph (`recursion_limit = 2·max_steps + 2`, tabela
+k×limite no relatório); oito rotas em `/assistente/configuracao/*` no padrão
+de `canais.py`; `/testar` reusa o SSE de `/perguntar`. pytest 1383
+(+71), `97` 164 asserções (+23 da A3), 65 migrations RC=0. Oito mutações
+mortas — a m1 (`registrar` sem `prompt_version_id`) sobreviveu ao primeiro
+ciclo dele e ganhou o teste que a mata.
+
+⚠️ **Risco de produção que ele apontou e eu não consigo medir sem expor
+segredo:** a v1 semeada pede `openai/gpt-5.4-mini`; se o `operax-api` no
+Railway **não** tiver `OPENAI_API_KEY` (só nomes importam), o assistente
+responde 503 depois deste commit até uma v2 por migration ou a chave
+entrar. Conferir no painel antes do push. Modo de falha do push antes das
+cinco migrations do agente, agora nomeado: `load_layers` → 500 antes do
+primeiro byte, e `registrar` falhando sob o `suppress` do `finally` →
+**turno pago sem linha** em `ai_query`.
+
+**Guardião (onda backend): PASSA, sete de sete.** Suíte no `operax_test`
+(65 migrations, `97` 164, `98`, `99` 1–19, dicionário byte a byte,
+`verificar_docs` ✅), treze checkpoints de hash limpos. Diff de catálogo
+64→65 = **dez linhas, todas em `app.ai_query`**; `public` 9 relações → 9,
+15 funções → 15; `pg_policies` 105 → 105 (o "115" do dicionário é
+artefato de contagem por linha, policy com `qual` multilinha conta duas
+vezes — não é da A3); grants 568 → 568; nenhuma view expõe as três
+colunas. API medida **com a app real e o banco real** (`TestClient` +
+`operax_test`, RLS de verdade, modelo falso): 91 checagens, zero falhas —
+supervisor recebe `draft = null` e nunca o texto, quatro 403 sem vazar o
+rascunho, cinco streams capturados inteiros sem hash, sem
+`prompt_version_id`, sem texto de camada, a única uuid é o `consulta_id`;
+e o não-vácuo: no banco os dois testes com rascunho têm `is_dry_run`,
+`sha256` e versão de plataforma. Como `service_role`, ponteiro de A para
+versão de B cai no trigger da A1. Fato registrado, não achado:
+`tenant_scope` roda como o dono de `DATABASE_URL` (`postgres`, bypassrls),
+não como o role `service_role` do Supabase, que nem tem insert em
+`ai_query`. Não-vácuo do `do $$` em quatro mutações; reaplicação ×2 idêntica.
+
+**Revisão (onda backend): REPROVADA por um único MÉDIO de força de teste;
+os outros onze critérios medidos e OK.** Os quatro SQLs que decidem qual
+texto de tenant entra no prompt e na tela (`_LAYERS_SQL`, `_ON_AIR_SQL`,
+`_DRAFT_SQL`, `_VERSIONS_SQL`) não tinham teste que caísse quando
+`tenant_id = %(tenant_id)s` some — os testes conferiam só os parâmetros,
+que continuam iguais com o SQL mutado. Não é vazamento: ele mediu no
+banco real que a RLS é a rede (contexto forjado de usuário de B com
+`tenant_id` de A recebe só plataforma e rascunho nulo) e que `deps.py` não
+deixa o `tenant_id` vir do cliente; mas "cruzamento de tenant no prompt sem
+quem prove" é MÉDIO pela régua. O resto: `_require_admin` antes de todo
+`tenant_scope` (quatro rotas, 403 com a transação nunca aberta, e no banco
+real também para contexto forjado); rollback 404 antes de escrever e, como
+`postgres`, ponteiro de A → versão de B recusado pelo trigger da A1; a
+fixture da v1 é **byte a byte** o `_prompt` do HEAD `88b7c4d` (sha256
+`402fd7aa…`), inclusive sem unidades e com um terceiro conjunto de
+entradas; `build_model` com só Anthropic configurada e plataforma pedindo
+OpenAI → 503, nunca outro modelo; `max_steps` reproduzido
+(`2k + 2`); sem plataforma → `error` e **zero** linhas em `ai_query`, no
+banco real. 27 mutações, 22 mortas, 4 sobreviventes = o MÉDIO, 1 (x2)
+equivalente para estado alcançável. BAIXOs: `{{ hoje }}` com espaços fica
+literal sem erro (a aba Teste mostra); SPEC §5 contradizia a §7.1
+(**fechado por mim**); `/testar?use_draft` faz `is_admin` antes do
+limitador (custo pago continua atrás dele). Nono falso verde, dele:
+`service_role` não tem insert em `ai_query` — quem grava é o dono de
+`DATABASE_URL`; quem endurecer grants precisa saber.
+
+**Fechado por mim antes do commit:** quatro asserções de texto — o
+predicado `tenant_id = %(tenant_id)s and layer = 'tenant'` nas três
+leituras de ponteiro/versão e `where tenant_id = %(tenant_id)s` no
+rascunho — provadas na cópia: r2, r2b, r2c e r2d caem em um teste cada,
+controle 51 verdes.
+
+### ✅ A3 — onda backend fechada no código em 18/09/2026
+
+O que entrou: `20260918001032_assistant_run_link` (`app.ai_query` com
+`prompt_version_id` sem cascade, `is_dry_run`, `draft_content_hash` com
+duas checks, índice parcial, policies pinadas); `operax/agente/prompt.py`;
+`agente._prompt` removido e a v1 pinada por fixture; `build_model` com o
+default vindo da plataforma pela mesma allowlist; `max_steps` como
+`recursion_limit = 2·max_steps + 2`; oito rotas em
+`/assistente/configuracao/*`; `/testar` reusando o SSE de `/perguntar`;
+`97` com 164 asserções; pytest 1383. Gates de fechamento: suíte 65
+migrations RC=0, ruff limpo.
+
+O que muda em produção com este commit, e a ordem: o runtime passa a ler o
+prompt do banco. Sem as **cinco** migrations do agente (2 A1, 2 A2, esta)
+aplicadas antes do push, o assistente inteiro cai — 500 antes do primeiro
+byte, e turno pago sem linha em `ai_query`. Com elas, o texto que roda é a
+v1 semeada, igual ao que rodava. E a chave: a v1 pede `openai/gpt-5.4-mini`;
+sem `OPENAI_API_KEY` no `operax-api`, 503. Fila de migrations na mão do
+dono: **doze**.
+
+Dívidas nomeadas: `{{ hoje }}` com espaços fica literal (a aba Teste
+mostra); `/testar?use_draft` checa admin antes do limitador; turno que
+morre no teto de passos é gravado com `error` genérico, indistinguível de
+"provider caiu" (A4 pode querer distinguir); "qual versão de tenant estava
+no ar quando o rascunho foi testado" não é recuperável da linha — só o
+hash; `publicar` grava a trilha numa segunda transação (janela estreita
+de "publicado sem audit"); `reachable()`/`domains()` da A2 seguem.
+
 **Gate:** rollback para a v1 com rascunho na v3 mostra as duas versões na tela;
 um teste de tela cobra a frase de dados reais e a **ausência** de seletor de
 papel — a ausência é testável e some sem aviso se não for.

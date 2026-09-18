@@ -25,10 +25,18 @@ for itself.
 WHY THE `metrica` EVENT COMES AFTER THE QUERY, NOT BEFORE
 The tool call the model emits is a proposal. Announcing it before `choose` had
 approved it would show the person a metric that the next event then refuses.
+
+WHERE THE PROMPT TEXT COMES FROM
+Not from here. Since A3 the system prompt is the platform version on the air
+plus the tenant version on the air, read through the pointers by `prompt.py`
+and handed to `Turn` as `PromptLayers`; this module only renders the three
+tokens. There is no literal left to fall back to, on purpose: a turn that ran
+with text nobody published would be a turn whose `prompt_version_id` lies.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import os
@@ -43,8 +51,9 @@ from uuid import UUID
 from langchain.agents import create_agent
 from langchain_core.language_models import BaseChatModel
 
-from operax.agente import catalogo, e2e, executor
+from operax.agente import catalogo, e2e, executor, prompt
 from operax.agente.catalogo import MAX_ROWS, Refusal
+from operax.agente.prompt import PromptLayers
 from operax.core.config import Settings, get_settings
 from operax.core.tenant import TenantContext, user_scope
 
@@ -92,12 +101,26 @@ def available_models() -> tuple[str, ...]:
     return tuple(m for p in _configured(settings) for m in ALLOWED_MODELS[p])
 
 
-def build_model(requested: str | None = None) -> tuple[BaseChatModel, str]:
+def _provider_of(model_id: str, configurados: tuple[Provider, ...]) -> Provider | None:
+    """O provider de `model_id`, se ele está na allowlist e tem chave aqui."""
+    return next((p for p in configurados if model_id in ALLOWED_MODELS[p]), None)
+
+
+def build_model(
+    requested: str | None = None, *, layers: PromptLayers | None = None
+) -> tuple[BaseChatModel, str]:
     """O modelo pedido e o id dele, se ele for permitido e o provider tiver chave.
 
     Devolve o par porque o id é o que vai para `app.ai_query`: quando o cliente
     não pede modelo, quem escolhe é esta função, e o registro precisa dizer qual
     modelo rodou — não "o padrão", que muda quando a allowlist muda.
+
+    Sem pedido do cliente, o padrão é o que a versão de plataforma no ar diz
+    (`layers.provider`/`layers.model`) — é ela quem escolhe o modelo, porque é
+    quem paga (SPEC-AGENTE §6.2). O que o cliente pede continua passando pela
+    allowlist; o que a plataforma diz também, e uma versão que nomeia um modelo
+    que esta instalação não roda é erro de configuração, não um motivo para
+    rodar outro em silêncio.
     """
     if os.environ.get(e2e.FLAG) == "1":
         # O desvio fica aqui, na escolha do provider, e não dentro do turno: a
@@ -110,20 +133,25 @@ def build_model(requested: str | None = None) -> tuple[BaseChatModel, str]:
     if not configurados:
         raise NoProviderConfiguredError("nenhuma chave de provider configurada")
 
-    if requested is None:
-        provider = configurados[0]
-        model_id = ALLOWED_MODELS[provider][0]
-    else:
-        escolhido = next(
-            (p for p in configurados if requested in ALLOWED_MODELS[p]),
-            None,
-        )
+    if requested is not None:
+        escolhido = _provider_of(requested, configurados)
         if escolhido is None:
             permitidos = ", ".join(available_models())
             raise ModelNotAllowedError(
                 f"modelo {requested!r} não disponível. Disponíveis: {permitidos}"
             )
         provider, model_id = escolhido, requested
+    elif layers is not None and layers.model is not None:
+        escolhido = _provider_of(layers.model, configurados)
+        if escolhido is None or escolhido != layers.provider:
+            raise NoProviderConfiguredError(
+                f"a versão de plataforma pede {layers.provider}/{layers.model}, "
+                f"que esta instalação não roda"
+            )
+        provider, model_id = escolhido, layers.model
+    else:
+        provider = configurados[0]
+        model_id = ALLOWED_MODELS[provider][0]
 
     # Import tardio: os três providers são dependência declarada, e o do Google
     # arrasta grpc. Carregar os três para usar um custa segundos de startup no
@@ -166,6 +194,14 @@ class Record:
 
     question: str
     model: str
+    #: A versão no ar quando o turno rodou (tenant, senão plataforma). `None`
+    #: não acontece num turno novo: é o valor das linhas anteriores ao
+    #: versionamento, e o tipo o admite por isso.
+    prompt_version_id: UUID | None = None
+    #: A aba Teste. Fora de toda média.
+    is_dry_run: bool = False
+    #: sha256 do rascunho testado — só num dry run, e só quando havia rascunho.
+    draft_content_hash: str | None = None
     metric_code: str | None = None
     parameters: dict[str, Any] | None = None
     rows_returned: int | None = None
@@ -199,6 +235,25 @@ def _json_default(value: Any) -> str:
     raise TypeError(f"{type(value).__name__} não é serializável")
 
 
+def _step_ceiling(max_steps: int | None) -> dict[str, Any] | None:
+    """O `config` da invocação que impõe `max_steps` idas à ferramenta.
+
+    O LangGraph conta super-passos, não chamadas ao modelo: cada ida ao modelo
+    é um passo e cada execução de ferramenta é outro. Medido em 17/09/2026 com
+    `langgraph 1.2.11` e o modelo falso dos testes: um turno com `k` idas à
+    ferramenta precisa de `recursion_limit >= 2k + 2` (k=0 passa com 2 e cai
+    com 1; k=1 passa com 4 e cai com 3; k=2 passa com 6 e cai com 5). Então o
+    teto de `max_steps` idas é `2 * max_steps + 2`; a ida seguinte morre em
+    `GraphRecursionError`, que o turno devolve como `event: error`.
+
+    `None` = sem teto: o padrão do LangGraph (25), que é o comportamento de
+    antes do versionamento.
+    """
+    if max_steps is None:
+        return None
+    return {"recursion_limit": 2 * max_steps + 2}
+
+
 _UNITS_SQL = """
 select unit_id, code, name
 from public.vw_unit
@@ -220,59 +275,6 @@ async def _units(tenant: TenantContext) -> list[dict[str, Any]]:
         return [dict(row) for row in await scope.fetchall()]
 
 
-def _prompt(catalogo_texto: str, unidades: list[dict[str, Any]], hoje: date) -> str:
-    if unidades:
-        linhas = "\n".join(f"- {u['name']} ({u['code']}): {u['unit_id']}" for u in unidades)
-    else:
-        linhas = "- nenhuma unidade cadastrada; não use o parâmetro `unit`."
-    return f"""Você é o assistente de gestão de ponto deste painel. Responda sempre em \
-português do Brasil.
-
-Hoje é {hoje.strftime("%d/%m/%Y")} ({hoje.isoformat()}).
-
-Você não sabe nenhum número. Todo número que você disser precisa ter vindo da \
-ferramenta `consultar_metrica` nesta conversa. Se a pergunta pede dado e você não \
-chamou a ferramenta, você não tem resposta — diga isso em vez de estimar.
-
-Métricas que você pode consultar:
-{catalogo_texto}
-
-Sobre os parâmetros:
-- `start_date` e `end_date` são datas AAAA-MM-DD e são obrigatórias em toda métrica \
-que as aceita. Traduza "este mês", "semana passada" ou "ontem" usando a data de hoje. \
-Se a pergunta não disser período nenhum, use o mês corrente e diga qual período usou.
-- `unit`, `company` e `employee` são identificadores no formato UUID. **Omita o \
-parâmetro** quando não houver filtro — omitir é o caso normal, e o seu acesso já \
-limita o que você enxerga. Nunca preencha com um nome, com `null`, nem com \
-palavras como "all", "todos", "geral" ou o nome do mês.
-- Só use `unit` se o identificador estiver na lista de unidades abaixo. Se a \
-pergunta cita uma pessoa pelo nome, não invente identificador: omita o filtro e \
-diga que você responde por unidade e por período.
-- Não passe parâmetro que a métrica não declara aceitar.
-- **Nunca acrescente um filtro que a pergunta não pediu.** Se a pergunta pede um \
-recorte que a métrica não aceita — por tipo de desvio, por exemplo — trocá-lo por \
-outro filtro dá um número certo para uma pergunta que ninguém fez. Nesse caso, \
-`recusar`.
-- Antes de recusar, releia a lista inteira de métricas: recuse só quando nenhuma \
-delas se aproximar da pergunta.
-- Se nenhuma métrica da lista responde à pergunta, chame `recusar` com o motivo \
-em uma frase — não responda em texto. Recusar é resposta válida; estimar não é. \
-`recusar` é só para isso: falta de período não é motivo de recusa.
-
-Unidades:
-{linhas}
-
-Ao responder:
-- diga qual período e quais filtros foram usados — os que a ferramenta \
-devolveu em `filtros_aplicados`, nunca os que você pediu. Em português de \
-negócio ("de 01/08 a 31/08, sem filtro de unidade"), nunca com o nome do \
-parâmetro;
-- o vocabulário é "desvio" e "indício". Nunca escreva "hora extra" — nem \
-repetindo a expressão de quem perguntou: o registro oficial é o sistema de ponto, \
-e o que este painel aponta é indício;
-- seja curto — uma a três frases."""
-
-
 class Turn:
     """Um turno do assistente, e o registro dele.
 
@@ -288,13 +290,41 @@ class Turn:
         tenant: TenantContext,
         question: str,
         model: BaseChatModel,
+        layers: PromptLayers,
         *,
         model_name: str = "desconhecido",
+        dry_run: bool = False,
+        tenant_override: str | None = None,
     ) -> None:
+        """`layers` são as versões no ar, lidas pelo ponteiro — quem chama já
+        as leu, porque o modelo padrão sai delas antes do primeiro byte.
+
+        `tenant_override` é o rascunho da aba Teste: entra no lugar da camada
+        de tenant sem virar versão, e só num dry run — um turno real sobre
+        texto não publicado seria um registro que mente sobre o que rodou.
+        """
+        if tenant_override is not None and not dry_run:
+            raise ValueError("a draft can only run as a dry run")
         self._tenant = tenant
         self._question = question
         self._model = model
-        self.record = Record(question=question, model=model_name)
+        self._layers = layers
+        self._tenant_override = tenant_override
+        self.record = Record(
+            question=question,
+            model=model_name,
+            # Com rascunho, a única camada que de fato é versão é a plataforma;
+            # o texto testado fica identificado pelo hash, não por um id.
+            prompt_version_id=(
+                layers.platform_version_id if tenant_override is not None else layers.version_id
+            ),
+            is_dry_run=dry_run,
+            draft_content_hash=(
+                hashlib.sha256(tenant_override.encode("utf-8")).hexdigest()
+                if tenant_override is not None
+                else None
+            ),
+        )
 
     async def stream(self) -> AsyncIterator[Event]:
         """O turno inteiro, como eventos tipados. A latência fecha em `finally`."""
@@ -318,6 +348,24 @@ class Turn:
         except Exception:
             logger.exception("assistente: falha ao montar o catálogo do turno")
             yield Event("error", {"message": "Não consegui carregar as métricas agora."})
+            return
+
+        try:
+            system_prompt = prompt.render(
+                self._layers.text(self._tenant_override),
+                catalogo=catalogo.describe(oferecidas),
+                unidades=unidades,
+                hoje=date.today(),
+            )
+        except ValueError:
+            # Erro de configuração, não de turno: o texto publicado carrega um
+            # marcador que o renderizador não conhece. Rodar assim mesmo seria
+            # rodar um prompt que ninguém configurou.
+            logger.exception("assistente: o prompt publicado tem marcador desconhecido")
+            yield Event(
+                "error",
+                {"message": "O prompt publicado tem um marcador que o assistente não conhece."},
+            )
             return
 
         nomes = {str(unidade["unit_id"]): unidade["name"] for unidade in unidades}
@@ -407,13 +455,14 @@ class Turn:
             # "métricas que faltam", que é o principal uso desse registro, nasce
             # errada. `recusar` dá ao modelo um jeito tipado de dizer não.
             tools=[consultar_metrica, recusar],
-            system_prompt=_prompt(catalogo.describe(oferecidas), unidades, date.today()),
+            system_prompt=system_prompt,
         )
 
         try:
             async for mode, payload in agent.astream(
                 {"messages": [{"role": "user", "content": self._question}]},
                 stream_mode=["messages", "updates"],
+                config=_step_ceiling(self._layers.max_steps),
             ):
                 if mode == "messages":
                     chunk, meta = payload

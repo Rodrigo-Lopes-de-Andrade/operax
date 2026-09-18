@@ -10,7 +10,9 @@ três finais possíveis.
 
 from __future__ import annotations
 
+import hashlib
 import json
+from datetime import date
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -20,6 +22,7 @@ from langchain_core.messages import AIMessage
 
 from operax.agente import agente, catalogo, executor
 from operax.agente.agente import Event, Record, Turn
+from operax.agente.prompt import PromptLayers
 from operax.core.tenant import TenantContext, UserRole
 from server.routers import assistente
 from tests.fixtures.fake_llm import FakeChatModel
@@ -30,6 +33,25 @@ TENANT = TenantContext(
     role=UserRole.UNIT_SUPERVISOR,
 )
 UNIDADE = UUID("33333333-3333-4333-8333-333333333333")
+PLATFORM_V1 = UUID("44444444-4444-4444-8444-444444444441")
+TENANT_V1 = UUID("44444444-4444-4444-8444-444444444442")
+
+#: As camadas no ar, como `prompt.load_layers` as devolveria. A plataforma pede
+#: o modelo que a `conftest` configura (só `ANTHROPIC_API_KEY`); o texto é curto
+#: e carrega os três tokens — o retrato byte a byte da v1 é `test_agente_prompt_seed`.
+LAYERS = PromptLayers(
+    platform_version_id=PLATFORM_V1,
+    platform_content=(
+        "Você é o assistente. Hoje é {{hoje}}.\n\n"
+        "Métricas que você pode consultar:\n{{catalogo}}\n\n"
+        "Unidades:\n{{unidades}}"
+    ),
+    provider="anthropic",
+    model="claude-haiku-4-5-20251001",
+    max_steps=None,
+    tenant_version_id=None,
+    tenant_content=None,
+)
 
 CATALOGO_ROWS: list[dict[str, Any]] = [
     {
@@ -120,9 +142,13 @@ def banco(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
 
 
 async def rodar(
-    modelo: FakeChatModel, pergunta: str = "quantos desvios este mês?"
+    modelo: FakeChatModel,
+    pergunta: str = "quantos desvios este mês?",
+    *,
+    layers: PromptLayers = LAYERS,
+    **turno_kwargs: Any,
 ) -> tuple[Turn, list[Event]]:
-    turno = Turn(TENANT, pergunta, modelo, model_name="fake-1")
+    turno = Turn(TENANT, pergunta, modelo, layers, model_name="fake-1", **turno_kwargs)
     eventos = [evento async for evento in turno.stream()]
     return turno, eventos
 
@@ -333,6 +359,152 @@ async def test_falha_ao_ler_o_catalogo_tambem_vira_evento(monkeypatch: pytest.Mo
 
 
 # ---------------------------------------------------------------------------
+# O prompt vem do ponteiro, e o registro diz qual versão rodou (A3)
+# ---------------------------------------------------------------------------
+COM_TENANT = PromptLayers(
+    platform_version_id=PLATFORM_V1,
+    platform_content=LAYERS.platform_content,
+    provider="anthropic",
+    model="claude-haiku-4-5-20251001",
+    max_steps=None,
+    tenant_version_id=TENANT_V1,
+    tenant_content="Vocabulário local: chame a unidade de 'praça'. Hoje: {{hoje}}.",
+)
+
+
+async def test_o_registro_leva_a_versao_de_tenant_no_ar(banco: dict[str, Any]):
+    """Decisão 2: a versão de tenant apontada é a que o turno registra."""
+    modelo = FakeChatModel(responses=[resposta("ok")], calls=[])
+
+    turno, _ = await rodar(modelo, layers=COM_TENANT)
+
+    assert turno.record.prompt_version_id == TENANT_V1
+    assert turno.record.is_dry_run is False
+    assert turno.record.draft_content_hash is None
+
+
+async def test_sem_versao_de_tenant_o_registro_leva_a_plataforma(banco: dict[str, Any]):
+    """Nunca nulo numa linha nova: nulo é "antes do versionamento"."""
+    modelo = FakeChatModel(responses=[resposta("ok")], calls=[])
+
+    turno, _ = await rodar(modelo, layers=LAYERS)
+
+    assert turno.record.prompt_version_id == PLATFORM_V1
+
+
+async def test_a_camada_do_tenant_entra_depois_da_plataforma_e_tambem_renderiza(
+    banco: dict[str, Any],
+):
+    modelo = FakeChatModel(responses=[resposta("ok")], calls=[])
+
+    await rodar(modelo, layers=COM_TENANT)
+
+    prompt = modelo.calls[0][0].text
+    assert prompt.index("Você é o assistente") < prompt.index("Vocabulário local")
+    # O token da camada do tenant foi renderizado, não deixado literal.
+    assert "{{" not in prompt
+    assert prompt.count(date.today().isoformat()) == 2
+
+
+async def test_o_teste_com_rascunho_e_dry_run_com_hash_e_aponta_para_a_plataforma(
+    banco: dict[str, Any],
+):
+    """O rascunho substitui a camada de tenant sem virar versão (SPEC §7.1, decidida):
+    a única camada que de fato é versão é a plataforma, e o texto fica pelo hash."""
+    rascunho = "Rascunho: chame a unidade de 'pátio'."
+    modelo = FakeChatModel(responses=[resposta("ok")], calls=[])
+
+    turno, _ = await rodar(modelo, layers=COM_TENANT, dry_run=True, tenant_override=rascunho)
+
+    assert turno.record.is_dry_run is True
+    assert turno.record.prompt_version_id == PLATFORM_V1
+    assert turno.record.draft_content_hash == hashlib.sha256(rascunho.encode("utf-8")).hexdigest()
+    prompt = modelo.calls[0][0].text
+    assert "pátio" in prompt
+    assert "praça" not in prompt
+
+
+async def test_o_teste_sem_rascunho_e_dry_run_com_as_camadas_normais(banco: dict[str, Any]):
+    modelo = FakeChatModel(responses=[resposta("ok")], calls=[])
+
+    turno, _ = await rodar(modelo, layers=COM_TENANT, dry_run=True)
+
+    assert turno.record.is_dry_run is True
+    assert turno.record.prompt_version_id == TENANT_V1
+    assert turno.record.draft_content_hash is None
+    assert "praça" in modelo.calls[0][0].text
+
+
+def test_rascunho_fora_de_dry_run_e_recusado_na_construcao():
+    """Um turno real sobre texto não publicado seria um registro que mente."""
+    with pytest.raises(ValueError):
+        Turn(TENANT, "oi", FakeChatModel(responses=[], calls=[]), LAYERS, tenant_override="x")
+
+
+async def test_marcador_desconhecido_no_texto_publicado_vira_evento_de_erro(
+    banco: dict[str, Any],
+):
+    """Erro de configuração, não de turno — e o modelo não é chamado."""
+    quebrada = PromptLayers(
+        platform_version_id=PLATFORM_V1,
+        platform_content="{{hoje}} {{catalogo}} {{unidades}} {{papel}}",
+        provider="anthropic",
+        model="claude-haiku-4-5-20251001",
+        max_steps=None,
+        tenant_version_id=None,
+        tenant_content=None,
+    )
+    modelo = FakeChatModel(responses=[resposta("ok")], calls=[])
+
+    turno, eventos = await rodar(modelo, layers=quebrada)
+
+    assert tipos(eventos) == ["error"]
+    assert "marcador" in eventos[0].data["message"]
+    assert modelo.calls == []
+    # Houve turno — o registro sai com a versão que o produziu.
+    assert turno.record.prompt_version_id == PLATFORM_V1
+
+
+def _com_teto(max_steps: int | None) -> PromptLayers:
+    return PromptLayers(
+        platform_version_id=PLATFORM_V1,
+        platform_content=LAYERS.platform_content,
+        provider="anthropic",
+        model="claude-haiku-4-5-20251001",
+        max_steps=max_steps,
+        tenant_version_id=None,
+        tenant_content=None,
+    )
+
+
+async def test_max_steps_e_o_teto_de_idas_a_ferramenta(banco: dict[str, Any]):
+    """`recursion_limit = 2 * max_steps + 2`, medido: com teto 1, uma ida passa e
+    a segunda morre em `GraphRecursionError`, que chega como `event: error`."""
+    duas_idas = [
+        chamada("deviations_total", PERIODO),
+        chamada("ranking_by_unit", PERIODO),
+        resposta("Foram 42."),
+    ]
+
+    modelo = FakeChatModel(responses=list(duas_idas), calls=[])
+    _, eventos = await rodar(modelo, layers=_com_teto(2))
+    assert tipos(eventos)[-1] == "token"
+    assert len(modelo.calls) == 3
+
+    modelo = FakeChatModel(responses=list(duas_idas), calls=[])
+    _, eventos = await rodar(modelo, layers=_com_teto(1))
+    assert tipos(eventos)[-1] == "error"
+    assert len(modelo.calls) == 2
+
+
+async def test_sem_teto_o_comportamento_e_o_de_antes(banco: dict[str, Any]):
+    """`max_steps` nulo = o padrão do LangGraph, como a v1 transcrita."""
+    assert agente._step_ceiling(None) is None
+    assert agente._step_ceiling(1) == {"recursion_limit": 4}
+    assert agente._step_ceiling(10) == {"recursion_limit": 22}
+
+
+# ---------------------------------------------------------------------------
 # A allowlist de modelo
 # ---------------------------------------------------------------------------
 def test_modelo_fora_da_allowlist_e_recusado_pelo_nome():
@@ -357,9 +529,78 @@ def test_estar_na_allowlist_nao_basta_sem_a_chave_do_provider(
     assert "gpt-5.4-mini" in str(erro.value)
 
 
-def test_sem_pedido_o_modelo_e_o_primeiro_disponivel():
+def test_sem_pedido_e_sem_camadas_o_modelo_e_o_primeiro_disponivel():
     """Qual é o primeiro depende de quais chaves existem — e é isso que se afirma."""
     _, model_id = agente.build_model()
+
+    assert model_id == agente.available_models()[0]
+
+
+def test_sem_pedido_o_modelo_e_o_que_a_plataforma_no_ar_diz():
+    """A camada platform escolhe o modelo: é ela quem paga (SPEC-AGENTE §6.2)."""
+    _, model_id = agente.build_model(layers=LAYERS)
+
+    assert model_id == "claude-haiku-4-5-20251001"
+
+
+def test_o_pedido_do_cliente_vence_o_padrao_da_plataforma_mas_passa_pela_allowlist():
+    _, model_id = agente.build_model("claude-sonnet-5", layers=LAYERS)
+    assert model_id == "claude-sonnet-5"
+
+    with pytest.raises(agente.ModelNotAllowedError) as erro:
+        agente.build_model("gpt-4-turbo", layers=LAYERS)
+    assert "gpt-4-turbo" in str(erro.value)
+
+
+def test_a_plataforma_pedindo_modelo_que_a_instalacao_nao_roda_e_erro_de_configuracao(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """Não roda outro em silêncio: numa instalação só com a chave da Anthropic, a
+    v1 real (openai/gpt-5.4-mini) é 503 com o modelo nomeado — não um modelo trocado."""
+    monkeypatch.setattr(agente, "_configured", lambda settings: ("anthropic",))
+    camadas = PromptLayers(
+        platform_version_id=PLATFORM_V1,
+        platform_content="{{hoje}} {{catalogo}} {{unidades}}",
+        provider="openai",
+        model="gpt-5.4-mini",
+        max_steps=None,
+        tenant_version_id=None,
+        tenant_content=None,
+    )
+
+    with pytest.raises(agente.NoProviderConfiguredError) as erro:
+        agente.build_model(layers=camadas)
+
+    assert "gpt-5.4-mini" in str(erro.value)
+
+
+def test_provider_e_modelo_da_plataforma_em_desacordo_e_erro_de_configuracao():
+    camadas = PromptLayers(
+        platform_version_id=PLATFORM_V1,
+        platform_content="{{hoje}} {{catalogo}} {{unidades}}",
+        provider="openai",
+        model="claude-haiku-4-5-20251001",
+        max_steps=None,
+        tenant_version_id=None,
+        tenant_content=None,
+    )
+
+    with pytest.raises(agente.NoProviderConfiguredError):
+        agente.build_model(layers=camadas)
+
+
+def test_plataforma_sem_modelo_cai_no_padrao_da_instalacao():
+    camadas = PromptLayers(
+        platform_version_id=PLATFORM_V1,
+        platform_content="{{hoje}} {{catalogo}} {{unidades}}",
+        provider=None,
+        model=None,
+        max_steps=None,
+        tenant_version_id=None,
+        tenant_content=None,
+    )
+
+    _, model_id = agente.build_model(layers=camadas)
 
     assert model_id == agente.available_models()[0]
 
@@ -384,8 +625,13 @@ def sse(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     """Substitui provider e banco, e guarda o que teria sido gravado."""
     estado: dict[str, Any] = {"gravados": [], "eventos": []}
 
-    monkeypatch.setattr(assistente, "build_model", lambda pedido: (object(), "fake-1"))
+    monkeypatch.setattr(assistente, "build_model", lambda pedido, **kw: (object(), "fake-1"))
     monkeypatch.setattr(assistente, "Turn", lambda *args, **kwargs: TurnoFalso(estado["eventos"]))
+
+    async def load_layers(tenant: TenantContext) -> PromptLayers | None:
+        return estado.get("camadas", LAYERS)
+
+    monkeypatch.setattr(assistente, "load_layers", load_layers)
 
     async def registrar(tenant: TenantContext, record: Record) -> UUID:
         estado["gravados"].append(record)
@@ -402,6 +648,56 @@ def eventos_de(corpo: str) -> list[tuple[str, dict]]:
         linhas = dict(linha.split(": ", 1) for linha in bloco.splitlines() if ": " in linha)
         lidos.append((linhas["event"], json.loads(linhas["data"])))
     return lidos
+
+
+class _ScopeGravacao:
+    """Um `tenant_scope` falso: guarda a instrução e os parâmetros do insert."""
+
+    def __init__(self) -> None:
+        self.statement = ""
+        self.params: dict[str, Any] = {}
+
+    async def __aenter__(self) -> _ScopeGravacao:
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    async def execute(self, statement: str, params: dict[str, Any]) -> None:
+        self.statement, self.params = statement, params
+
+    async def fetchone(self) -> dict[str, Any]:
+        return {"id": uuid4()}
+
+
+async def test_registrar_grava_a_versao_o_dry_run_e_o_hash(monkeypatch: pytest.MonkeyPatch):
+    """As três colunas da migration `assistant_run_link` saem do `Record`, e
+    não de um valor fixo: sem isto, todo turno novo ficaria "antes do
+    versionamento" com a coluna existindo."""
+    escopo = _ScopeGravacao()
+    monkeypatch.setattr(assistente, "tenant_scope", lambda _t: escopo)
+    record = Record(
+        question="q",
+        model="fake-1",
+        prompt_version_id=TENANT_V1,
+        is_dry_run=True,
+        draft_content_hash="a" * 64,
+    )
+
+    await assistente.registrar(TENANT, record)
+
+    assert escopo.params["prompt_version_id"] == TENANT_V1
+    assert escopo.params["is_dry_run"] is True
+    assert escopo.params["draft_content_hash"] == "a" * 64
+    colunas = escopo.statement[: escopo.statement.index("values")]
+    for coluna in ("prompt_version_id", "is_dry_run", "draft_content_hash"):
+        assert coluna in colunas
+    # E um turno real leva o que o `Record` diz por padrão: false e sem hash.
+    real = Record(question="q", model="m", prompt_version_id=PLATFORM_V1)
+    await assistente.registrar(TENANT, real)
+    assert escopo.params["prompt_version_id"] == PLATFORM_V1
+    assert escopo.params["is_dry_run"] is False
+    assert escopo.params["draft_content_hash"] is None
 
 
 def test_o_stream_entrega_os_eventos_do_turno_e_fecha_com_done(
@@ -456,6 +752,27 @@ def test_o_turno_e_gravado_uma_vez_so(client: TestClient, issue_token, sse: dict
     assert sse["gravados"][0].model == "fake-1"
 
 
+def test_sem_ponteiro_de_plataforma_sai_so_o_error_e_nada_e_gravado(
+    client: TestClient, issue_token, sse: dict[str, Any]
+):
+    """Sem texto em código para cair: sem ponteiro não há turno — um `error`
+    sozinho, sem `done`, e nenhuma linha em `app.ai_query`."""
+    sse["camadas"] = None
+    sse["eventos"] = [Event("token", {"content": "não deveria rodar"})]
+
+    resposta_http = client.post(
+        "/assistente/perguntar",
+        json={"question": "oi"},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    )
+
+    assert resposta_http.status_code == 200
+    lidos = eventos_de(resposta_http.text)
+    assert [nome for nome, _ in lidos] == ["error"]
+    assert lidos[0][1]["message"] == "O assistente está sem configuração publicada."
+    assert sse["gravados"] == []
+
+
 def test_sem_token_o_stream_nem_comeca(client: TestClient, sse: dict[str, Any]):
     resposta_http = client.post("/assistente/perguntar", json={"question": "oi"})
 
@@ -468,6 +785,11 @@ def test_modelo_fora_da_allowlist_responde_400_antes_do_primeiro_byte(
     client: TestClient, issue_token, monkeypatch: pytest.MonkeyPatch
 ):
     monkeypatch.setattr(assistente, "_limiter", assistente.RateLimiter())
+
+    async def load_layers(tenant: TenantContext) -> PromptLayers | None:
+        return LAYERS
+
+    monkeypatch.setattr(assistente, "load_layers", load_layers)
 
     resposta_http = client.post(
         "/assistente/perguntar",

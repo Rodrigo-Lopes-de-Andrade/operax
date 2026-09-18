@@ -1,8 +1,9 @@
 -- ============================================================================
--- OperaX — TESTE DAS CAMADAS DO ASSISTENTE (SPEC-AGENTE §2, §3a, §3b, §3d, §3e, §4)
+-- OperaX — TESTE DAS CAMADAS DO ASSISTENTE (SPEC-AGENTE §2, §3a, §3b, §3c, §3d, §3e, §4, §5)
 -- ----------------------------------------------------------------------------
--- 141 asserções (95 do A1 + 46 do A2), contadas pelas chamadas a assert_eq,
--- deve_falhar e rpc_recusa. Garantias que só valem se o banco as sustentar:
+-- 164 asserções (95 do A1 + 46 do A2 + 23 do A3), contadas pelas chamadas a
+-- assert_eq, deve_falhar e rpc_recusa. Garantias que só valem se o banco as
+-- sustentar:
 --
 --   A) As sete linhas da SPEC §3a — coerência de escopo, modelo só na
 --      plataforma, versão imutável, um ponteiro por escopo, versão apontada
@@ -29,8 +30,17 @@
 --      desabilitar tira dos dois papéis, REABILITAR NÃO CONCEDE domínio ao
 --      supervisor; quem não é membro recebe zero linhas; métrica inativa não
 --      aparece nem com escopo `enabled = true` (a EURECA manda primeiro).
+--   A3) O vínculo do turno (SPEC-AGENTE §3c; §7.1 decidida pelo dono em
+--      17/09/2026): as três colunas de app.ai_query e as duas checks do hash;
+--      a FK para a versão SEM cascade (apagar versão apontada por um turno é
+--      recusado como dono do banco); o índice parcial do tráfego real;
+--      `ai_query_read` funcionalmente inalterada (owner lê o tenant,
+--      supervisor só o próprio, o outro tenant nada — o `98` não cobre
+--      ai_query); e a MEDIÇÃO de que a FK aceita versão de outro tenant — é
+--      log, e não há trigger de escopo nele de propósito.
 --
--- A fidelidade da transcrição da v1 (o texto da migration == agente._prompt)
+-- A fidelidade da transcrição da v1 (o texto da migration renderizado ==
+-- o que agente._prompt produzia, pinado em fixture antes de o literal sair)
 -- é pytest — `backend/tests/test_agente_prompt_seed.py` — porque só o Python
 -- sabe renderizar.
 --
@@ -994,6 +1004,184 @@ begin
   perform pg_temp.assert_eq('A2-j5. e cada código aparece uma vez só',
     (select count(distinct code) from public.fn_assistant_catalog(v_a)),
     (select count(*) from public.fn_assistant_catalog(v_a)));
+end $$;
+reset role;
+
+-- ===========================================================================
+\echo '--- A3. O turno diz qual versão o produziu (SPEC-AGENTE §3c, §5, §7.1 decidida)'
+-- ===========================================================================
+-- Migration `assistant_run_link`: três colunas em app.ai_query, sem policy,
+-- grant ou view nova. Aqui: as colunas e as duas checks; a FK sem cascade
+-- (apagar versão apontada por um turno é recusado como dono do banco); o
+-- índice parcial; `ai_query_read` funcionalmente inalterada (o `98` não
+-- cobre ai_query — as três leituras são daqui); e a MEDIÇÃO, não asserção,
+-- de que a FK aceita versão de outro tenant — é log, e não há trigger de
+-- escopo nele de propósito.
+\echo '    (a) as três colunas, as duas checks e o índice, como dono do banco'
+do $$
+declare
+  v_unpointed uuid;
+  v_id        uuid;
+  v_n         bigint;
+begin
+  perform pg_temp.assert_eq('A3-a1. prompt_version_id é uuid nullable',
+    (select count(*) from information_schema.columns
+      where table_schema = 'app' and table_name = 'ai_query'
+        and column_name = 'prompt_version_id' and data_type = 'uuid' and is_nullable = 'YES'), 1);
+  perform pg_temp.assert_eq('A3-a2. is_dry_run é boolean not null default false',
+    (select count(*) from information_schema.columns
+      where table_schema = 'app' and table_name = 'ai_query'
+        and column_name = 'is_dry_run' and data_type = 'boolean'
+        and is_nullable = 'NO' and column_default = 'false'), 1);
+  perform pg_temp.assert_eq('A3-a3. draft_content_hash é text nullable',
+    (select count(*) from information_schema.columns
+      where table_schema = 'app' and table_name = 'ai_query'
+        and column_name = 'draft_content_hash' and data_type = 'text' and is_nullable = 'YES'), 1);
+
+  -- Uma versão de A que nem ponteiro nem rascunho referenciam: só a FK do
+  -- turno a segura. Criada aqui, como dono do banco, para ser determinística.
+  insert into app.assistant_prompt_version (tenant_id, layer, version_number, content)
+  values ('a1a00000-0000-0000-0000-00000000000a', 'tenant', 90, 'versão só referenciada por um turno')
+  returning id into v_unpointed;
+
+  -- Turno real, sem dry run: is_dry_run assume o default.
+  insert into app.ai_query (tenant_id, user_id, question, model, prompt_version_id)
+  values ('a1a00000-0000-0000-0000-00000000000a', 'a1000000-0000-0000-0000-000000000001',
+          'turno real do owner A', 'fake-1', v_unpointed)
+  returning id into v_id;
+  perform pg_temp.assert_eq('A3-a4. turno gravado sem is_dry_run fica false (default)',
+    (select count(*) from app.ai_query where id = v_id and not is_dry_run and draft_content_hash is null), 1);
+
+  -- Dry run com hash válido: aceito.
+  insert into app.ai_query (tenant_id, user_id, question, model, prompt_version_id, is_dry_run, draft_content_hash)
+  values ('a1a00000-0000-0000-0000-00000000000a', 'a1000000-0000-0000-0000-000000000001',
+          'teste do rascunho', 'fake-1',
+          (select version_id from app.assistant_prompt_pointer where layer = 'platform'),
+          true, encode(sha256('Rascunho testado.'::bytea), 'hex'));
+  perform pg_temp.assert_eq('A3-a5. dry run com sha256 hex minúsculo é aceito',
+    (select count(*) from app.ai_query where question = 'teste do rascunho' and is_dry_run
+        and draft_content_hash ~ '^[0-9a-f]{64}$'), 1);
+
+  -- As duas checks, cada uma pelo nome.
+  perform pg_temp.deve_falhar('A3-a6. hash fora de dry run é recusado',
+    format($q$insert into app.ai_query (tenant_id, question, is_dry_run, draft_content_hash)
+              values ('a1a00000-0000-0000-0000-00000000000a', 'x', false, %L)$q$,
+           encode(sha256('x'::bytea), 'hex')),
+    'ai_query_draft_hash_only_in_dry_run');
+  perform pg_temp.deve_falhar('A3-a7. hash com 63 caracteres é recusado',
+    format($q$insert into app.ai_query (tenant_id, question, is_dry_run, draft_content_hash)
+              values ('a1a00000-0000-0000-0000-00000000000a', 'x', true, %L)$q$,
+           left(encode(sha256('x'::bytea), 'hex'), 63)),
+    'ai_query_draft_hash_format');
+  perform pg_temp.deve_falhar('A3-a8. hash em maiúsculas é recusado',
+    format($q$insert into app.ai_query (tenant_id, question, is_dry_run, draft_content_hash)
+              values ('a1a00000-0000-0000-0000-00000000000a', 'x', true, %L)$q$,
+           upper(encode(sha256('x'::bytea), 'hex'))),
+    'ai_query_draft_hash_format');
+
+  -- A FK sem cascade: a versão apontada por um turno não some, nem como dono.
+  perform pg_temp.deve_falhar('A3-a9. apagar a versão apontada por um turno é recusado (FK de ai_query, sem cascade)',
+    format($q$delete from app.assistant_prompt_version where id = %L$q$, v_unpointed),
+    'ai_query');
+  perform pg_temp.assert_eq('A3-a10. e a FK não é cascade nem set null (confdeltype = a)',
+    (select count(*) from pg_constraint
+      where conrelid = 'app.ai_query'::regclass and contype = 'f'
+        and confrelid = 'app.assistant_prompt_version'::regclass and confdeltype = 'a'), 1);
+  perform pg_temp.deve_falhar('A3-a11. prompt_version_id que não é versão é recusado',
+    $q$insert into app.ai_query (tenant_id, question, prompt_version_id)
+       values ('a1a00000-0000-0000-0000-00000000000a', 'x', 'a1f00000-0000-0000-0000-0000000000ff')$q$,
+    'ai_query_prompt_version_id_fkey');
+
+  -- O índice parcial: só o tráfego real.
+  perform pg_temp.assert_eq('A3-a12. ai_query_dry_run_idx é parcial em NOT is_dry_run',
+    (select count(*) from pg_indexes
+      where schemaname = 'app' and tablename = 'ai_query' and indexname = 'ai_query_dry_run_idx'
+        and indexdef like '%WHERE (NOT is_dry_run)%'), 1);
+
+  -- Nenhuma policy, grant ou view nova.
+  perform pg_temp.assert_eq('A3-a13. app.ai_query continua com exatamente a policy ai_query_read',
+    (select count(*) from pg_policies where schemaname = 'app' and tablename = 'ai_query'
+        and policyname = 'ai_query_read'),
+    (select count(*) from pg_policies where schemaname = 'app' and tablename = 'ai_query'));
+  perform pg_temp.assert_eq('A3-a14. authenticated continua sem insert/update/delete em ai_query',
+    (select count(*) from (values ('INSERT'), ('UPDATE'), ('DELETE')) as p(priv)
+      where has_table_privilege('authenticated', 'app.ai_query', p.priv)), 0);
+  perform pg_temp.assert_eq('A3-a15. anon continua sem select em ai_query',
+    case when has_table_privilege('anon', 'app.ai_query', 'SELECT') then 1 else 0 end, 0);
+
+  -- Um turno do supervisor de A, para as leituras abaixo não serem vácuo.
+  insert into app.ai_query (tenant_id, user_id, question, model, prompt_version_id)
+  values ('a1a00000-0000-0000-0000-00000000000a', 'a1000000-0000-0000-0000-000000000002',
+          'turno do supervisor A', 'fake-1', v_unpointed);
+  select count(*) into v_n from app.ai_query where tenant_id = 'a1a00000-0000-0000-0000-00000000000a';
+  perform pg_temp.assert_eq('A3-a16. o cenário tem 3 turnos de A (2 do owner, 1 do supervisor)', v_n, 3);
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- (b) MEDIÇÃO, não asserção: a FK aceita versão de OUTRO tenant. É log — o
+-- backend grava o id que acabou de ler pelo ponteiro como o usuário — e não
+-- há trigger de escopo em ai_query de propósito. Registrado para que ninguém
+-- leia a FK como isolamento. Como dono do banco (o papel de DATABASE_URL);
+-- o grant de service_role em ai_query é medido ao lado.
+-- ---------------------------------------------------------------------------
+\echo '    (b) medição: a FK de prompt_version_id não confere o tenant'
+do $$
+declare
+  v_b_version uuid;
+  v_id        uuid;
+begin
+  select version_id into v_b_version from app.assistant_prompt_pointer
+   where tenant_id = 'a1b00000-0000-0000-0000-00000000000b' and layer = 'tenant';
+  begin
+    insert into app.ai_query (tenant_id, user_id, question, prompt_version_id)
+    values ('a1a00000-0000-0000-0000-00000000000a', 'a1000000-0000-0000-0000-000000000001',
+            'medição: versão de B num turno de A', v_b_version)
+    returning id into v_id;
+    raise notice '  medido  A3-b1. um turno de A com prompt_version_id da versão de B é ACEITO pela FK (é log; não há trigger de escopo em ai_query, e não é para ter)';
+    delete from app.ai_query where id = v_id;
+  exception when others then
+    raise notice '  medido  A3-b1. um turno de A com prompt_version_id da versão de B foi RECUSADO: % — isso é mudança de desenho, não o esperado', sqlerrm;
+  end;
+  raise notice '  medido  A3-b2. service_role tem INSERT em app.ai_query neste ensaio: % (o backend conecta como o dono de DATABASE_URL)',
+    has_table_privilege('service_role', 'app.ai_query', 'INSERT');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- (c) ai_query_read como os papéis: owner A lê as de A, supervisor A só as
+-- próprias, owner B nenhuma de A. O `98` não cobre ai_query; é aqui.
+-- ---------------------------------------------------------------------------
+\echo '    (c) ai_query_read inalterada, como os papéis'
+set local role authenticated;
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$ begin
+  perform pg_temp.assert_eq('A3-c1. owner A lê os 3 turnos de A (os dele e o do supervisor)',
+    (select count(*) from app.ai_query where tenant_id = 'a1a00000-0000-0000-0000-00000000000a'), 3);
+  perform pg_temp.assert_eq('A3-c2. e vê as três colunas novas (prompt_version_id preenchido nos 3)',
+    (select count(*) from app.ai_query
+      where tenant_id = 'a1a00000-0000-0000-0000-00000000000a' and prompt_version_id is not null), 3);
+  perform pg_temp.assert_eq('A3-c3. o dry run é distinguível pela coluna, não pela pergunta',
+    (select count(*) from app.ai_query
+      where tenant_id = 'a1a00000-0000-0000-0000-00000000000a' and is_dry_run), 1);
+end $$;
+
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000002';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000002","role":"authenticated"}';
+do $$ begin
+  perform pg_temp.assert_eq('A3-c4. supervisor A lê só o próprio turno',
+    (select count(*) from app.ai_query where tenant_id = 'a1a00000-0000-0000-0000-00000000000a'), 1);
+  perform pg_temp.assert_eq('A3-c5. e é o dele',
+    (select count(*) from app.ai_query where user_id = auth.uid()), 1);
+end $$;
+
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000004';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000004","role":"authenticated"}';
+do $$ begin
+  perform pg_temp.assert_eq('A3-c6. owner B não lê turno nenhum de A',
+    (select count(*) from app.ai_query where tenant_id = 'a1a00000-0000-0000-0000-00000000000a'), 0);
+  perform pg_temp.deve_falhar('A3-c7. e autenticado não grava turno pela tabela (grant, antes de policy)',
+    $q$insert into app.ai_query (tenant_id, question) values ('a1b00000-0000-0000-0000-00000000000b', 'x')$q$,
+    'permission denied');
 end $$;
 reset role;
 

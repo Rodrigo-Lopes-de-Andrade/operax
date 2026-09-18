@@ -1437,8 +1437,138 @@ class AssistantQuestion(BaseModel):
 
     question: str = Field(min_length=1, max_length=1000)
     #: Id do modelo, validado contra a allowlist de `operax.agente.agente`.
-    #: `None` = o padrão do provider configurado.
+    #: `None` = o que a versão de plataforma no ar diz.
     model: str | None = None
+
+
+# ---------------------------------------------------------------------------
+# Configuração do assistente (SPEC-AGENTE §1, §2, §4, §5) — `/assistente/configuracao`
+# ---------------------------------------------------------------------------
+
+#: O limite de `app.assistant_draft.content` e de `app.assistant_prompt_version
+#: .content` (`assistant_draft_tamanho`, `assistant_prompt_tamanho`). O banco é
+#: quem manda; aqui vira 422 antes de chegar lá e vai para a tela como contador.
+PROMPT_MAX_LENGTH = 12000
+
+
+class PlatformLayer(BaseModel):
+    """A versão de plataforma no ar — a doutrina. Só leitura em toda rota:
+    não existe papel de plataforma (SPEC-AGENTE §1), e ela entra por migration."""
+
+    version_id: UUID
+    version_number: int
+    content: str
+    #: Só a plataforma escolhe o modelo. Nulos = o padrão da instalação.
+    provider: str | None
+    model: str | None
+    #: Idas à ferramenta por turno. Nulo = sem teto.
+    max_steps: int | None
+    created_at: datetime
+
+
+class TenantLayer(BaseModel):
+    """A versão de tenant no ar, se o tenant já publicou."""
+
+    version_id: UUID
+    version_number: int
+    content: str
+    created_at: datetime
+    created_by: UUID | None
+
+
+class AssistantDraft(BaseModel):
+    """O rascunho — o único texto mutável. Quem não é admin recebe nulo pela
+    RLS, e isso não é erro: é a tela em modo de leitura."""
+
+    content: str
+    #: A versão de que o rascunho partiu. Quando difere da apontada, a tela
+    #: mostra as duas (SPEC-AGENTE §2) — ver `PromptScreen.draft_ahead_of_air`.
+    frozen_from_version_id: UUID | None
+    updated_at: datetime
+    updated_by: UUID | None
+
+
+class PromptScreen(BaseModel):
+    """A aba Configuração inteira, numa leitura como o usuário."""
+
+    platform: PlatformLayer
+    tenant: TenantLayer | None
+    draft: AssistantDraft | None
+    max_length: int = PROMPT_MAX_LENGTH
+    #: Rascunho existe e `frozen_from_version_id` ≠ versão de tenant apontada:
+    #: o caso do rollback, em que o rascunho é mais novo do que o que está no
+    #: ar. A tela TEM de mostrar as duas e dizer qual o botão substitui.
+    draft_ahead_of_air: bool
+
+
+class DraftWrite(BaseModel):
+    """O que o admin grava no rascunho. O limite é o do banco."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    content: str = Field(min_length=1, max_length=PROMPT_MAX_LENGTH)
+
+
+class PublishResult(BaseModel):
+    """O que `fn_publish_assistant_prompt` devolve: a versão nova e a que
+    estava apontada antes (nula na primeira publicação)."""
+
+    version_id: UUID
+    version_number: int
+    previous_version_id: UUID | None
+
+
+class VersionRow(BaseModel):
+    """Uma versão do histórico. `on_air` = é a apontada pelo ponteiro do
+    escopo dela. Diff é da tela."""
+
+    version_id: UUID
+    version_number: int
+    content: str
+    created_at: datetime
+    created_by: UUID | None
+    on_air: bool
+
+
+class VersionsScreen(BaseModel):
+    """A aba Histórico: as versões do tenant (restauráveis) e as da plataforma
+    (só leitura), as mais novas primeiro."""
+
+    tenant: list[VersionRow]
+    platform: list[VersionRow]
+
+
+class CapabilityRow(BaseModel):
+    """Uma linha de `fn_assistant_catalog`, como quem chama a vê. Todas as
+    linhas saem: a aba mostra a desligada e a fora de alcance. `target_view`,
+    `dimensions` e `filters` não saem — são do runtime."""
+
+    code: str
+    title: str
+    description: str
+    #: pii | compensation | health | disciplinary | banking — ou nulo.
+    domain: str | None
+    #: O tenant não desligou (ausência de escopo = habilitada).
+    enabled: bool
+    #: `enabled` e o domínio ao alcance de quem chama. Habilitar nunca
+    #: concede domínio (SPEC-AGENTE §4.1) — a tela só estreita.
+    visible_to_me: bool
+
+
+class CapabilityWrite(BaseModel):
+    """Liga ou desliga uma métrica para o tenant. Nunca apaga a linha."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool
+
+
+class AssistantTest(AssistantQuestion):
+    """A aba Teste: a mesma pergunta, gravada como dry run. `use_draft` roda o
+    rascunho no lugar da camada de tenant — e roda sempre como quem chamou:
+    não há seletor de papel (SPEC-AGENTE §5), e não haverá."""
+
+    use_draft: bool = False
 
 
 class ChannelCapabilities(BaseModel):

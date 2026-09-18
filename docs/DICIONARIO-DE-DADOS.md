@@ -103,6 +103,14 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `refusal_reason` | text | sim |  |  |  |
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
 | `model` | text | sim |  |  | Id do modelo que respondeu, da allowlist de operax/agente/agente.py. Sem ele os contadores de token não viram dinheiro, que é para o que eles existem. |
+| `prompt_version_id` | uuid | sim |  | `app.assistant_prompt_version` | A versão do prompt no ar quando o turno rodou: a versão de tenant apontada, ou, se o tenant nunca publicou, a versão de plataforma apontada. Nulo = antes do versionamento — nunca inventar uma versão para linha antiga. FK sem cascade: versão nunca é apagada. No teste de rascunho aponta para a plataforma (a única camada que de fato é versão) e draft_content_hash identifica o texto testado. |
+| `is_dry_run` | boolean | não | `false` |  | true = a aba Teste. Fora de toda média de custo e fora da tela de execuções: o índice parcial ai_query_dry_run_idx só cobre o tráfego real. |
+| `draft_content_hash` | text | sim |  |  | SPEC-AGENTE §7.1, decidida pelo dono em 17/09/2026 (terceira via): o sha256 em hex minúsculo do texto do rascunho testado, que o identifica sem virar versão. Só num dry run (check); nulo quando o teste rodou com as camadas publicadas ou quando o turno é real. |
+
+**Restrições**
+
+- `CHECK (((draft_content_hash IS NULL) OR (draft_content_hash ~ '^[0-9a-f]{64}$'::text)))`
+- `CHECK (((draft_content_hash IS NULL) OR is_dry_run))`
 
 **Policies**
 
@@ -112,6 +120,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 <details><summary>Índices</summary>
 
+- `ai_query_dry_run_idx` — `app.ai_query USING btree (tenant_id, created_at DESC) WHERE (NOT is_dry_run)`
 - `ai_query_tenant_idx` — `app.ai_query USING btree (tenant_id, created_at DESC)`
 - `ai_query_user_id_fkidx` — `app.ai_query USING btree (user_id)`
 

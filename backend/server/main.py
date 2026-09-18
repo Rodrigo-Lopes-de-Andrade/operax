@@ -22,6 +22,7 @@ from server.deps import CurrentTenant, CurrentUser
 from server.models import HealthResponse, Identity
 from server.routers import (
     assistente,
+    assistente_config,
     canais,
     curadoria,
     dp,
@@ -78,6 +79,7 @@ async def validation_error_without_echo(_: Request, exc: RequestValidationError)
 
 
 app.include_router(assistente.router)
+app.include_router(assistente_config.router)
 app.include_router(canais.router)
 app.include_router(curadoria.router)
 app.include_router(dp.router)

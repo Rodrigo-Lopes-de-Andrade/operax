@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.ai_query.prompt_version_id app.ai_query.is_dry_run app.work_schedule_day -->
+<!-- verificar-docs: inexistentes-de-proposito app.work_schedule_day -->
 <!-- `app.work_schedule_day` entra na lista porque este documento a CITA para
      contar o erro que ela causou na etapa DP. Ela nunca existiu — ver
      `SPEC-DP.md` §0-bis, que registra as três camadas que existem de verdade. -->
@@ -380,7 +380,11 @@ falha silenciosa é o critério, não o tamanho da tabela.
 ```sql
 alter table app.ai_query
   add column if not exists prompt_version_id uuid references app.assistant_prompt_version(id),
-  add column if not exists is_dry_run boolean not null default false;
+  add column if not exists is_dry_run boolean not null default false,
+  add column if not exists draft_content_hash text;
+-- draft_content_hash só num dry run, e só em sha256 hex minúsculo:
+--   check (draft_content_hash is null or is_dry_run)
+--   check (draft_content_hash is null or draft_content_hash ~ '^[0-9a-f]{64}$')
 
 create index if not exists ai_query_dry_run_idx
   on app.ai_query (tenant_id, created_at desc) where not is_dry_run;
@@ -388,7 +392,20 @@ create index if not exists ai_query_dry_run_idx
 
 `prompt_version_id` é **nullable**: as linhas que já existem não têm versão, e
 inventar uma para elas seria mentira gravada. A tela lê "antes do versionamento"
-quando é nulo.
+quando é nulo. A FK é **sem cascade**: versão nunca é apagada, e é a FK que o
+garante — também a partir do turno.
+
+**Numa linha nova, `prompt_version_id` nunca é nulo** (decisão da onda backend
+da A3, 17/09/2026): é a versão de **tenant** apontada no momento do turno, ou,
+se o tenant nunca publicou, a versão de **plataforma** apontada. A tela lê o
+`layer` da versão apontada para dizer "v3" ou "plataforma v1". No teste de
+rascunho a coluna aponta para a plataforma — a única camada que de fato é
+versão — e o texto testado fica identificado por `draft_content_hash`.
+
+`draft_content_hash` (§7.1 decidida pelo dono em 17/09/2026: terceira via): o
+sha256 do texto do rascunho testado. Identifica sem versionar — o histórico não
+enche de versões que nunca foram publicadas, e "qual texto produziu este teste"
+deixa de ser irrecuperável.
 
 O índice parcial exclui dry-run porque a tela de execuções e a conta de margem
 falam de tráfego real; teste na média de custo por consulta é ruído.
@@ -549,7 +566,10 @@ veria o mesmo. Mas duas coisas mudam:
 
 Registro: `app.ai_query` com `is_dry_run = true` e `prompt_version_id` da versão
 testada. Rascunho é testável — é o principal motivo de testar — e nesse caso
-`prompt_version_id` fica nulo com o `question` prefixado; alternativa em §7.
+`prompt_version_id` aponta para a versão de plataforma (a camada que de fato é
+versão) e `draft_content_hash` identifica o texto testado — a §7.1, decidida
+pelo dono em 17/09/2026. (A redação anterior dizia "nulo com o `question`
+prefixado"; foi a alternativa descartada.)
 
 ---
 
@@ -654,12 +674,13 @@ E `organization_id` → `tenant_id` em toda linha copiada.
 
 ## §7. Perguntas em aberto — do owner, não da implementação
 
-1. **Rascunho testado gera versão?** A §5 deixa `prompt_version_id` nulo no
-   teste de rascunho, o que torna *"qual texto produziu este teste"*
-   irrecuperável. Alternativa: congelar em versão a cada teste — histórico
-   fiel, mas o histórico enche de versões que nunca foram publicadas.
-   Terceira via: coluna `draft_content_hash` em `app.ai_query`, que identifica
-   sem versionar. Sugiro a terceira; é decisão sua.
+1. ✅ **Decidida pelo dono em 17/09/2026: terceira via.** Rascunho testado
+   **não** gera versão; `app.ai_query.draft_content_hash` (sha256 do texto
+   testado) identifica sem versionar, e `prompt_version_id` aponta para a
+   plataforma nesse caso — ver §3c. O texto original da pergunta: a §5 deixava
+   `prompt_version_id` nulo no teste de rascunho, o que tornava *"qual texto
+   produziu este teste"* irrecuperável; a alternativa de congelar em versão a
+   cada teste encheria o histórico de versões nunca publicadas.
 
 2. **Quantas versões guardar?** Append-only sem poda cresce sem teto. Não é
    urgente (texto, um por publicação) e uma decisão precipitada aqui vira
