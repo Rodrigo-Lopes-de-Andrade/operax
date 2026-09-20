@@ -650,6 +650,18 @@ papel — a ausência é testável e some sem aviso se não for.
 - Aba **Execuções**: pergunta, métrica escolhida, linhas, latência, tokens,
   recusa com motivo, versão que produziu.
 
+**Despachada em 20/09/2026, sobre `9487358`.** A migration §3c já entrou na
+A3, então a A4 são três coisas: as duas dívidas de contrato da A3
+(`draft_moved` como **sexta** recusa, entre `draft_not_found` e
+`draft_empty`, com `p_seen_updated_at` nulo = comportamento de hoje; e o
+`done` carregando `prompt_version_id` e `draft_content_hash`, que é a
+única edição autorizada no `CLAUDE.md`), mais as duas funções da tela:
+`fn_assistant_runs` e `fn_assistant_cost_by_version`, as duas **invoker**
+— a RLS de `ai_query` é `own or is_admin`, e herdar isso é o desenho, não
+um filtro de papel no corpo. `version_label` é texto pronto e diz **"antes
+do versionamento"** quando o id é nulo; "v1" ali seria inventar
+procedência, que é o erro que esta etapa existe para não cometer.
+
 **Gate:** custo por competência **quebrado por versão de prompt** — é o que as
 colunas de token existiam para responder e não respondiam (SPEC §0.3). Dry-run
 fora de toda média. Linha anterior ao versionamento aparece como "antes do
