@@ -554,6 +554,91 @@ no ar quando o rascunho foi testado" não é recuperável da linha — só o
 hash; `publicar` grava a trilha numa segunda transação (janela estreita
 de "publicado sem audit"); `reachable()`/`domains()` da A2 seguem.
 
+**Onda 2 (as quatro abas) despachada em 18/09/2026, sobre `e2195c5`.**
+Página em `/dashboard/administracao/assistente` com a porta `isAdmin` de
+Conexões (404 para quem não é); aba na query string; tipos espelhando
+`models.py` campo a campo; SSE pelo cliente de `stream.ts` com o endpoint
+parametrizado, sem duplicar o parser; diff de versões por LCS de linhas
+sem dependência nova. Os dois gates da sprint viram testes de tela: o
+aviso da SPEC §2 com as duas caixas visíveis, e a frase fixa de dados
+reais mais a **ausência** de seletor de papel.
+
+**Onda 2 entregue em 20/09/2026, em revisão.** Quatro abas em
+`/dashboard/administracao/assistente`, porta `isAdmin` com `notFound()`
+antes de qualquer leitura, aba pela query string, cada aba lendo só o que
+usa. O transporte do SSE virou um lugar só (`streamAssistant(path, body,
+…)`, com `askAssistant` de três linhas por cima) e a renderização de
+evento é a mesma da conversa — a aba Teste não ganhou uma segunda cópia
+que divergisse. +95 testes (1048 no total), `tsc`, `prettier`, `lint` (os
+mesmos três warnings de antes, nenhum em arquivo novo) e `build` verdes.
+Seis mutações, seis mortas.
+
+Decisão dele que eu endosso: **Publicar não salva sozinho.** O botão
+compara a caixa com o que foi salvo e, se diferirem, pede para salvar
+**sem chamar a API** — encadear transformaria uma edição que a pessoa só
+queria guardar no texto que passa a governar o assistente. O
+`draft_not_found` do backend continua mapeado para a mesma frase: é a
+rede, não o caminho.
+
+**Dois falsos verdes que ele não podia fechar da tela, e que são de
+contrato:** (1) `POST /publicar` congela o que estiver em
+`app.assistant_draft` no instante da chamada, sem receber nada que
+identifique o rascunho que a tela viu — dois admins no mesmo minuto e um
+publica o texto do outro, sem que o backend possa recusar
+(`draft_unchanged` compara com a versão no ar, nunca com o que a tela
+mostrava). Proposta: aceitar o `updated_at`/hash do rascunho lido e
+responder 409 `draft_moved`. (2) O selo "Rascunho" de cada turno de teste
+vem do `use_draft` que a tela enviou, não do que o servidor rodou — hoje
+seguro só porque `/testar?use_draft` sem rascunho é 404 antes do stream;
+no dia em que virar fallback, a tela mente. Proposta: `done` carregar
+`prompt_version_id` e `draft_content_hash`. Terceiro, menor: `versions =
+null` degrada a **frase** do aviso da §2, nunca o aviso nem as duas
+caixas (o gate 1 prende isso); `frozen_from_version_number` em
+`PromptScreen` mataria a segunda chamada.
+
+**Revisão (onda 2): REPROVADA por um mutante que sobrevive aos 1048
+testes.** `use_draft` preso em `true` passava verde — e o efeito é o
+defeito da §2 na aba que existe para dizer qual texto governou: quem **não**
+marca a caixa recebe a resposta do rascunho com o selo dizendo "Versão no
+ar". Os dois testes se cruzavam sem se cobrir (um exercita só o `true`; o
+outro afirma a chamada, mas com a função mockada, então o corpo nunca era
+observado). O 404 do backend não alcança isso — ele cobre a metade de trás;
+a da frente é a intenção chegar fiel ao corpo. Mais um MÉDIO: `hasDraft`
+colapsava "li e não há" com "**não consegui ler**" (401, 403 e o 503 de
+"sem plataforma publicada"), e a tela **afirmava** *"Não há rascunho
+salvo"* — comportamento seguro, frase falsa, e é a única coisa que o admin
+lê. Dos outros dezesseis mutantes, todos mortos: o `<datalist>` de redação
+neutra foi pego pelo `role`, não pelo texto; a região nomeada do painel de
+teste falha **alto** (`getByRole` lança) nos dois ataques à âncora; e a
+caixa do texto no ar dobrada dentro de um `<details>` — que continua no DOM
+— cai porque a asserção é `toBeVisible`, não `toBeInTheDocument`.
+
+**Fechado por mim antes do commit:** a asserção do caso negativo de
+`use_draft`, e `hasDraft: boolean | null` com a frase que diz que não foi
+possível saber. Provados na cópia: M15 e o colapso caem um teste cada,
+controle 50 verdes. BAIXOs registrados: as duas leituras do aviso não são
+do mesmo instante (segunda razão para `frozen_from_version_number` em
+`PromptScreen`); `aria-checked` redundante; nenhum turno usa `AbortSignal`
+(dívida herdada da conversa). E um achado que não é desta onda: se o tipo
+de `draft_ahead_of_air` for afrouxado para opcional, o aviso inteiro some
+em silêncio e a suíte fica verde — hoje quem segura é o `tsc`, porque
+resposta de API não tem validação de runtime em lugar nenhum do frontend.
+
+### ✅ A3 fechada no código em 20/09/2026 — as duas ondas
+
+Backend em `e2195c5`; a tela nesta. Os dois gates da sprint viraram teste e
+foram mutados: o aviso da SPEC §2 com **as duas caixas visíveis ao mesmo
+tempo** (cinco mutações, inclusive dobrar a caixa num `<details>` sem tirá-la
+do DOM), e a frase fixa de dados reais mais a **ausência** de seletor de
+papel (cinco, inclusive um `<input list>` de redação neutra, pego pelo
+`role`). Gates: 1050 testes, `tsc`, `prettier`, lint 0 erros, build compila.
+
+O que falta para a etapa fechar de verdade é a A4 — e o que ela precisa
+carregar já está medido: as duas dívidas de contrato desta onda
+(`draft_moved` na publicação; `prompt_version_id`/`draft_content_hash` no
+`done`) entram no despacho dela, porque a rota ainda não subiu e as duas
+tocam o mesmo router.
+
 **Gate:** rollback para a v1 com rascunho na v3 mostra as duas versões na tela;
 um teste de tela cobra a frase de dados reais e a **ausência** de seletor de
 papel — a ausência é testável e some sem aviso se não for.

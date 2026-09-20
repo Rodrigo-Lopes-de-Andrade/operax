@@ -1,6 +1,21 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { parseFrame, readEvents } from "@/lib/assistente/stream";
+import { ApiError } from "@/lib/api";
+import {
+  askAssistant,
+  parseFrame,
+  readEvents,
+  streamAssistant,
+} from "@/lib/assistente/stream";
+
+const getSession = vi.fn();
+
+// A sessão do navegador, só para o token: o transporte a pede antes do fetch.
+vi.mock("@/lib/supabase", () => ({
+  createBrowserSupabaseClient: () => ({
+    auth: { getSession: () => getSession() },
+  }),
+}));
 
 /**
  * O que se testa aqui é a moldura, não a resposta: um quadro partido no meio do
@@ -110,5 +125,88 @@ describe("readEvents", () => {
         motivo: "Não tenho essa métrica.",
       },
     ]);
+  });
+});
+
+describe("streamAssistant e askAssistant — um transporte, dois caminhos", () => {
+  function sseResponse(body: string, status = 200) {
+    return new Response(body, {
+      status,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  }
+
+  beforeEach(() => {
+    getSession.mockResolvedValue({
+      data: { session: { access_token: "token-de-teste" } },
+    });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("askAssistant continua batendo em /assistente/perguntar com `{question}`", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        sseResponse('event: token\ndata: {"content":"42"}\n\n'),
+      );
+    const onEvent = vi.fn();
+
+    await askAssistant("Quantos?", { onEvent });
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://api.stub.test/assistente/perguntar");
+    expect(init?.method).toBe("POST");
+    expect(JSON.parse(init?.body as string)).toEqual({ question: "Quantos?" });
+    expect((init?.headers as Record<string, string>).Authorization).toBe(
+      "Bearer token-de-teste",
+    );
+    expect(onEvent).toHaveBeenCalledWith({ type: "token", content: "42" });
+  });
+
+  it("streamAssistant leva o caminho e o corpo que recebeu — é o que o teste da configuração usa", async () => {
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValue(
+        sseResponse('event: token\ndata: {"content":"ok"}\n\n'),
+      );
+    const onEvent = vi.fn();
+
+    await streamAssistant(
+      "/assistente/configuracao/testar",
+      { question: "Quantos?", use_draft: true },
+      { onEvent },
+    );
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://api.stub.test/assistente/configuracao/testar");
+    expect(JSON.parse(init?.body as string)).toEqual({
+      question: "Quantos?",
+      use_draft: true,
+    });
+    expect(onEvent).toHaveBeenCalledWith({ type: "token", content: "ok" });
+  });
+
+  it("⛔ `res.ok` é conferido antes do primeiro byte: um 404 vira ApiError com o detail, e nenhum evento", async () => {
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ detail: "Não há rascunho para testar." }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    const onEvent = vi.fn();
+
+    const failure = await streamAssistant(
+      "/assistente/configuracao/testar",
+      { question: "?", use_draft: true },
+      { onEvent },
+    ).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ApiError);
+    expect((failure as ApiError).status).toBe(404);
+    expect((failure as ApiError).detail).toBe("Não há rascunho para testar.");
+    expect(onEvent).not.toHaveBeenCalled();
   });
 });

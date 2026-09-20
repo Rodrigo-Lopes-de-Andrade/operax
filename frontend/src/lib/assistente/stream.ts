@@ -135,16 +135,26 @@ export async function* readEvents(
   }
 }
 
-export type AskOptions = {
+export type StreamOptions = {
   onEvent: (event: AssistantEvent) => void;
   signal?: AbortSignal;
+};
+
+export type AskOptions = StreamOptions & {
   /** Validado contra a allowlist do backend — o cliente não escolhe sozinho. */
   model?: string;
 };
 
-export async function askAssistant(
-  question: string,
-  { onEvent, signal, model }: AskOptions,
+/**
+ * Um turno de SSE contra `path`, com a sessão do navegador. É o único lugar em
+ * que o transporte do assistente existe: a conversa (`/assistente/perguntar`)
+ * e o teste da configuração (`/assistente/configuracao/testar`) passam os dois
+ * por aqui, e um parser só desmonta os quadros dos dois.
+ */
+export async function streamAssistant(
+  path: string,
+  body: Record<string, unknown>,
+  { onEvent, signal }: StreamOptions,
 ): Promise<void> {
   const supabase = createBrowserSupabaseClient();
   const { data } = await supabase.auth.getSession();
@@ -154,19 +164,16 @@ export async function askAssistant(
     throw new ApiError(401, null);
   }
 
-  const response = await fetch(
-    `${publicEnv().NEXT_PUBLIC_API_URL}${ASSISTANT_PATH}`,
-    {
-      method: "POST",
-      signal,
-      headers: {
-        Accept: "text/event-stream",
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(model ? { question, model } : { question }),
+  const response = await fetch(`${publicEnv().NEXT_PUBLIC_API_URL}${path}`, {
+    method: "POST",
+    signal,
+    headers: {
+      Accept: "text/event-stream",
+      Authorization: `Bearer ${accessToken}`,
+      "Content-Type": "application/json",
     },
-  );
+    body: JSON.stringify(body),
+  });
 
   if (!response.ok) {
     throw new ApiError(response.status, await readDetail(response));
@@ -179,4 +186,15 @@ export async function askAssistant(
   for await (const event of readEvents(response.body)) {
     onEvent(event);
   }
+}
+
+export function askAssistant(
+  question: string,
+  { onEvent, signal, model }: AskOptions,
+): Promise<void> {
+  return streamAssistant(
+    ASSISTANT_PATH,
+    model ? { question, model } : { question },
+    { onEvent, signal },
+  );
 }

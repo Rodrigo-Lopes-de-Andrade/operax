@@ -48,7 +48,7 @@ function administracao() {
 }
 
 describe("a sidebar não oferece porta que não abre", () => {
-  it("`owner` recebe as onze: cinco de leitura e seis de escrita", () => {
+  it("`owner` recebe as doze: cinco de leitura e sete de escrita", () => {
     comPapel("owner");
 
     const admin = administracao();
@@ -64,6 +64,9 @@ describe("a sidebar não oferece porta que não abre", () => {
       "Escalas",
       "Conexões",
       "Templates",
+      // O rótulo carrega o parêntese: o "Assistente" da Operação é a
+      // conversa, e este é a configuração dela.
+      "Assistente (configuração)",
     ]) {
       expect(within(admin).getByRole("link", { name: item })).toBeVisible();
     }
@@ -96,6 +99,11 @@ describe("a sidebar não oferece porta que não abre", () => {
     expect(within(admin).queryByRole("link", { name: "Conexões" })).toBeNull();
     // Templates é a ação ligada a Conexões, e fecha pela mesma guarda.
     expect(within(admin).queryByRole("link", { name: "Templates" })).toBeNull();
+    // A configuração do assistente também: publicar prompt, restaurar versão e
+    // ligar métrica são escrita, e a página fecha por `isAdmin`.
+    expect(
+      within(admin).queryByRole("link", { name: "Assistente (configuração)" }),
+    ).toBeNull();
   });
 
   it("⛔ `hr` é admin e escreve — o eixo de escrita não é o domínio sensível", () => {
@@ -157,6 +165,7 @@ describe("a sidebar não oferece porta que não abre", () => {
       "Escalas",
       "Conexões",
       "Templates",
+      "Assistente (configuração)",
     ]) {
       expect(within(admin).queryByRole("link", { name: item })).toBeNull();
     }

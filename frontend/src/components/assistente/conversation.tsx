@@ -32,7 +32,7 @@ import {
  * na tela inteira do produto. Recusa é resposta.
  */
 
-type Turn = {
+export type Turn = {
   id: string;
   question: string;
   metric: MetricEvent | null;
@@ -48,7 +48,7 @@ const SUGESTOES = [
   "Quais colaboradores repetiram desvio nesta semana?",
 ];
 
-function novoTurno(question: string): Turn {
+export function novoTurno(question: string): Turn {
   return {
     id: crypto.randomUUID(),
     question,
@@ -209,7 +209,13 @@ export function Conversation() {
   );
 }
 
-function TurnAnswer({ turn, streaming }: { turn: Turn; streaming: boolean }) {
+export function TurnAnswer({
+  turn,
+  streaming,
+}: {
+  turn: Turn;
+  streaming: boolean;
+}) {
   const esperando = !turn.text && !turn.refusal && !turn.failure;
 
   return (
