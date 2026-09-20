@@ -752,6 +752,20 @@ gasto da aba Teste é dinheiro real que **não** aparece na tabela de custo —
 e num mês de ajuste de prompt, muito menos (medido: 1998 tokens em dry run
 contra 175 de tráfego real, no cenário do teste).
 
+**Onda 2 despachada em 20/09/2026, sobre `c95a569`** — e é ela que fecha a
+etapa. Decisão do dono no despacho: o gasto do dry run vira **linha de
+total à parte**, não coluna na mesma tabela, para ninguém somar as duas sem
+perceber — `public.fn_assistant_test_cost` (uma linha por competência, só
+dry run, mesma expressão de janela das irmãs) e
+`GET /custo-de-teste`. A aba leva três frases obrigatórias, cada uma
+arrancada de uma medição deste ciclo: competências em UTC, o modelo é parte
+da chave porque é ele que vira preço, e **a linha de uma versão soma os
+turnos de antes e depois de um rollback** — sem essa ressalva a tela não
+pode escrever "a v2 custou X". `version_label` é renderizado como vem:
+"antes do versionamento" e "versão fora do alcance" inclusive, porque
+atribuir procedência que não se tem é o erro que a etapa existe para não
+cometer.
+
 **Gate:** custo por competência **quebrado por versão de prompt** — é o que as
 colunas de token existiam para responder e não respondiam (SPEC §0.3). Dry-run
 fora de toda média. Linha anterior ao versionamento aparece como "antes do
