@@ -279,8 +279,15 @@ Só agregado não sensível: `vw_deviation_summary_by_unit`, `vw_deviation_daily
     resposta válida**, não erro: ela chega dentro de um 200.
   - `event: error` · `data: {"message": "…"}` — erro mid-stream; encerra o turno.
   - `event: done` · `data: {"consulta_id": "…", "modelo": "…",
-    "tokens_entrada": N, "tokens_saida": N, "latencia_ms": N}` — quem pergunta é
-    quem gasta, então o custo do turno volta com ele.
+    "tokens_entrada": N, "tokens_saida": N, "latencia_ms": N,
+    "prompt_version_id": "…"|null, "draft_content_hash": "…"|null}` — quem
+    pergunta é quem gasta, então o custo do turno volta com ele.
+    Os dois últimos dizem **o que rodou**, lidos da linha gravada em
+    `app.ai_query` e nunca do que o cliente pediu: `prompt_version_id` é a
+    versão no ar no momento do turno (nula só nas linhas anteriores ao
+    versionamento — nunca inventada) e `draft_content_hash` é o sha256 do
+    rascunho testado, preenchido só num dry run da aba Teste. É o que faz o
+    selo "Rascunho" da tela não poder mentir.
   - `event: ping` a cada ~15 s — keep-alive; sem ele proxies derrubam o stream.
 - A rota SSE fica **fora** de compressão e buffering.
 - **Erros fora do stream:** status ≠ 2xx antes do primeiro byte (401/403/429)

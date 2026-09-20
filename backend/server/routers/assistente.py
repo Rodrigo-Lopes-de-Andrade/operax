@@ -161,14 +161,24 @@ async def _stream(tenant: TenantContext, turno: Turn) -> AsyncIterator[str]:
 
         consulta_id = await registrar(tenant, turno.record)
         gravado = True
+        record = turno.record
         yield sse(
             "done",
             {
                 "consulta_id": str(consulta_id),
-                "modelo": turno.record.model,
-                "tokens_entrada": turno.record.input_tokens,
-                "tokens_saida": turno.record.output_tokens,
-                "latencia_ms": turno.record.latency_ms,
+                "modelo": record.model,
+                "tokens_entrada": record.input_tokens,
+                "tokens_saida": record.output_tokens,
+                "latencia_ms": record.latency_ms,
+                # O que RODOU, lido do registro que acabou de ser gravado — e
+                # não o `use_draft` que o cliente pediu. Hoje os dois coincidem
+                # porque `/testar?use_draft` sem rascunho é 404 antes do
+                # stream; no dia em que isso virar fallback, o selo "Rascunho"
+                # da tela mentiria, e é esta coluna que existe para não deixar.
+                "prompt_version_id": (
+                    str(record.prompt_version_id) if record.prompt_version_id is not None else None
+                ),
+                "draft_content_hash": record.draft_content_hash,
             },
         )
     finally:

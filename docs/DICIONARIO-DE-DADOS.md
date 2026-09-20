@@ -3746,6 +3746,26 @@ public.fn_assistant_catalog(p_tenant_id uuid)
 O catálogo efetivo do assistente para o tenant, como quem chama. Os três filtros da SPEC-AGENTE §4.2 numa resposta: só app.metric.active; enabled = coalesce(escopo do tenant, true) — ausência é habilitada; visible_to_me = enabled e (sem domínio ou util.can_see_domain). É a régua única (§4.3): a aba Capacidades e o runtime (executor.load_catalog) leem daqui. Security INVOKER: metric_read, assistant_scope_read e can_see_domain já são o que o usuário alcança. Quem não é membro do tenant recebe zero linhas, não erro. target_view, dimensions e filters entram por decisão do dono (17/09/2026): o runtime precisa deles para montar a consulta.
 
 
+### `fn_assistant_cost_by_version`
+
+```sql
+public.fn_assistant_cost_by_version(p_weeks integer DEFAULT 8)
+  returns TABLE(month_start date, version_label text, prompt_version_id uuid, model text, runs bigint, refused_runs bigint, input_tokens bigint, output_tokens bigint, avg_latency_ms numeric)
+```
+
+Custo por competência QUEBRADO POR VERSÃO de prompt E POR MODELO, nas últimas p_weeks semanas (a atual inclusa): turnos, recusas, tokens de entrada e de saída e latência média. É o que as colunas de token existiam para responder e não respondiam (SPEC-AGENTE §0.3). O modelo entra na chave porque é ele que vira preço, e a versão gravada é a do tenant: quem escolhe o modelo é a camada de plataforma, que o registro não guarda. Sem o modelo na chave, republicar a doutrina troca o preço sem mover o rótulo e a linha soma dois preços — medido em 20/09/2026, decisão do dono. Dry run fica FORA de toda média. Security INVOKER: o recorte é ai_query_read.
+
+
+### `fn_assistant_runs`
+
+```sql
+public.fn_assistant_runs(p_weeks integer DEFAULT 8)
+  returns TABLE(created_at timestamp with time zone, question text, metric_code text, rows_returned integer, latency_ms integer, input_tokens integer, output_tokens integer, model text, refused boolean, refusal_reason text, prompt_version_id uuid, version_label text)
+```
+
+Os turnos REAIS (nunca dry run) das últimas p_weeks semanas, a atual inclusa, mais novo primeiro, com a versão de prompt que os produziu. version_label é texto pronto: "v3" para camada de tenant, "plataforma v1" para a doutrina, e "antes do versionamento" quando prompt_version_id é nulo — nunca "v1", que seria inventar procedência. Security INVOKER: lê app.ai_query pela policy ai_query_read (próprio turno OU is_admin), então quem não é admin vê só os próprios turnos, e isso é o recorte inteiro.
+
+
 ### `fn_channel_readiness`
 
 ```sql
@@ -3816,11 +3836,11 @@ Desvio ativo, de tipo que exige justificativa, sem nenhuma justificativa aceita.
 ### `fn_publish_assistant_prompt`
 
 ```sql
-public.fn_publish_assistant_prompt(p_tenant_id uuid)
+public.fn_publish_assistant_prompt(p_tenant_id uuid, p_seen_updated_at timestamp with time zone DEFAULT NULL::timestamp with time zone)
   returns TABLE(version_id uuid, version_number integer, previous_version_id uuid)
 ```
 
-Publica o rascunho do tenant: congela em versão nova (imutável) e move o ponteiro, na mesma transação. Cinco recusas, nesta ordem, cada uma P0001 com a mensagem = código: not_admin, draft_not_found, draft_empty, platform_layer_missing, draft_unchanged (idêntico à versão APONTADA, não à última). not_admin vem antes de tudo: o owner de outro tenant não aprende se este tem rascunho. A primeira instrução trava o rascunho (for update) e serializa publicações concorrentes do mesmo tenant. Definer: checa util.is_admin ela mesma. Devolve (version_id, version_number, previous_version_id).
+Publica o rascunho do tenant: congela em versão nova (imutável) e move o ponteiro, na mesma transação. Seis recusas, nesta ordem, cada uma P0001 com a mensagem = código: not_admin, draft_not_found, draft_moved, draft_empty, platform_layer_missing, draft_unchanged (idêntico à versão APONTADA, não à última). not_admin vem antes de tudo: o owner de outro tenant não aprende se este tem rascunho. draft_moved compara o updated_at do rascunho com o que a tela leu (p_seen_updated_at); nulo = a tela não mandou, e o comportamento é o de antes deste parâmetro. A primeira instrução trava o rascunho (for update) e serializa publicações concorrentes do mesmo tenant. Definer: checa util.is_admin ela mesma. Devolve (version_id, version_number, previous_version_id).
 
 
 ### `fn_ranking_by_employee`

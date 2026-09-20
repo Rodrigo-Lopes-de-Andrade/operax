@@ -609,11 +609,16 @@ def test_plataforma_sem_modelo_cai_no_padrao_da_instalacao():
 # O contrato SSE
 # ---------------------------------------------------------------------------
 class TurnoFalso:
-    """Um turno com eventos prontos, para testar o transporte e nada mais."""
+    """Um turno com eventos prontos, para testar o transporte e nada mais.
 
-    def __init__(self, eventos: list[Event]) -> None:
+    O `record` entra de fora porque o `done` passou a carregar o que RODOU
+    (`prompt_version_id` e `draft_content_hash`): sem poder variá-lo, os três
+    casos do evento seriam o mesmo caso.
+    """
+
+    def __init__(self, eventos: list[Event], record: Record | None = None) -> None:
         self._eventos = eventos
-        self.record = Record(question="pergunta", model="fake-1", latency_ms=7)
+        self.record = record or Record(question="pergunta", model="fake-1", latency_ms=7)
 
     async def stream(self):
         for evento in self._eventos:
@@ -626,7 +631,11 @@ def sse(monkeypatch: pytest.MonkeyPatch) -> dict[str, Any]:
     estado: dict[str, Any] = {"gravados": [], "eventos": []}
 
     monkeypatch.setattr(assistente, "build_model", lambda pedido, **kw: (object(), "fake-1"))
-    monkeypatch.setattr(assistente, "Turn", lambda *args, **kwargs: TurnoFalso(estado["eventos"]))
+    monkeypatch.setattr(
+        assistente,
+        "Turn",
+        lambda *args, **kwargs: TurnoFalso(estado["eventos"], estado.get("record")),
+    )
 
     async def load_layers(tenant: TenantContext) -> PromptLayers | None:
         return estado.get("camadas", LAYERS)
@@ -722,6 +731,77 @@ def test_o_stream_entrega_os_eventos_do_turno_e_fecha_com_done(
     assert [nome for nome, _ in lidos] == ["metrica", "token", "token", "done"]
     assert lidos[-1][1]["consulta_id"]
     assert lidos[-1][1]["tokens_saida"] == 0
+
+
+def test_o_done_diz_qual_versao_rodou_e_que_nao_houve_rascunho(
+    client: TestClient, issue_token, sse: dict[str, Any]
+):
+    """Turno real: a versão preenchida e o hash nulo."""
+    sse["record"] = Record(question="q", model="fake-1", prompt_version_id=TENANT_V1)
+    sse["eventos"] = [Event("token", {"content": "oi"})]
+
+    resposta_http = client.post(
+        "/assistente/perguntar",
+        json={"question": "oi"},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    )
+
+    _, dados = eventos_de(resposta_http.text)[-1]
+    assert dados["prompt_version_id"] == str(TENANT_V1)
+    assert dados["draft_content_hash"] is None
+
+
+def test_o_done_de_um_dry_run_carrega_o_hash_do_texto_testado(
+    client: TestClient, issue_token, sse: dict[str, Any]
+):
+    """Dry run com rascunho: o hash do texto e a versão da plataforma — a
+    única camada que de fato é versão quando o que rodou foi rascunho."""
+    sse["record"] = Record(
+        question="q",
+        model="fake-1",
+        prompt_version_id=PLATFORM_V1,
+        is_dry_run=True,
+        draft_content_hash="b" * 64,
+    )
+    sse["eventos"] = [Event("token", {"content": "oi"})]
+
+    resposta_http = client.post(
+        "/assistente/perguntar",
+        json={"question": "oi"},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    )
+
+    _, dados = eventos_de(resposta_http.text)[-1]
+    assert dados["prompt_version_id"] == str(PLATFORM_V1)
+    assert dados["draft_content_hash"] == "b" * 64
+
+
+def test_o_done_de_uma_linha_sem_versao_manda_nulo_e_nunca_inventa(
+    client: TestClient, issue_token, sse: dict[str, Any]
+):
+    """O `Record` default é a linha anterior ao versionamento: os dois campos
+    saem nulos. Inventar a v1 aqui seria inventar procedência."""
+    sse["eventos"] = [Event("token", {"content": "oi"})]
+
+    resposta_http = client.post(
+        "/assistente/perguntar",
+        json={"question": "oi"},
+        headers={"Authorization": f"Bearer {issue_token()}"},
+    )
+
+    _, dados = eventos_de(resposta_http.text)[-1]
+    assert dados["prompt_version_id"] is None
+    assert dados["draft_content_hash"] is None
+    # E o resto do evento continua inteiro: o custo do turno volta com ele.
+    assert set(dados) == {
+        "consulta_id",
+        "modelo",
+        "tokens_entrada",
+        "tokens_saida",
+        "latencia_ms",
+        "prompt_version_id",
+        "draft_content_hash",
+    }
 
 
 def test_a_recusa_chega_dentro_de_um_200_porque_e_resposta(

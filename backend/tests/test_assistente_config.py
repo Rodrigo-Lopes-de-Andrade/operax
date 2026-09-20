@@ -1,4 +1,4 @@
-"""`/assistente/configuracao` — the eight routes, and the order that is the contract.
+"""`/assistente/configuracao` — the ten routes, and the order that is the contract.
 
 What these tests pin is not the SQL running (that is `scripts/97_teste_assistente.sql`
 §A3 on the real schema): it is what the route does **around** the SQL. Who is
@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from datetime import datetime
 from typing import Any
 from uuid import UUID, uuid4
 
@@ -144,6 +145,8 @@ def db(monkeypatch: pytest.MonkeyPatch):
         publish: Any = None,
         catalog: list[dict[str, Any]] | None = None,
         catalog_one: dict[str, Any] | None = None,
+        runs: list[dict[str, Any]] | None = None,
+        cost: list[dict[str, Any]] | None = None,
         draft_saved: dict[str, Any] | None = None,
         pointer_moved: dict[str, Any] | None = None,
         scope_saved: dict[str, Any] | None = None,
@@ -157,6 +160,8 @@ def db(monkeypatch: pytest.MonkeyPatch):
                 "from app.assistant_draft": draft,
                 ") as on_air": versions or [],
                 "fn_publish_assistant_prompt": publish,
+                "fn_assistant_runs": runs if runs is not None else [],
+                "fn_assistant_cost_by_version": cost if cost is not None else [],
                 "where code = %(code)s": catalog_one,
                 "order by code": catalog if catalog is not None else CATALOG,
             }
@@ -387,8 +392,8 @@ def test_publicar_chama_a_rpc_como_o_usuario_e_audita_depois(
         "previous_version_id": str(TENANT_V2),
     }
     [rpc] = user.statements
-    assert "public.fn_publish_assistant_prompt(%(tenant_id)s)" in rpc
-    assert user.params[0] == {"tenant_id": TENANT_ID}
+    assert "public.fn_publish_assistant_prompt(%(tenant_id)s, %(seen_updated_at)s)" in rpc
+    assert user.params[0] == {"tenant_id": TENANT_ID, "seen_updated_at": None}
     # No is_admin here: the definer checks it by auth.uid() itself.
     assert "util.is_admin" not in rpc
     [audit] = _audits(bound)
@@ -404,12 +409,13 @@ def test_publicar_chama_a_rpc_como_o_usuario_e_audita_depois(
     [
         ("not_admin", 403),
         ("draft_not_found", 404),
+        ("draft_moved", 409),
         ("draft_empty", 422),
         ("platform_layer_missing", 409),
         ("draft_unchanged", 409),
     ],
 )
-def test_as_cinco_recusas_da_rpc_viram_http_com_o_codigo_no_detail(
+def test_as_seis_recusas_da_rpc_viram_http_com_o_codigo_no_detail(
     client: TestClient, cabecalho: dict[str, str], db, code: str, status_code: int
 ):
     _, _, bound_ctx = db(publish=_TriggerRefusal(code))
@@ -421,7 +427,69 @@ def test_as_cinco_recusas_da_rpc_viram_http_com_o_codigo_no_detail(
     assert bound_ctx.opened == 0
 
 
-def test_um_p0001_que_nao_e_dos_cinco_nao_e_engolido(
+def test_publicar_sem_corpo_manda_seen_updated_at_nulo(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """O chamador de hoje não manda corpo — e o nulo é o comportamento de
+    antes deste parâmetro, não um erro."""
+    novo = uuid4()
+    user, _, _ = db(publish={"version_id": novo, "version_number": 3, "previous_version_id": None})
+
+    resposta = client.post("/assistente/configuracao/publicar", headers=cabecalho)
+
+    assert resposta.status_code == 200
+    assert user.params[0] == {"tenant_id": TENANT_ID, "seen_updated_at": None}
+
+
+def test_publicar_leva_o_que_a_tela_viu_ate_a_rpc(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """`seen_updated_at` chega à RPC como veio: é lá que ele vira `draft_moved`."""
+    novo = uuid4()
+    user, _, _ = db(publish={"version_id": novo, "version_number": 3, "previous_version_id": None})
+
+    resposta = client.post(
+        "/assistente/configuracao/publicar",
+        json={"seen_updated_at": WHEN},
+        headers=cabecalho,
+    )
+
+    assert resposta.status_code == 200
+    assert user.params[0]["seen_updated_at"] == datetime.fromisoformat(WHEN)
+    assert "%(seen_updated_at)s" in user.statements[0]
+
+
+def test_o_rascunho_que_mudou_debaixo_da_tela_e_409_draft_moved(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """Dois admins no mesmo minuto: quem chegou depois publicaria o texto do
+    outro, que nunca viu. A recusa vem do banco e o `detail` é o código."""
+    _, _, bound_ctx = db(publish=_TriggerRefusal("draft_moved"))
+
+    resposta = client.post(
+        "/assistente/configuracao/publicar",
+        json={"seen_updated_at": WHEN},
+        headers=cabecalho,
+    )
+
+    assert resposta.status_code == 409
+    assert resposta.json() == {"detail": "draft_moved"}
+    assert bound_ctx.opened == 0
+
+
+def test_publicar_nao_aceita_campo_desconhecido(client: TestClient, cabecalho: dict[str, str], db):
+    db()
+
+    resposta = client.post(
+        "/assistente/configuracao/publicar",
+        json={"seen_updated_at": WHEN, "content": "texto"},
+        headers=cabecalho,
+    )
+
+    assert resposta.status_code == 422
+
+
+def test_um_p0001_que_nao_e_dos_seis_nao_e_engolido(
     client: TestClient, cabecalho: dict[str, str], db
 ):
     db(publish=_TriggerRefusal("algo_novo"))
@@ -732,6 +800,48 @@ def test_testar_com_rascunho_grava_o_hash_e_aponta_para_a_plataforma(
     assert "Vocabulário v2" not in prompt
 
 
+def test_o_done_do_teste_diz_o_que_rodou_e_nao_o_que_a_tela_pediu(
+    client: TestClient, cabecalho: dict[str, str], db, turno_real: dict[str, Any]
+):
+    """O selo "Rascunho" da tela sai do `done`, e o `done` sai do registro.
+
+    Hoje `use_draft` e o que rodou coincidem, porque testar sem rascunho é
+    404 antes do stream. No dia em que isso virar fallback, o pedido mentiria
+    e o hash não: é ele que a tela tem de ler.
+    """
+    db(draft=draft_row(content="Rascunho: chame de pátio."))
+
+    resposta = client.post(
+        "/assistente/configuracao/testar",
+        json={"question": "quantos desvios?", "use_draft": True},
+        headers=cabecalho,
+    )
+
+    nome, dados = _eventos(resposta.text)[-1]
+    assert nome == "done"
+    assert (
+        dados["draft_content_hash"]
+        == hashlib.sha256("Rascunho: chame de pátio.".encode()).hexdigest()
+    )
+    assert dados["prompt_version_id"] == str(PLATFORM_V1)
+
+
+def test_o_done_do_teste_sem_rascunho_nao_carrega_hash(
+    client: TestClient, cabecalho: dict[str, str], db, turno_real: dict[str, Any]
+):
+    db()
+
+    resposta = client.post(
+        "/assistente/configuracao/testar",
+        json={"question": "quantos desvios?", "use_draft": False},
+        headers=cabecalho,
+    )
+
+    _, dados = _eventos(resposta.text)[-1]
+    assert dados["draft_content_hash"] is None
+    assert dados["prompt_version_id"] == str(TENANT_V2)
+
+
 def test_testar_com_rascunho_sem_ser_admin_e_403_e_nao_roda(
     client: TestClient, cabecalho: dict[str, str], db, turno_real: dict[str, Any]
 ):
@@ -836,6 +946,160 @@ def test_toda_escrita_passa_pelo_admin_antes_da_transacao():
         if "tenant_scope(" not in rota or rota.startswith('post("/publicar")'):
             continue
         assert rota.index("_require_admin(") < rota.index("tenant_scope("), rota[:60]
+
+
+# ---------------------------------------------------------------------------
+# GET /execucoes e GET /custo
+# ---------------------------------------------------------------------------
+RUN_ROW = {
+    "created_at": WHEN,
+    "question": "quantos desvios ontem?",
+    "metric_code": "deviations_total",
+    "rows_returned": 3,
+    "latency_ms": 500,
+    "input_tokens": 100,
+    "output_tokens": 20,
+    "model": "fake-1",
+    "refused": False,
+    "refusal_reason": None,
+    "prompt_version_id": TENANT_V2,
+    "version_label": "v2",
+}
+
+COST_ROW = {
+    "month_start": "2026-09-01",
+    "version_label": "antes do versionamento",
+    "prompt_version_id": None,
+    "model": "gpt-5.4-mini",
+    "runs": 4,
+    "refused_runs": 1,
+    "input_tokens": 400,
+    "output_tokens": 90,
+    "avg_latency_ms": "275.5",
+}
+
+
+def test_execucoes_traz_o_turno_com_a_versao_que_o_produziu(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    user, _, _ = db(
+        runs=[
+            RUN_ROW,
+            RUN_ROW | {"prompt_version_id": None, "version_label": "antes do versionamento"},
+        ]
+    )
+
+    resposta = client.get("/assistente/configuracao/execucoes", headers=cabecalho)
+
+    assert resposta.status_code == 200
+    primeira, segunda = resposta.json()
+    assert primeira["version_label"] == "v2"
+    assert primeira["prompt_version_id"] == str(TENANT_V2)
+    assert primeira["metric_code"] == "deviations_total"
+    assert primeira["input_tokens"] == 100
+    # A linha anterior ao versionamento chega rotulada, e nunca como "v1".
+    assert segunda["prompt_version_id"] is None
+    assert segunda["version_label"] == "antes do versionamento"
+    assert "public.fn_assistant_runs(%(weeks)s)" in user.statements[0]
+    assert user.params[0] == {"weeks": 8}
+
+
+def test_execucoes_aceita_a_janela_e_recusa_a_de_fora_da_faixa(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    user, _, _ = db(runs=[])
+
+    assert (
+        client.get("/assistente/configuracao/execucoes?weeks=12", headers=cabecalho).status_code
+        == 200
+    )
+    assert user.params[0] == {"weeks": 12}
+    for fora in ("0", "53", "-1"):
+        resposta = client.get(f"/assistente/configuracao/execucoes?weeks={fora}", headers=cabecalho)
+        assert resposta.status_code == 422, fora
+
+
+def test_execucoes_nao_pede_admin_porque_a_policy_ja_recorta(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """`fn_assistant_runs` é invoker e `ai_query_read` é próprio-ou-admin: um
+    membro comum vendo os próprios turnos é o desenho, não um furo."""
+    user, _, _ = db(admin=False, runs=[RUN_ROW])
+
+    resposta = client.get("/assistente/configuracao/execucoes", headers=cabecalho)
+
+    assert resposta.status_code == 200
+    assert len(resposta.json()) == 1
+    assert not any("util.is_admin" in statement for statement in user.statements)
+
+
+def test_custo_quebra_a_competencia_por_versao(client: TestClient, cabecalho: dict[str, str], db):
+    user, _, _ = db(
+        cost=[COST_ROW, COST_ROW | {"version_label": "v2", "prompt_version_id": TENANT_V2}]
+    )
+
+    resposta = client.get("/assistente/configuracao/custo?weeks=4", headers=cabecalho)
+
+    assert resposta.status_code == 200
+    sem_versao, com_versao = resposta.json()
+    assert sem_versao["version_label"] == "antes do versionamento"
+    assert sem_versao["prompt_version_id"] is None
+    assert sem_versao["runs"] == 4
+    assert sem_versao["refused_runs"] == 1
+    assert sem_versao["avg_latency_ms"] == "275.5"
+    assert com_versao["prompt_version_id"] == str(TENANT_V2)
+    assert "public.fn_assistant_cost_by_version(%(weeks)s)" in user.statements[0]
+    assert user.params[0] == {"weeks": 4}
+
+
+def test_o_custo_separa_a_mesma_versao_em_dois_modelos(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """O modelo está na chave porque é ele que vira preço.
+
+    A versão gravada é a do tenant, mas quem escolhe o modelo é a camada de
+    plataforma, que o registro não guarda: republicar a doutrina troca o preço
+    sem mover o rótulo. Sem o modelo na linha, "a v2 custou X" soma dois
+    preços — medido em 20/09/2026.
+    """
+    base = COST_ROW | {"version_label": "v2", "prompt_version_id": TENANT_V2}
+    db(
+        cost=[
+            base | {"model": "gpt-5.4-mini", "runs": 4, "input_tokens": 400},
+            base | {"model": "gpt-5.4", "runs": 1, "input_tokens": 900},
+        ]
+    )
+
+    corpo = client.get("/assistente/configuracao/custo", headers=cabecalho).json()
+
+    assert [linha["model"] for linha in corpo] == ["gpt-5.4-mini", "gpt-5.4"]
+    assert [linha["version_label"] for linha in corpo] == ["v2", "v2"]
+    # Duas linhas, e não uma soma de 5 turnos: o rótulo é o mesmo, o preço não.
+    assert [linha["runs"] for linha in corpo] == [4, 1]
+
+
+def test_custo_recusa_a_janela_fora_da_faixa(client: TestClient, cabecalho: dict[str, str], db):
+    db(cost=[])
+
+    assert (
+        client.get("/assistente/configuracao/custo?weeks=0", headers=cabecalho).status_code == 422
+    )
+    assert (
+        client.get("/assistente/configuracao/custo?weeks=53", headers=cabecalho).status_code == 422
+    )
+
+
+def test_as_duas_leituras_de_execucoes_nao_abrem_transacao_de_service_role(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """Leitura como o usuário, sempre: `tenant_scope` ignora RLS, e aqui é a
+    RLS que responde quem vê o quê."""
+    _, _, bound_ctx = db(runs=[RUN_ROW], cost=[COST_ROW])
+
+    client.get("/assistente/configuracao/execucoes", headers=cabecalho)
+    client.get("/assistente/configuracao/custo", headers=cabecalho)
+
+    assert bound_ctx.opened == 0
 
 
 def test_e2e_intocado():

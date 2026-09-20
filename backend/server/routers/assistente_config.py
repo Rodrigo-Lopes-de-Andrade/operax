@@ -23,9 +23,17 @@ is the contract; the pointer moves by one `update` under `tenant_scope`.
 
 PUBLISHING CALLS THE RPC AS THE USER
 `fn_publish_assistant_prompt` is `security definer` and checks `is_admin` by
-`auth.uid()` itself, so it is called under `user_scope` and its five `P0001`
+`auth.uid()` itself, so it is called under `user_scope` and its six `P0001`
 codes become HTTP here — always `{"detail": "<code>"}`, so the screen keys on
-the code. The audit line comes after, under `tenant_scope`.
+the code. The audit line comes after, under `tenant_scope`. `seen_updated_at`
+is what the screen read: the RPC answers `draft_moved` when the draft changed
+under it, and a body that does not send it keeps the behaviour of before.
+
+READING THE RUNS IS THE POLICY, NOT THE ROUTE
+`/execucoes` and `/custo` have no `_require_admin`: the two RPCs are
+`security invoker` and `ai_query_read` is own-or-admin, so a common member
+seeing their own turns is the design. Adding a role check here would be a
+second copy of that rule, drifting at the first change.
 
 THE DRAFT FREEZES ITS ORIGIN ONLY ON INSERT
 `PUT /rascunho` sets `frozen_from_version_id` to the tenant version on the air
@@ -39,10 +47,10 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Mapping
-from typing import Any
+from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from fastapi.responses import StreamingResponse
 from psycopg import errors
 from psycopg.types.json import Jsonb
@@ -50,13 +58,16 @@ from psycopg.types.json import Jsonb
 from operax.core.tenant import TenantContext, tenant_scope, user_scope
 from server.deps import CurrentTenant
 from server.models import (
+    AssistantCostByVersion,
     AssistantDraft,
+    AssistantRun,
     AssistantTest,
     CapabilityRow,
     CapabilityWrite,
     DraftWrite,
     PlatformLayer,
     PromptScreen,
+    PublishRequest,
     PublishResult,
     TenantLayer,
     VersionRow,
@@ -78,12 +89,15 @@ _VERSAO_NAO_ENCONTRADA = "Versão não encontrada."
 _METRICA_NAO_ENCONTRADA = "Métrica não encontrada."
 _SEM_CONFIGURACAO = "O assistente está sem configuração publicada."
 
-#: The five refusals of `fn_publish_assistant_prompt`, each `P0001` with the
-#: code as the message (migration `assistant_publish_fn`), and the status each
-#: one gets. `detail` is the code itself: the screen keys on it.
+#: The six refusals of `fn_publish_assistant_prompt`, each `P0001` with the
+#: code as the message (migrations `assistant_publish_fn` and
+#: `assistant_runs_fn`), and the status each one gets. `detail` is the code
+#: itself: the screen keys on it. `draft_moved` is a 409 for the same reason
+#: `draft_unchanged` is: the request is well formed and the state refuses it.
 _PUBLISH_STATUS = {
     "not_admin": status.HTTP_403_FORBIDDEN,
     "draft_not_found": status.HTTP_404_NOT_FOUND,
+    "draft_moved": status.HTTP_409_CONFLICT,
     "draft_empty": status.HTTP_422_UNPROCESSABLE_CONTENT,
     "platform_layer_missing": status.HTTP_409_CONFLICT,
     "draft_unchanged": status.HTTP_409_CONFLICT,
@@ -141,8 +155,29 @@ _RESTORABLE_VERSION_SQL = """
 
 _PUBLISH_SQL = """
     select version_id, version_number, previous_version_id
-    from public.fn_publish_assistant_prompt(%(tenant_id)s)
+    from public.fn_publish_assistant_prompt(%(tenant_id)s, %(seen_updated_at)s)
 """
+
+#: The real traffic of whoever calls, newest first. `security invoker`: the
+#: policy of `app.ai_query` is the cut, and there is no role check around it.
+_RUNS_SQL = """
+    select created_at, question, metric_code, rows_returned, latency_ms,
+           input_tokens, output_tokens, model, refused, refusal_reason,
+           prompt_version_id, version_label
+    from public.fn_assistant_runs(%(weeks)s)
+"""
+
+_COST_SQL = """
+    select month_start, version_label, prompt_version_id, runs, refused_runs,
+           input_tokens, output_tokens, avg_latency_ms
+    from public.fn_assistant_cost_by_version(%(weeks)s)
+"""
+
+#: A janela das duas telas de Execuções, em semanas, a atual inclusa. O teto
+#: de um ano é o da tela, não o da função: `p_weeks` maior devolveria o log
+#: inteiro numa resposta só, e a aba pagina por período, não por linha.
+WeeksWindow = Annotated[int, Query(ge=1, le=52, description="Semanas, a atual inclusa")]
+_DEFAULT_WEEKS = 8
 
 #: Every row, as the caller sees it: the tab shows the disabled and the
 #: out-of-reach ones too. `target_view`, `dimensions`, `filters` stay inside.
@@ -376,14 +411,23 @@ async def save_draft(tenant: CurrentTenant, request: DraftWrite) -> AssistantDra
 
 
 @router.post("/publicar")
-async def publish(tenant: CurrentTenant) -> PublishResult:
+async def publish(tenant: CurrentTenant, payload: PublishRequest | None = None) -> PublishResult:
     """Freeze the draft into a version and move the pointer — the RPC, called
-    as the user (definer; it checks `is_admin` itself). The five `P0001`
-    codes become HTTP with `detail` = the code. Audit after, under
-    `tenant_scope`."""
+    as the user (definer; it checks `is_admin` itself). The six `P0001` codes
+    become HTTP with `detail` = the code. Audit after, under `tenant_scope`.
+
+    The body is optional, and so is `seen_updated_at` inside it: without it
+    the RPC publishes whatever is in the draft, which is what every caller
+    written before this parameter does. With it, a draft that moved between
+    the read and the click is `draft_moved` (409) instead of one admin
+    publishing the other's text.
+    """
+    seen = payload.seen_updated_at if payload is not None else None
     try:
         async with user_scope(tenant) as scope:
-            await scope.execute(_PUBLISH_SQL, {"tenant_id": tenant.tenant_id})
+            await scope.execute(
+                _PUBLISH_SQL, {"tenant_id": tenant.tenant_id, "seen_updated_at": seen}
+            )
             row = await scope.fetchone()
     except errors.RaiseException as recusa:
         code = recusa.diag.message_primary or ""
@@ -570,3 +614,36 @@ async def test_prompt(payload: AssistantTest, tenant: CurrentTenant) -> Streamin
     return await assistente.answer(
         tenant, payload.question, payload.model, dry_run=True, tenant_override=override
     )
+
+
+# ---------------------------------------------------------------------------
+# Execuções
+# ---------------------------------------------------------------------------
+@router.get("/execucoes")
+async def runs(tenant: CurrentTenant, weeks: WeeksWindow = _DEFAULT_WEEKS) -> list[AssistantRun]:
+    """The real traffic of the window, newest first — never a dry run.
+
+    No `_require_admin`: `fn_assistant_runs` is `security invoker` and
+    `ai_query_read` is own-or-admin, so an admin reads the tenant's turns and
+    a common member reads their own. That is the cut, and it is the policy's.
+    """
+    async with user_scope(tenant) as scope:
+        await scope.execute(_RUNS_SQL, {"weeks": weeks})
+        rows = await scope.fetchall()
+    return [AssistantRun.model_validate(dict(row)) for row in rows]
+
+
+@router.get("/custo")
+async def cost(
+    tenant: CurrentTenant, weeks: WeeksWindow = _DEFAULT_WEEKS
+) -> list[AssistantCostByVersion]:
+    """Cost per competência broken down by prompt version, newest month first.
+
+    The same window and the same invoker cut as `/execucoes`. Dry run is out
+    of every average: a test is not traffic, and it would move the only
+    number this stage produces (SPEC-AGENTE §0.3).
+    """
+    async with user_scope(tenant) as scope:
+        await scope.execute(_COST_SQL, {"weeks": weeks})
+        rows = await scope.fetchall()
+    return [AssistantCostByVersion.model_validate(dict(row)) for row in rows]

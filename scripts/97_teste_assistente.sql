@@ -1,9 +1,10 @@
 -- ============================================================================
 -- OperaX — TESTE DAS CAMADAS DO ASSISTENTE (SPEC-AGENTE §2, §3a, §3b, §3c, §3d, §3e, §4, §5)
 -- ----------------------------------------------------------------------------
--- 164 asserções (95 do A1 + 46 do A2 + 23 do A3), contadas pelas chamadas a
--- assert_eq, deve_falhar e rpc_recusa. Garantias que só valem se o banco as
--- sustentar:
+-- 221 asserções (95 do A1 + 46 do A2 + 23 do A3 + 57 do A4), contadas pelas
+-- chamadas a assert_eq, deve_falhar, rpc_recusa e rpc_recusa_seen. A saída traz
+-- 226 linhas de `ok`, e não 221: o laço da A4-e roda cinco chamadas para cada
+-- uma das duas funções. Garantias que só valem se o banco as sustentar:
 --
 --   A) As sete linhas da SPEC §3a — coerência de escopo, modelo só na
 --      plataforma, versão imutável, um ponteiro por escopo, versão apontada
@@ -38,6 +39,17 @@
 --      supervisor só o próprio, o outro tenant nada — o `98` não cobre
 --      ai_query); e a MEDIÇÃO de que a FK aceita versão de outro tenant — é
 --      log, e não há trigger de escopo nele de propósito.
+--   A4) A sexta recusa e a aba Execuções (SPEC-AGENTE §0.3, §3d; migration
+--      `assistant_runs_fn`): `draft_moved` na POSIÇÃO dele — depois de
+--      `draft_not_found` (sem rascunho não há o que comparar) e antes de
+--      `draft_empty` (a quem teve o texto trocado não se manda escrever de
+--      novo) —, o nulo publicando como antes e a chamada de um argumento
+--      ainda valendo pelo default; e as duas funções da tela como os papéis:
+--      dry run fora das duas, turno de outro tenant fora, supervisor só o
+--      próprio e owner o tenant (não-vácuo dos dois lados), a janela cortando
+--      linha e custo, a soma batendo com a soma bruta, competências
+--      separadas, e `version_label` dizendo "antes do versionamento" onde a
+--      procedência não existe — nunca "v1".
 --
 -- A fidelidade da transcrição da v1 (o texto da migration renderizado ==
 -- o que agente._prompt produzia, pinado em fixture antes de o literal sair)
@@ -1184,6 +1196,432 @@ do $$ begin
     'permission denied');
 end $$;
 reset role;
+
+-- ===========================================================================
+\echo '--- A4. draft_moved, e a tela de Execuções (SPEC-AGENTE §0.3, §3c, §3d)'
+-- ===========================================================================
+-- Migration `assistant_runs_fn`: a sexta recusa da RPC de publicação e as
+-- duas funções que a aba Execuções lê. Aqui: a POSIÇÃO de `draft_moved` (o
+-- que separa "outra pessoa mexeu" de "não há rascunho" e de "está em
+-- branco"), o nulo como compatibilidade, e as duas funções como os papéis —
+-- dry run fora, outro tenant fora, janela cortando, e `version_label` dizendo
+-- "antes do versionamento" onde a procedência não existe.
+
+-- Chama a RPC com o segundo argumento e exige o código EXATO, com P0001.
+create or replace function pg_temp.rpc_recusa_seen(rotulo text, p_tenant uuid,
+                                                   p_seen timestamptz, codigo text)
+returns void language plpgsql as $$
+begin
+  begin
+    perform * from public.fn_publish_assistant_prompt(p_tenant, p_seen);
+  exception when others then
+    if sqlerrm <> codigo or sqlstate <> 'P0001' then
+      raise exception 'FALHA [%]: esperava % (P0001), veio % (%)', rotulo, codigo, sqlerrm, sqlstate;
+    end if;
+    raise notice '  ok  % — %', rotulo, codigo;
+    return;
+  end;
+  raise exception 'FALHA [%]: a RPC deveria ter recusado com % e publicou', rotulo, codigo;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- (a) draft_moved: a publicação sabe qual rascunho a tela viu
+-- ---------------------------------------------------------------------------
+-- Um tenant D sem rascunho, do qual o owner A também é owner: é ele que prova
+-- a ordem `draft_not_found` < `draft_moved` sem depender do rascunho de A.
+reset role;
+insert into app.tenant (id, slug, name)
+values ('a1d00000-0000-0000-0000-00000000000d', 'assist-d', 'Cliente Assistente D');
+insert into app.tenant_member (tenant_id, user_id, role)
+values ('a1d00000-0000-0000-0000-00000000000d', 'a1000000-0000-0000-0000-000000000001', 'owner');
+
+\echo '    (a) owner A, com o rascunho de A'
+set local role authenticated;
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$
+declare
+  v_a    uuid := 'a1a00000-0000-0000-0000-00000000000a';
+  v_d    uuid := 'a1d00000-0000-0000-0000-00000000000d';
+  v_seen timestamptz;
+  v_max  integer;
+  r      record;
+begin
+  -- O rascunho de A muda (o trigger move o updated_at) e a tela o lê. Daqui
+  -- em diante `v_seen` é "o que a tela viu".
+  update app.assistant_draft set content = 'Rascunho A4: o que a tela leu.' where tenant_id = v_a;
+  select d.updated_at into v_seen from app.assistant_draft d where d.tenant_id = v_a;
+
+  -- 1. O rascunho mudou depois da leitura: recusado, e nada publicado.
+  select coalesce(max(v.version_number), 0) into v_max
+    from app.assistant_prompt_version v where v.tenant_id = v_a and v.layer = 'tenant';
+  perform pg_temp.rpc_recusa_seen('A4-a1. seen_updated_at anterior ao do rascunho é draft_moved',
+    v_a, v_seen - interval '1 minute', 'draft_moved');
+  perform pg_temp.assert_eq('A4-a2. e nada foi publicado (o número máximo não andou)',
+    (select coalesce(max(v.version_number), 0) from app.assistant_prompt_version v
+      where v.tenant_id = v_a and v.layer = 'tenant'), v_max);
+
+  -- 2. O mesmo updated_at: publica, e numera por max + 1 (a v90 da A3 está no
+  --    meio — é ela que faz este número não ser 5).
+  select * into r from public.fn_publish_assistant_prompt(v_a, v_seen);
+  perform pg_temp.assert_eq('A4-a3. o mesmo updated_at publica, numerando max + 1',
+    r.version_number, v_max + 1);
+
+  -- 3. Nulo = a tela não mandou = o comportamento de antes deste parâmetro.
+  --    (o conteúdo muda antes, senão a recusa seria draft_unchanged)
+  update app.assistant_draft set content = 'Rascunho A4: publicado sem dizer o que vi.' where tenant_id = v_a;
+  select * into r from public.fn_publish_assistant_prompt(v_a, null);
+  perform pg_temp.assert_eq('A4-a4. p_seen_updated_at nulo publica (compatível com o chamador antigo)',
+    r.version_number, v_max + 2);
+  -- E a CHAMADA de um argumento continua válida: o drop tirou a função de
+  -- uma assinatura, mas o default responde por ela — é nisso que consiste a
+  -- compatibilidade. Aqui o rascunho acabou de virar a versão apontada, então
+  -- a resposta é draft_unchanged: ela prova que a chamada chegou ao corpo, e
+  -- não que a função sumiu.
+  perform pg_temp.rpc_recusa('A4-a5. a chamada de um argumento continua válida (o default responde por ela)',
+    v_a, 'draft_unchanged');
+
+  -- 4. ORDEM, lado de baixo: sem rascunho, o seen errado não é julgado —
+  --    `draft_not_found` vem antes, porque sem rascunho não há o que comparar.
+  perform pg_temp.rpc_recusa_seen('A4-a6. sem rascunho + seen errado é draft_not_found, não draft_moved',
+    v_d, '2000-01-01'::timestamptz, 'draft_not_found');
+
+  -- 5. ORDEM, lado de cima: rascunho em branco + seen errado é draft_moved.
+  --    Dizer "o rascunho está vazio" para quem teve o texto trocado por outra
+  --    pessoa manda escrever de novo exatamente quem não deveria.
+  update app.assistant_draft set content = '   ' where tenant_id = v_a;
+  perform pg_temp.rpc_recusa_seen('A4-a7. rascunho em branco + seen errado é draft_moved, não draft_empty',
+    v_a, '2000-01-01'::timestamptz, 'draft_moved');
+  -- E com o seen certo o branco volta a ser draft_empty: a ordem não engoliu a recusa.
+  select d.updated_at into v_seen from app.assistant_draft d where d.tenant_id = v_a;
+  perform pg_temp.rpc_recusa_seen('A4-a8. rascunho em branco + seen certo volta a ser draft_empty',
+    v_a, v_seen, 'draft_empty');
+end $$;
+
+-- E quem não é admin continua sem aprender nada: o seen errado não muda a
+-- resposta de quem não passou do primeiro portão.
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000002';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000002","role":"authenticated"}';
+do $$ begin
+  perform pg_temp.rpc_recusa_seen('A4-a9. supervisor de A com seen errado recebe not_admin, não draft_moved',
+    'a1a00000-0000-0000-0000-00000000000a', '2000-01-01'::timestamptz, 'not_admin');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- (b) O cenário da aba Execuções, como dono do banco
+-- ---------------------------------------------------------------------------
+-- Sete turnos plantados sobre os três que a A3 deixou (2 reais de A + 1 dry
+-- run). Cada um existe para uma pergunta: o dry run que não pode contar, o
+-- turno de outro tenant, a linha sem versão, a linha fora da janela, a
+-- competência anterior e a recusa.
+\echo '    (b) o cenário: dry run, outro tenant, sem versão, fora da janela e outra competência'
+reset role;
+do $$
+declare
+  v_a        uuid := 'a1a00000-0000-0000-0000-00000000000a';
+  v_b        uuid := 'a1b00000-0000-0000-0000-00000000000b';
+  v_owner_a  uuid := 'a1000000-0000-0000-0000-000000000001';
+  v_super_a  uuid := 'a1000000-0000-0000-0000-000000000002';
+  v_owner_b  uuid := 'a1000000-0000-0000-0000-000000000004';
+  v_rotulo   uuid;
+  v_platform uuid;
+  v_b_v1     uuid;
+begin
+  -- Uma versão de tenant com número conhecido, para o rótulo ser conferível
+  -- por texto exato e não por aritmética.
+  insert into app.assistant_prompt_version (tenant_id, layer, version_number, content)
+  values (v_a, 'tenant', 7, 'versão de rótulo') returning id into v_rotulo;
+  select p.version_id into v_platform from app.assistant_prompt_pointer p where p.layer = 'platform';
+  select p.version_id into v_b_v1 from app.assistant_prompt_pointer p
+   where p.tenant_id = v_b and p.layer = 'tenant';
+
+  insert into app.ai_query (tenant_id, user_id, question, model, metric_code, rows_returned,
+                            latency_ms, input_tokens, output_tokens, refused, refusal_reason,
+                            prompt_version_id, is_dry_run, draft_content_hash, created_at)
+  values
+    -- R1: turno real do owner, na versão 7 do tenant.
+    (v_a, v_owner_a, 'A4 R1 real na v7', 'fake-1', 'deviations_total', 3,
+     500, 100, 20, false, null, v_rotulo, false, null, now()),
+    -- R2 e R2b: sem versão — as linhas anteriores ao versionamento. Duas, para
+    -- que "versão nula vira a mesma etiqueta" seja uma soma e não um singular.
+    (v_a, v_owner_a, 'A4 R2 sem versão', 'fake-1', null, null,
+     300, 50, 10, false, null, null, false, null, now()),
+    (v_a, v_owner_a, 'A4 R2b sem versão', 'fake-1', null, null,
+     null, 5, 5, false, null, null, false, null, now()),
+    -- R3: turno do supervisor, na camada de plataforma.
+    (v_a, v_super_a, 'A4 R3 do supervisor', 'fake-1', 'deviations_total', 1,
+     100, 10, 5, false, null, v_platform, false, null, now()),
+    -- R4: DRY RUN caro. Se ele entrar em qualquer média, ela está errada.
+    (v_a, v_owner_a, 'A4 R4 dry run caríssimo', 'fake-1', null, null,
+     9999, 999, 999, false, null, v_platform, true, repeat('a', 64), now()),
+    -- R5: recusa — resposta válida, e é ela que faz refused_runs não ser zero.
+    -- ⛔ E num modelo DIFERENTE do R1, na MESMA versão: é o par que prova que o
+    -- custo separa por modelo. A doutrina republicada troca o modelo sem mudar
+    -- a camada do tenant, e sem esta linha os dois preços virariam um só.
+    (v_a, v_owner_a, 'A4 R5 recusado', 'fake-2', null, null,
+     50, 7, 0, true, 'fora_do_catalogo', v_rotulo, false, null, now()),
+    -- R6: real, mas velho demais para a janela padrão.
+    (v_a, v_owner_a, 'A4 R6 fora da janela', 'fake-1', null, null,
+     70, 1000, 1000, false, null, v_rotulo, false, null, now() - interval '20 weeks'),
+    -- R7: competência anterior, dentro da janela.
+    (v_a, v_owner_a, 'A4 R7 competência anterior', 'fake-1', null, null,
+     90, 3, 2, false, null, v_rotulo, false, null, date_trunc('month', now()) - interval '1 day'),
+    -- R8: outro tenant.
+    (v_b, v_owner_b, 'A4 R8 do tenant B', 'fake-1', null, null,
+     80, 500, 500, false, null, v_b_v1, false, null, now()),
+    -- R9: turno de A apontando para a versão de B. A FK aceita (§A3-b1 mede
+    -- que aceita: ai_query é log e não tem trigger de escopo, de propósito), e
+    -- sob invoker o join vem vazio. É o quarto ramo do rótulo, e sem ele esta
+    -- linha sairia com rótulo NULO — que o Pydantic recusa e vira 500 na aba
+    -- inteira — ou, pior, como "antes do versionamento": um turno que TEM
+    -- versão apresentado como anterior ao versionamento.
+    (v_a, v_owner_a, 'A4 R9 versão de outro tenant', 'fake-1', null, null,
+     60, 11, 3, false, null, v_b_v1, false, null, now());
+  perform pg_temp.assert_eq('A4-b0. o cenário tem 10 turnos novos (9 de A, 1 de B)',
+    (select count(*) from app.ai_query where question like 'A4 R%'), 10);
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- (c) fn_assistant_runs como os papéis
+-- ---------------------------------------------------------------------------
+\echo '    (c) fn_assistant_runs: owner A vê o tenant, supervisor vê o próprio, B não vê A'
+set local role authenticated;
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$ begin
+  -- Os 9 reais de A dentro da janela: 2 da A3 + R1, R2, R2b, R3, R5, R7, R9.
+  perform pg_temp.assert_eq('A4-c1. owner A lê os 9 turnos reais de A na janela padrão',
+    (select count(*) from public.fn_assistant_runs()), 9);
+  -- ⛔ O dry run NÃO aparece — nem o da A3, nem o R4.
+  perform pg_temp.assert_eq('A4-c2. nenhum dry run aparece (nem o R4 caríssimo, nem o da A3)',
+    (select count(*) from public.fn_assistant_runs()
+      where question in ('A4 R4 dry run caríssimo', 'teste do rascunho')), 0);
+  -- ⛔ Nem o turno de outro tenant.
+  perform pg_temp.assert_eq('A4-c3. o turno do tenant B não aparece para A',
+    (select count(*) from public.fn_assistant_runs() where question = 'A4 R8 do tenant B'), 0);
+
+  -- Os três rótulos, por texto exato.
+  perform pg_temp.assert_eq('A4-c4. versão nula vira "antes do versionamento" (as duas linhas)',
+    (select count(*) from public.fn_assistant_runs()
+      where prompt_version_id is null and version_label = 'antes do versionamento'), 2);
+  perform pg_temp.assert_eq('A4-c5. e NUNCA "v1" — atribuir seria inventar procedência',
+    (select count(*) from public.fn_assistant_runs()
+      where prompt_version_id is null and version_label <> 'antes do versionamento'), 0);
+  perform pg_temp.assert_eq('A4-c6. camada de tenant vira "v7" (R1, R5 e o R7 do mês anterior)',
+    (select count(*) from public.fn_assistant_runs() where version_label = 'v7'), 3);
+  perform pg_temp.assert_eq('A4-c7. camada de plataforma vira "plataforma v1"',
+    (select count(*) from public.fn_assistant_runs()
+      where question = 'A4 R3 do supervisor' and version_label = 'plataforma v1'), 1);
+  -- ⛔ O quarto ramo: a linha cuja versão o leitor não alcança. Sem ele o
+  -- rótulo sairia NULO (e `AssistantRun.version_label` é `str`, então a rota
+  -- inteira vira 500 por causa de uma linha de log) ou, se o nulo fosse
+  -- testado no resultado do join em vez de na coluna, sairia como "antes do
+  -- versionamento" — um turno COM versão apresentado como anterior a ela.
+  perform pg_temp.assert_eq('A4-c8a. versão de outro tenant vira "versão fora do alcance"',
+    (select count(*) from public.fn_assistant_runs()
+      where question = 'A4 R9 versão de outro tenant'
+        and version_label = 'versão fora do alcance'), 1);
+  perform pg_temp.assert_eq('A4-c8b. e NUNCA "antes do versionamento" — ela TEM versão',
+    (select count(*) from public.fn_assistant_runs()
+      where question = 'A4 R9 versão de outro tenant'
+        and (prompt_version_id is null or version_label = 'antes do versionamento')), 0);
+  perform pg_temp.assert_eq('A4-c8. nenhum rótulo sai nulo ou vazio',
+    (select count(*) from public.fn_assistant_runs() where coalesce(version_label, '') = ''), 0);
+
+  -- O resto da linha chega inteiro: é o que a aba mostra por turno.
+  perform pg_temp.assert_eq('A4-c9. a linha traz métrica, linhas, latência, tokens, modelo e recusa',
+    (select count(*) from public.fn_assistant_runs()
+      where question = 'A4 R1 real na v7' and metric_code = 'deviations_total'
+        and rows_returned = 3 and latency_ms = 500 and input_tokens = 100
+        and output_tokens = 20 and model = 'fake-1' and not refused), 1);
+  perform pg_temp.assert_eq('A4-c10. a recusa chega com o motivo (recusa é resposta, não erro)',
+    (select count(*) from public.fn_assistant_runs()
+      where question = 'A4 R5 recusado' and refused and refusal_reason = 'fora_do_catalogo'), 1);
+
+  -- Mais novo primeiro: nenhuma linha é mais nova do que a anterior.
+  perform pg_temp.assert_eq('A4-c11. a ordem é do mais novo para o mais velho',
+    (select count(*) from (
+       select created_at, lag(created_at) over () as anterior from public.fn_assistant_runs()
+     ) t where t.anterior is not null and t.anterior < t.created_at), 0);
+
+  -- A janela: o R6 só entra numa janela larga.
+  perform pg_temp.assert_eq('A4-c12. a janela padrão corta o turno de 20 semanas atrás',
+    (select count(*) from public.fn_assistant_runs() where question = 'A4 R6 fora da janela'), 0);
+  perform pg_temp.assert_eq('A4-c13. e uma janela de 52 semanas o traz de volta',
+    (select count(*) from public.fn_assistant_runs(52) where question = 'A4 R6 fora da janela'), 1);
+  perform pg_temp.assert_eq('A4-c14. p_weeks zero ou negativo é a semana corrente, nunca "tudo"',
+    (select count(*) from public.fn_assistant_runs(0) where question = 'A4 R6 fora da janela'), 0);
+end $$;
+
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000002';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000002","role":"authenticated"}';
+do $$ begin
+  -- ⛔ A função é invoker para herdar `ai_query_read` (próprio OU is_admin).
+  -- Quem não é admin vê só os próprios turnos, e isso é o certo.
+  perform pg_temp.assert_eq('A4-c15. supervisor de A lê só os próprios turnos (2, não 8)',
+    (select count(*) from public.fn_assistant_runs()), 2);
+  perform pg_temp.assert_eq('A4-c16. e os dois são dele (não-vácuo dos dois lados)',
+    (select count(*) from public.fn_assistant_runs()
+      where question in ('A4 R3 do supervisor', 'turno do supervisor A')), 2);
+end $$;
+
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000004';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000004","role":"authenticated"}';
+do $$ begin
+  perform pg_temp.assert_eq('A4-c17. owner B lê só o turno de B',
+    (select count(*) from public.fn_assistant_runs()), 1);
+  perform pg_temp.assert_eq('A4-c18. e o rótulo dele é a v1 do próprio tenant',
+    (select count(*) from public.fn_assistant_runs()
+      where question = 'A4 R8 do tenant B' and version_label = 'v1'), 1);
+end $$;
+
+set local role anon;
+do $$ begin
+  perform pg_temp.deve_falhar('A4-c19. anon não executa fn_assistant_runs',
+    $q$select * from public.fn_assistant_runs()$q$, 'permission denied');
+end $$;
+reset role;
+
+-- ---------------------------------------------------------------------------
+-- (d) fn_assistant_cost_by_version — o gate da etapa
+-- ---------------------------------------------------------------------------
+-- Token sem versão não vira custo: preço segue o modelo, e o modelo segue a
+-- versão (SPEC §0.3). A soma tem de bater com a soma bruta das linhas reais —
+-- e NÃO bater com a que inclui o dry run, senão o teste seria vácuo.
+\echo '    (d) fn_assistant_cost_by_version: a soma bate, o dry run fica fora'
+set local role authenticated;
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$
+declare
+  v_inicio  timestamptz := date_trunc('week', now()) - make_interval(weeks => 7);
+  v_funcao  bigint;
+  v_bruto   bigint;
+  v_com_dry bigint;
+begin
+  select coalesce(sum(c.input_tokens), 0) into v_funcao from public.fn_assistant_cost_by_version() c;
+  select coalesce(sum(q.input_tokens), 0) into v_bruto from app.ai_query q
+   where not q.is_dry_run and q.created_at >= v_inicio;
+  select coalesce(sum(q.input_tokens), 0) into v_com_dry from app.ai_query q
+   where q.created_at >= v_inicio;
+  perform pg_temp.assert_eq('A4-d1. a soma de entrada bate com a soma bruta das linhas reais',
+    v_funcao, v_bruto);
+  perform pg_temp.assert_eq('A4-d2. e NÃO bate com a soma que inclui o dry run (o teste não é vácuo)',
+    case when v_funcao = v_com_dry then 1 else 0 end, 0);
+  perform pg_temp.assert_eq('A4-d3. o dry run de 999 tokens está fora da conta',
+    v_com_dry - v_funcao, 999);
+
+  -- ⛔ O modelo está na chave, e é o que vira preço. A versão gravada é a do
+  -- tenant; quem escolhe o modelo é a camada de plataforma, que o registro não
+  -- guarda. Sem o modelo aqui, republicar a doutrina troca o preço sem mover o
+  -- rótulo, e a linha soma dois preços — medido em 20/09/2026.
+  perform pg_temp.assert_eq('A4-d3c. mesma versão em dois modelos vira DOIS grupos, não um',
+    (select count(*) from public.fn_assistant_cost_by_version() c
+      where c.version_label = 'v7' and c.month_start = date_trunc('month', now())::date), 2);
+  perform pg_temp.assert_eq('A4-d3d. e cada grupo traz o modelo que de fato respondeu',
+    (select count(*) from public.fn_assistant_cost_by_version() c
+      where c.version_label = 'v7' and c.month_start = date_trunc('month', now())::date
+        and c.model in ('fake-1', 'fake-2')), 2);
+
+  -- ⛔ O quarto ramo também no custo: o grupo existe e tem etiqueta.
+  perform pg_temp.assert_eq('A4-d3b. a versão fora de alcance vira grupo próprio, com etiqueta',
+    (select c.runs from public.fn_assistant_cost_by_version() c
+      where c.version_label = 'versão fora do alcance'), 1);
+
+  -- Turnos e recusas da v7 na competência corrente: R1 (fake-1) e R5 (fake-2),
+  -- agora em dois grupos, um por modelo — que é o ponto do A4-d3c.
+  perform pg_temp.assert_eq('A4-d4. a v7 do mês corrente soma 2 turnos nos seus grupos',
+    (select coalesce(sum(c.runs), 0)::bigint from public.fn_assistant_cost_by_version() c
+      where c.month_start = date_trunc('month', now())::date and c.version_label = 'v7'), 2);
+  perform pg_temp.assert_eq('A4-d5. e 1 deles é recusa',
+    (select coalesce(sum(c.refused_runs), 0)::bigint from public.fn_assistant_cost_by_version() c
+      where c.month_start = date_trunc('month', now())::date and c.version_label = 'v7'), 1);
+  perform pg_temp.assert_eq('A4-d6. a latência média é POR MODELO, não misturada (fake-1: 500)',
+    (select round(c.avg_latency_ms)::bigint from public.fn_assistant_cost_by_version() c
+      where c.month_start = date_trunc('month', now())::date and c.version_label = 'v7'
+        and c.model = 'fake-1'), 500);
+  perform pg_temp.assert_eq('A4-d6b. e a do outro modelo é a dele (fake-2: 50) — 275 seria a mistura',
+    (select round(c.avg_latency_ms)::bigint from public.fn_assistant_cost_by_version() c
+      where c.month_start = date_trunc('month', now())::date and c.version_label = 'v7'
+        and c.model = 'fake-2'), 50);
+  perform pg_temp.assert_eq('A4-d7. e os tokens de saída da v7 no mês são 20 + 0',
+    (select coalesce(sum(c.output_tokens), 0)::bigint from public.fn_assistant_cost_by_version() c
+      where c.month_start = date_trunc('month', now())::date and c.version_label = 'v7'), 20);
+
+  -- Competências separadas: o R7 é de outro mês e não se soma ao corrente.
+  perform pg_temp.assert_eq('A4-d8. a competência anterior é uma linha própria',
+    (select count(*) from public.fn_assistant_cost_by_version() c
+      where c.month_start < date_trunc('month', now())::date), 1);
+  perform pg_temp.assert_eq('A4-d9. e as competências não se misturam (2 meses distintos)',
+    (select count(distinct c.month_start) from public.fn_assistant_cost_by_version() c), 2);
+
+  -- Versão nula: uma etiqueta só, e as duas linhas nela.
+  perform pg_temp.assert_eq('A4-d10. as duas linhas sem versão caem na mesma etiqueta',
+    (select c.runs from public.fn_assistant_cost_by_version() c
+      where c.version_label = 'antes do versionamento'), 2);
+  perform pg_temp.assert_eq('A4-d11. e a etiqueta sem versão não vira v1 em lugar nenhum',
+    (select count(*) from public.fn_assistant_cost_by_version() c
+      where c.prompt_version_id is null and c.version_label <> 'antes do versionamento'), 0);
+  -- A janela corta o custo também: os 1000 tokens do R6 só entram na larga.
+  perform pg_temp.assert_eq('A4-d12. os 1000 tokens de 20 semanas atrás só entram na janela larga',
+    (select coalesce(sum(c.input_tokens), 0)::bigint from public.fn_assistant_cost_by_version(52) c)
+    - (select coalesce(sum(c.input_tokens), 0)::bigint from public.fn_assistant_cost_by_version() c), 1000);
+end $$;
+
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000002';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000002","role":"authenticated"}';
+do $$ begin
+  -- O mesmo recorte de `ai_query_read`: o supervisor custa o que ele gastou.
+  perform pg_temp.assert_eq('A4-d13. supervisor de A soma só os próprios turnos (10 de entrada)',
+    (select coalesce(sum(c.input_tokens), 0)::bigint from public.fn_assistant_cost_by_version() c), 10);
+end $$;
+
+set local role anon;
+do $$ begin
+  perform pg_temp.deve_falhar('A4-d14. anon não executa fn_assistant_cost_by_version',
+    $q$select * from public.fn_assistant_cost_by_version()$q$, 'permission denied');
+end $$;
+reset role;
+
+-- ---------------------------------------------------------------------------
+-- (e) Estrutura das duas funções
+-- ---------------------------------------------------------------------------
+\echo '    (e) as duas funções: invoker com search_path, anon fora, authenticated dentro'
+do $$
+declare
+  v_nome text;
+  v_oid  oid;
+begin
+  foreach v_nome in array array['fn_assistant_runs', 'fn_assistant_cost_by_version'] loop
+    perform pg_temp.assert_eq(format('A4-e. public.%s existe com uma assinatura só', v_nome),
+      (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+        where n.nspname = 'public' and p.proname = v_nome), 1);
+    select p.oid into v_oid from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.proname = v_nome;
+    perform pg_temp.assert_eq(format('A4-e. %s é INVOKER (é assim que herda ai_query_read)', v_nome),
+      (select case when p.prosecdef then 1 else 0 end from pg_proc p where p.oid = v_oid), 0);
+    perform pg_temp.assert_eq(format('A4-e. %s tem search_path pinado', v_nome),
+      (select case when coalesce(array_to_string(p.proconfig, ','), '') like '%search_path=%'
+              then 1 else 0 end from pg_proc p where p.oid = v_oid), 1);
+    perform pg_temp.assert_eq(format('A4-e. anon não executa %s', v_nome),
+      case when has_function_privilege('anon', v_oid, 'EXECUTE') then 1 else 0 end, 0);
+    perform pg_temp.assert_eq(format('A4-e. authenticated executa %s', v_nome),
+      case when has_function_privilege('authenticated', v_oid, 'EXECUTE') then 1 else 0 end, 1);
+  end loop;
+  -- E a RPC de publicação ficou com UMA assinatura, a de dois argumentos: o
+  -- drop levou o grant junto, e sem ele o botão Publicar daria 403 mudo.
+  perform pg_temp.assert_eq('A4-e. fn_publish_assistant_prompt tem uma assinatura só, de dois argumentos',
+    (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+      where n.nspname = 'public' and p.proname = 'fn_publish_assistant_prompt'
+        and pg_get_function_identity_arguments(p.oid)
+            = 'p_tenant_id uuid, p_seen_updated_at timestamp with time zone'), 1);
+  select p.oid into v_oid from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'fn_publish_assistant_prompt';
+  perform pg_temp.assert_eq('A4-e. e o grant a authenticated foi reposto depois do drop',
+    case when has_function_privilege('authenticated', v_oid, 'EXECUTE') then 1 else 0 end, 1);
+  perform pg_temp.assert_eq('A4-e. e anon continua fora dela',
+    case when has_function_privilege('anon', v_oid, 'EXECUTE') then 1 else 0 end, 0);
+end $$;
 
 \echo ''
 \echo '================================================'

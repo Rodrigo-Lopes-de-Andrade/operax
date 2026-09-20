@@ -662,6 +662,96 @@ um filtro de papel no corpo. `version_label` é texto pronto e diz **"antes
 do versionamento"** quando o id é nulo; "v1" ali seria inventar
 procedência, que é o erro que esta etapa existe para não cometer.
 
+**Onda backend entregue em 20/09/2026, em revisão + guardião.** Migration
+`20260920132942_assistant_runs_fn` com os três objetos; a RPC de publicação
+foi derrubada por nome e aridade (um `create or replace` deixaria **duas**
+funções em `public` e a chamada de um argumento continuaria batendo no corpo
+velho) e o `grant execute` reposto, que o drop leva junto. As seis recusas
+na ordem, `p_seen_updated_at` nulo = comportamento de hoje, e a chamada de
+um argumento segue válida pelo default — ele escreveu uma asserção
+esperando "função não existe", ela reprovou, e corrigiu a **asserção**, não
+o código: é assim que a compatibilidade existe. `97` com 215 asserções
+(51 da A4), `99` item 20 novo e o 18 com a sexta posição, pytest 1399,
+suíte 66 migrations exit 0. Sete mutações, cada uma pega por **três**
+guardas independentes.
+
+**Ramo que ele acrescentou além do pedido, e mediu antes:** `version_label`
+tem quatro ramos, não três. `ai_query.prompt_version_id` tem FK mas **não**
+tem trigger de escopo, de propósito — é log, e a §A3-b1 do `97` mede que a
+FK aceita versão de outro tenant. Sob invoker essa linha volta com o join
+vazio: com três ramos ela sairia com rótulo **nulo** (célula vazia, sem erro
+em lugar nenhum) ou, se alguém "consertasse" testando o nulo no join em vez
+de na coluna, como **"antes do versionamento"** — um turno que *tem* versão
+apresentado como anterior ao versionamento. Daí `'versão fora do alcance'`.
+
+**Guardião: APROVADO, sete de sete.** Suíte no `operax_test` (66 migrations,
+`97`, `98`, `99` 1–20, dicionário byte a byte, `verificar_docs` ✅). O diff
+de catálogo 65→66 tem **cinco linhas**: as duas funções novas e a troca de
+assinatura da terceira — e a de aridade 1 **desapareceu** (`12c14`, não
+`12a14`), que era o risco real do `create or replace`. `pg_policies` 105 →
+105, zero grant novo, `COUNT_TABLES_PUBLIC` 0. Com a app real sobre o banco
+real: 49 checagens na API e 19 na publicação, zero falhas — supervisor vê
+só os próprios turnos (a `question` de outro membro do mesmo tenant **não**
+aparece para ele), owner B vê o próprio segredo plantado e nada de A, o
+`done` traz exatamente sete chaves e os dois campos novos batem com a
+coluna relida do banco, e o corpo inteiro da recusa `draft_moved` tem 25
+bytes — sem `updated_at` alheio, sem texto de rascunho.
+
+**Revisão: REPROVADA por dois MÉDIOs de guarda — o código entregue estava
+correto.** (1) A asserção "o lock é a primeira instrução" conferia só que a
+string `for update` vinha antes de `not_admin`: um `select` do `updated_at`
+**sem** lock, posto antes do que trava, passava nas três guardas. Ele
+encenou a corrida com **duas sessões reais** e `pg_sleep` dos dois lados —
+controle recusa, mutante publica *"TEXTO DO ADMIN 2 — QUE O ADMIN 1 NUNCA
+VIU"*. É, letra por letra, a frase que a entrega existia para impedir.
+(2) O quarto ramo do `version_label` — o que o próprio implementador
+apresentou como falso verde nº 1 — era o **único** sem asserção: removê-lo
+passava nas três, e a consequência é pior que célula vazia, porque
+`version_label` é `str` no schema e um rótulo nulo derruba a aba inteira
+com 500. Das oito mutações dele, três sobreviveram; duas das que morreram
+ele classificou como equivalentes com a constraint na mão.
+
+**Fechado por mim antes do commit**, cada um provado no meu banco: a
+asserção do lock exige agora que `updated_at` venha do **mesmo statement**
+que trava (na migration e no `99` — o regex precisou de `{0,255}`, que é o
+teto do Postgres); o quarto ramo ganhou asserção nas duas funções, no `97`
+e no `99`. BAIXOs registrados e não fechados: a ordem do custo não é
+asserida; as funções são chamáveis por fora da rota, sem o teto de 52
+semanas (convenção pré-existente das outras RPCs, e o recorte é a RLS);
+membro **desativado** lê os próprios turnos mas perde a versão do próprio
+tenant, porque `ai_query_read` não exige adesão no primeiro disjunto e
+`assistant_version_read` exige — inalcançável pela API, que exige `active`
+para resolver o tenant.
+
+### ✅ A4 — onda backend fechada no código em 20/09/2026
+
+Migration `20260920132942_assistant_runs_fn` com os três objetos; `97` com
+221 asserções (57 da A4); `99` item 20 novo e o 18 com a sexta posição e a
+guarda do lock; pytest 1400; suíte 66 migrations RC=0.
+
+**Duas decisões do dono em 20/09:** (1) a competência do custo fica em
+**UTC**, como as semanas de `fn_delivery_by_channel` — um turno às 21h de
+30/09 em São Paulo cai em outubro, e a aba escreve isso junto do cabeçalho;
+corrigir só aqui faria as duas tabelas do mesmo painel discordarem, e o
+relógio de tenant só existe em Python hoje. (2) O **modelo entra na chave**
+do custo. O motivo, medido pelo revisor com dois turnos reais do mesmo
+tenant e a doutrina republicada entre eles: o texto que roda é a soma de
+duas camadas, `ai_query.prompt_version_id` guarda **uma** — a do tenant,
+quando ele tem camada própria —, e quem escolhe o modelo é a camada de
+**plataforma** (constraint proíbe modelo na do tenant). Logo o único eixo
+que determina preço era o que a chave não capturava: dois modelos, um
+rótulo, um grupo. Agora são dois grupos, e `A4-d6`/`d6b` provam que a
+latência média é por modelo e não a mistura.
+
+O que fica aberto e nomeado para a onda 2 não escrever a frase errada: o
+mesmo rótulo ainda soma duas eras da mesma versão depois de um rollback
+(agrupar por período contíguo mudaria o contrato, e não foi pedido); e o
+gasto da aba Teste é dinheiro real que **não** aparece na tabela de custo —
+`not is_dry_run` está certo, mas a coluna responde "custo do tráfego", não
+"o que este tenant me custou". Quem ler como fatura lê menos do que gastou,
+e num mês de ajuste de prompt, muito menos (medido: 1998 tokens em dry run
+contra 175 de tráfego real, no cenário do teste).
+
 **Gate:** custo por competência **quebrado por versão de prompt** — é o que as
 colunas de token existiam para responder e não respondiam (SPEC §0.3). Dry-run
 fora de toda média. Linha anterior ao versionamento aparece como "antes do

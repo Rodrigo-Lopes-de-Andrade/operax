@@ -410,6 +410,14 @@ deixa de ser irrecuperável.
 O índice parcial exclui dry-run porque a tela de execuções e a conta de margem
 falam de tráfego real; teste na média de custo por consulta é ruído.
 
+**As duas colunas saem no `event: done`** (A4, 20/09/2026): `prompt_version_id`
+e `draft_content_hash`, lidos da linha que acabou de ser gravada — nunca do
+`use_draft` que o cliente mandou. Hoje os dois coincidem, porque
+`/testar?use_draft` sem rascunho é 404 antes do stream; no dia em que isso
+virar fallback, o selo "Rascunho" da tela mentiria, e é `draft_content_hash`
+que existe para não deixar. O contrato do evento está no `CLAUDE.md`, seção
+"Assistente de IA".
+
 ### §3d — `assistant_publish_fn`
 
 Publicação atômica: congelar o rascunho em versão nova **e** mover o ponteiro.

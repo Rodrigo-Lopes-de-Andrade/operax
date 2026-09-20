@@ -1509,6 +1509,21 @@ class DraftWrite(BaseModel):
     content: str = Field(min_length=1, max_length=PROMPT_MAX_LENGTH)
 
 
+class PublishRequest(BaseModel):
+    """O corpo opcional de `POST /publicar`.
+
+    `seen_updated_at` é o `updated_at` do rascunho que a tela leu. A RPC
+    recusa com `draft_moved` quando o rascunho mudou entre a leitura e o
+    botão — dois admins no mesmo minuto, e um publicaria o texto do outro,
+    que nunca viu. Nulo (ou corpo ausente) = a tela não mandou, e o
+    comportamento é o de antes deste campo.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    seen_updated_at: datetime | None = None
+
+
 class PublishResult(BaseModel):
     """O que `fn_publish_assistant_prompt` devolve: a versão nova e a que
     estava apontada antes (nula na primeira publicação)."""
@@ -1569,6 +1584,53 @@ class AssistantTest(AssistantQuestion):
     não há seletor de papel (SPEC-AGENTE §5), e não haverá."""
 
     use_draft: bool = False
+
+
+class AssistantRun(BaseModel):
+    """Um turno REAL da aba Execuções — dry run nunca chega aqui.
+
+    `version_label` é texto pronto, montado pela função: `"v3"` para camada de
+    tenant, `"plataforma v1"` para a doutrina, e **"antes do versionamento"**
+    quando `prompt_version_id` é nulo. Nunca "v1": as linhas anteriores ao
+    versionamento não têm versão, e atribuir uma seria inventar procedência.
+    """
+
+    created_at: datetime
+    question: str
+    metric_code: str | None
+    rows_returned: int | None
+    latency_ms: int | None
+    input_tokens: int | None
+    output_tokens: int | None
+    model: str | None
+    #: Recusa é resposta válida, não erro — o log modela isso desde a 09.
+    refused: bool
+    refusal_reason: str | None
+    prompt_version_id: UUID | None
+    version_label: str
+
+
+class AssistantCostByVersion(BaseModel):
+    """Custo de uma competência numa versão de prompt E num modelo.
+
+    Token sem versão não vira custo (SPEC-AGENTE §0.3), e o modelo está na
+    chave porque é ele que vira preço: a versão gravada é a do tenant, mas
+    quem escolhe o modelo é a camada de plataforma, que o registro não guarda.
+    Sem o modelo, republicar a doutrina troca o preço sem mover o rótulo e a
+    linha soma dois preços. Dry run fica fora de toda média.
+    """
+
+    month_start: date
+    version_label: str
+    prompt_version_id: UUID | None
+    #: O modelo que respondeu. Nulo nas linhas gravadas antes da coluna existir.
+    model: str | None
+    runs: int
+    refused_runs: int
+    input_tokens: int
+    output_tokens: int
+    #: Nula quando nenhum turno do grupo cronometrou.
+    avg_latency_ms: Decimal | None
 
 
 class ChannelCapabilities(BaseModel):

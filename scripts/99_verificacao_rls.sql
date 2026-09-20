@@ -587,15 +587,32 @@ begin
        or position('for update' in lower(body)) > position('is_admin' in body) then
       falhas := falhas || 'fn_publish_assistant_prompt decide antes de travar o rascunho ';
     end if;
-    -- As CINCO posições, pinadas aqui e não só no bloco de prova da migration (que
-    -- roda uma vez): `not_admin` antes de tudo — senão o owner de outro tenant
-    -- aprende se este tem rascunho, e o supervisor aprende que está em branco.
+    -- O `updated_at` que `draft_moved` compara vem do MESMO statement que
+    -- trava. Lido num select próprio antes dele, tudo acima fica verde e a
+    -- corrida volta: medida com duas sessões em 20/09/2026, o texto do
+    -- segundo admin foi publicado debaixo dos olhos do primeiro.
+    if body !~ 'd\.content,\s*d\.updated_at[\s\S]{0,255}for update' then
+      falhas := falhas || 'fn_publish_assistant_prompt lê o updated_at fora do lock (draft_moved compararia valor que ainda pode mudar) ';
+    end if;
+    -- As SEIS posições (a A4 pôs `draft_moved` no meio), pinadas aqui e não só
+    -- no bloco de prova da migration (que roda uma vez): `not_admin` antes de
+    -- tudo — senão o owner de outro tenant aprende se este tem rascunho, e o
+    -- supervisor aprende que está em branco. `draft_moved` depois de
+    -- `draft_not_found` (sem rascunho não há o que comparar) e antes de
+    -- `draft_empty` (a quem teve o texto trocado por outra pessoa não se manda
+    -- escrever de novo).
     if not (position('not_admin' in body) > 0
         and position('not_admin' in body) < position('draft_not_found' in body)
-        and position('draft_not_found' in body) < position('draft_empty' in body)
+        and position('draft_not_found' in body) < position('draft_moved' in body)
+        and position('draft_moved' in body) < position('draft_empty' in body)
         and position('draft_empty' in body) < position('platform_layer_missing' in body)
         and position('platform_layer_missing' in body) < position('draft_unchanged' in body)) then
-      falhas := falhas || 'fn_publish_assistant_prompt recusa fora da ordem not_admin < draft_not_found < draft_empty < platform_layer_missing < draft_unchanged ';
+      falhas := falhas || 'fn_publish_assistant_prompt recusa fora da ordem not_admin < draft_not_found < draft_moved < draft_empty < platform_layer_missing < draft_unchanged ';
+    end if;
+    -- E `draft_moved` só dispara quando a tela disse o que viu: sem a guarda
+    -- do nulo, todo chamador anterior a este parâmetro seria recusado.
+    if body !~ 'p_seen_updated_at is not null' then
+      falhas := falhas || 'fn_publish_assistant_prompt levanta draft_moved sem guardar o p_seen_updated_at nulo ';
     end if;
     -- max + 1, não count + 1: uma versão apagada pelo dono faria a contagem colidir.
     if body not like '%max(v.version_number)%' then
@@ -732,6 +749,112 @@ begin
     end if;
   end if;
   if falhas <> '' then raise exception 'FALHA: capacidades do assistente -> %', falhas; end if;
+end $$;
+
+\echo '--- 20. Assistente / A4: as duas funções de Execuções são INVOKER, sem dry run e sem recorte de papel no corpo'
+-- O item 17 fez isto para `fn_delivery_by_channel` e a razão aqui é a mesma,
+-- com uma diferença que importa: a policy herdada NÃO é só de administrador.
+-- `ai_query_read` é `user_id = auth.uid() OR util.is_admin(tenant_id)`, então
+-- um membro comum vê os PRÓPRIOS turnos — e isso é o desenho. Um
+-- `create or replace` que as tornasse definer "para o supervisor ver tudo"
+-- abriria o log de consultas de todo tenant a qualquer autenticado, e passaria
+-- no item 9 se lembrasse do search_path. Por isso: definer é falha, e filtro de
+-- papel escrito no corpo também é — seria a segunda cópia da mesma regra.
+--
+-- A terceira garantia é o `not is_dry_run`. A aba Teste roda consulta real
+-- sobre dado real, e roda muitas; um teste dentro da média de custo move o
+-- único número que esta etapa produz (SPEC-AGENTE §0.3). O índice parcial
+-- `ai_query_dry_run_idx` nasceu com esse predicado, então o filtro é também o
+-- que faz a janela usá-lo.
+do $$
+declare r record; falhas text := ''; cols text[]; v text;
+begin
+  foreach v in array array['fn_assistant_runs', 'fn_assistant_cost_by_version'] loop
+    select p.oid, p.prosecdef, p.proconfig, pg_get_functiondef(p.oid) as src
+      into r
+      from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+     where n.nspname = 'public' and p.proname = v;
+    if r.oid is null then
+      falhas := falhas || format('public.%s não existe ', v);
+      continue;
+    end if;
+    if (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public' and p.proname = v) <> 1 then
+      falhas := falhas || format('%s com mais de uma assinatura ', v);
+    end if;
+    if r.prosecdef then
+      falhas := falhas || format('%s é DEFINER (leria o log de consultas de todo tenant, e daria a quem não é admin turno que não é dele) ', v);
+    end if;
+    if r.proconfig is null or not (r.proconfig::text like '%search_path=%') then
+      falhas := falhas || format('%s sem search_path ', v);
+    end if;
+    if not has_function_privilege('authenticated', r.oid, 'EXECUTE') then
+      falhas := falhas || format('authenticated não executa %s (a aba não abre) ', v);
+    end if;
+    if has_function_privilege('anon', r.oid, 'EXECUTE') or has_function_privilege('public', r.oid, 'EXECUTE') then
+      falhas := falhas || format('anon/public executa %s ', v);
+    end if;
+    if r.src !~ 'from app\.ai_query' then
+      falhas := falhas || format('%s não lê app.ai_query ', v);
+    end if;
+    -- ⛔ O dry run negado, no corpo das duas.
+    if r.src !~ 'not q\.is_dry_run' then
+      falhas := falhas || format('%s conta o dry run — a aba Teste entraria na média de custo ', v);
+    end if;
+    -- ⛔ Nenhum recorte de papel escrito à mão: a policy é o recorte.
+    if r.src ~* 'is_admin|user_tenants|has_tenant' then
+      falhas := falhas || format('%s escreve recorte de papel no corpo — ela é invoker justamente para herdar ai_query_read ', v);
+    end if;
+    -- E a linha cuja versão o leitor não alcança: `ai_query` é log e não tem
+    -- trigger de escopo (§A3-b1 mede que a FK aceita versão de outro tenant),
+    -- então sob invoker o join vem vazio. Sem este ramo o rótulo sai NULO — e
+    -- `version_label` é `str` nos schemas, então a aba inteira vira 500 por
+    -- causa de uma linha de log.
+    if r.src not like '%versão fora do alcance%' or r.src !~ 'v\.id is null' then
+      falhas := falhas || format('%s não rotula a linha cuja versão o leitor não alcança ', v);
+    end if;
+    -- Procedência: nulo é "antes do versionamento", nunca v1.
+    if r.src not like '%antes do versionamento%' or r.src !~ 'q\.prompt_version_id is null' then
+      falhas := falhas || format('%s não rotula a linha sem versão como "antes do versionamento" — atribuí-la a uma versão seria inventar procedência ', v);
+    end if;
+    if r.src not like '%greatest(p_weeks, 1)%' then
+      falhas := falhas || format('%s perdeu o piso de p_weeks ', v);
+    end if;
+  end loop;
+
+  -- Os dois contratos, por nome exato.
+  select p.oid into r from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'fn_assistant_runs';
+  select array_agg(a.n order by a.n) into cols
+    from pg_proc p, unnest(p.proargnames, p.proargmodes) as a(n, m)
+   where p.oid = r.oid and a.m = 't';
+  if cols is distinct from array['created_at', 'input_tokens', 'latency_ms', 'metric_code',
+                                 'model', 'output_tokens', 'prompt_version_id', 'question',
+                                 'refusal_reason', 'refused', 'rows_returned', 'version_label'] then
+    falhas := falhas || format('fn_assistant_runs mudou de contrato: %s ', cols);
+  end if;
+  select p.oid into r from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'fn_assistant_cost_by_version';
+  select array_agg(a.n order by a.n) into cols
+    from pg_proc p, unnest(p.proargnames, p.proargmodes) as a(n, m)
+   where p.oid = r.oid and a.m = 't';
+  if cols is distinct from array['avg_latency_ms', 'input_tokens', 'model', 'month_start', 'output_tokens',
+                                 'prompt_version_id', 'refused_runs', 'runs', 'version_label'] then
+    falhas := falhas || format('fn_assistant_cost_by_version mudou de contrato: %s ', cols);
+  end if;
+
+  -- E a policy de que as duas dependem continua sendo própria-ou-admin: se ela
+  -- virasse só `is_admin`, o membro comum perderia os próprios turnos; se
+  -- virasse só `has_tenant`, leria os de todo mundo.
+  if not exists (
+    select 1 from pg_policies
+     where schemaname = 'app' and tablename = 'ai_query' and policyname = 'ai_query_read'
+       and qual like '%auth.uid()%' and qual like '%is_admin%'
+  ) then
+    falhas := falhas || 'ai_query_read não é mais própria-ou-admin — as duas funções invoker herdariam o recorte errado ';
+  end if;
+
+  if falhas <> '' then raise exception 'FALHA: execuções do assistente -> %', falhas; end if;
 end $$;
 
 \echo ''
