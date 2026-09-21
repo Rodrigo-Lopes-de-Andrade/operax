@@ -874,12 +874,20 @@ deploy; liga e desliga métrica sabendo que ligar não concede nada; e cada
 turno do assistente diz qual versão o produziu e o que custou — com "antes
 do versionamento" para o que veio antes, nunca uma procedência inventada.
 
+**Em produção desde 21/09/2026.** As catorze migrations (7 de Canais, 7 do
+Agente) aplicadas uma por chamada, ledger 64 → 78, com o diff de captura
+sendo exatamente o que elas criam; push de `524f786..dfe145f` com os cinco
+checks verdes e `/health` 200; `vercel promote` com paridade de env
+conferida por hash, alias `app.fastparks.com.br` servindo o bundle novo. O
+que ainda não foi conferido: `OPENAI_API_KEY` no `operax-api` — sem ela o
+assistente responde 503, e a listagem de variáveis traria valores para a
+conversa, então fica para o dono olhar no painel.
+
 **O que fecha a etapa de verdade** ("uma mudança de prompt publicada pelo
 painel, em produção, sem deploy — e a execução seguinte aparecendo em
-Execuções com a versão nova ao lado") **ainda não aconteceu**, e depende de
-três coisas na mão do dono: as **sete** migrations do agente em produção
-(2 A1, 2 A2, 1 A3, 2 A4) **antes** do push de `88b7c4d` em diante;
-`OPENAI_API_KEY` no `operax-api`; e o `vercel promote` depois disso.
+Execuções com a versão nova ao lado") é agora um clique do dono na aba
+Configuração, e a prova é a aba Execuções mostrando a v1 do tenant ao lado
+do turno seguinte.
 
 **Gate:** custo por competência **quebrado por versão de prompt** — é o que as
 colunas de token existiam para responder e não respondiam (SPEC §0.3). Dry-run
