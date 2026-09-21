@@ -1239,6 +1239,42 @@ Um alerta real chegando no Telegram de um supervisor **e** o mesmo alerta
 chegando no WhatsApp de outro, com o mesmo texto, a partir de um template só — e
 a tela de Conexões mostrando os dois canais saudáveis, com data.
 
+## O G4 em 21/09/2026 — o que ele exige, e o que foi feito
+
+Decisão do dono em 21/09: fechar o G4 e agendar o sender. Medido antes de
+tocar em qualquer coisa: o motor roda em **modo produção desde 09/09** (2.118
+execuções completas), emitindo ~170 indícios por dia útil — 4.649 ativos, zero
+julgados; o censo de sombra dos 820 (29/08–04/09) é população anterior, também
+com zero julgados. A liberação é uma linha em `app.alert_release` que o schema
+**só aceita com censo completo e taxa ≤ 5%** (migration 38, autorizada pelo dono
+em 11/09 justamente porque o motor tinha sido promovido com o censo em zero).
+"Declarar no piso" não existe no sistema; afrouxar o check seria desfazer a
+decisão de 11/09. O que existe é o censo por janela.
+
+Feito em 21/09:
+- **Censo exportado**: `~/operax-censo/censo-g4-producao-17a18set.xlsx`, 352
+  indícios de 17 e 18/09 (dois dias úteis fechados; o dono pediu ~300), com o
+  `LEIA-ME.md` ao lado dizendo o que preencher. Fora do repositório — é PII.
+  O CLI ganhou `--ate` para o censo não incluir o dia em andamento (3 dias
+  terminando numa segunda davam 36 indícios: sábado, domingo e a manhã).
+- **`run()` do sender isolado por tenant** (`a8f589c`): a dívida nomeada no
+  fechamento do C5. Um cofre fora do ar num tenant não silencia mais a fila
+  dos outros; o que falhou aparece pelo nome no relatório.
+- **`operax-sender` no Railway** (`f7a91382-…`), `python -m operax.alertas.sender`,
+  `*/15 * * * *`, restart NEVER, variáveis por referência ao `operax-api`, mesma
+  receita do vigia. Com o gate fechado ele só conta o que espera e não grava
+  nada — é seguro estar no ar antes da liberação, e é a prova de que a porta
+  está fechada de verdade.
+- `OPENAI_API_KEY` conferida no `operax-api` por `describe-service` (nomes,
+  nunca valores). `FORWARDED_ALLOW_IPS` não está lá; segue como recomendação.
+
+O que falta, e é de gente: alguém julga as 352 linhas; depois `importar`,
+`medir`, `liberar`. Aí o sender entrega — para as regras cadastradas (hoje
+**zero** em `app.alert_rule`) e pelos canais com credencial ativa (hoje nenhum
+bot de Telegram ativo, e a primeira credencial de WhatsApp ainda é a parada
+adiada do C2). A liberação abre a porta; regra e credencial são o que passa
+por ela.
+
 ## O que fica fora
 
 - **QR na tela** — conectar `z_api`/`uazapi` continua sendo no painel deles.
