@@ -5,6 +5,7 @@ import type { ReactNode } from "react";
 
 import { Capabilities } from "@/components/assistente/capabilities";
 import { DryRun } from "@/components/assistente/dry-run";
+import { Executions } from "@/components/assistente/executions";
 import { PromptEditor } from "@/components/assistente/prompt-editor";
 import { VersionHistory } from "@/components/assistente/version-history";
 import { EmptyState } from "@/components/ui/empty-state";
@@ -12,6 +13,7 @@ import { Card } from "@/components/ui/kpi-card";
 import { Tabs, type TabItem } from "@/components/ui/tabs";
 import {
   loadCapabilities,
+  loadExecutions,
   loadPromptScreen,
   loadVersions,
 } from "@/lib/assistente/queries";
@@ -22,6 +24,7 @@ import {
   CONFIG_TABS,
   parseConfigTab,
   parseVersionParam,
+  parseWeeksParam,
   type ConfigTab,
 } from "@/lib/assistente/url";
 import { pageTitle } from "@/lib/brand";
@@ -34,8 +37,8 @@ export const metadata: Metadata = {
 
 /**
  * Assistente (configuração) — as duas camadas do prompt, o histórico com
- * rollback, o teste e as capacidades. O "Assistente" do topo é a conversa;
- * este é o que a governa.
+ * rollback, o teste, as capacidades e as execuções. O "Assistente" do topo é
+ * a conversa; este é o que a governa.
  *
  * A porta é a mesma de Conexões, e pelo mesmo motivo: `GET /prompt` e
  * `GET /versoes` respondem a qualquer membro (a RLS devolve `draft = null` a
@@ -46,11 +49,13 @@ export const metadata: Metadata = {
  * fronteira de segurança não é esta: cada escrita pergunta `util.is_admin` de
  * novo no backend, e a tela só reflete.
  *
- * A aba mora na query string (`aba=`) e a versão aberta no Histórico também
- * (`versao=`): um link abre no lugar certo. Cada aba lê só o que ela usa —
+ * A aba mora na query string (`aba=`), a versão aberta no Histórico também
+ * (`versao=`) e a janela de Execuções também (`semanas=`): um link abre no
+ * lugar certo, com o recorte certo. Cada aba lê só o que ela usa —
  * Configuração precisa do prompt e das versões (o aviso da SPEC §2 resolve o
  * id da origem a número pela lista); Teste precisa do prompt para saber se
- * há rascunho; Histórico, das versões; Capacidades, do catálogo.
+ * há rascunho; Histórico, das versões; Capacidades, do catálogo; Execuções,
+ * dos turnos, do custo e do total de teste da janela.
  */
 export default async function AssistenteConfigPage({
   searchParams,
@@ -65,7 +70,11 @@ export default async function AssistenteConfigPage({
 
   const params = await searchParams;
   const tab = parseConfigTab(params);
-  const content = await loadTab(tab, parseVersionParam(params));
+  const content = await loadTab(
+    tab,
+    parseVersionParam(params),
+    parseWeeksParam(params),
+  );
 
   const items: TabItem[] = CONFIG_TABS.map((value) => ({
     value,
@@ -100,6 +109,7 @@ export default async function AssistenteConfigPage({
 async function loadTab(
   tab: ConfigTab,
   versionId: string | null,
+  weeks: number,
 ): Promise<ReactNode> {
   switch (tab) {
     case "configuracao": {
@@ -141,6 +151,11 @@ async function loadTab(
         <Unavailable title="O catálogo não pôde ser lido" />
       );
     }
+    // A aba traz os três estados dela mesma — inclusive o 422 de uma janela
+    // digitada à mão —, porque o seletor de semanas tem de continuar na tela
+    // em todos: sem ele, quem errou a janela não tem como voltar.
+    case "execucoes":
+      return <Executions weeks={weeks} result={await loadExecutions(weeks)} />;
   }
 }
 

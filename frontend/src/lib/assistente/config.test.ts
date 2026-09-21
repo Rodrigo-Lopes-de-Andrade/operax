@@ -58,11 +58,32 @@ describe("as mutações batem na rota certa, com o corpo do contrato", () => {
       previous_version_id: null,
     });
 
-    await publishPrompt();
+    await publishPrompt("2026-09-20T12:00:00Z");
 
     expect(request).toHaveBeenCalledWith("/assistente/configuracao/publicar", {
       method: "POST",
+      body: { seen_updated_at: "2026-09-20T12:00:00Z" },
     });
+  });
+
+  it("⛔ publicar diz QUAL rascunho a tela viu — sem isso `draft_moved` não existe", async () => {
+    // A RPC congela o que estiver na tabela no instante da chamada. Se este
+    // corpo não viajar, dois admins no mesmo minuto e um publica o texto do
+    // outro: a recusa existe no banco desde a A4 e só dispara com o que a
+    // tela leu. Nulo é válido — é a primeira publicação, sem rascunho lido.
+    request.mockResolvedValue({
+      version_id: VERSION,
+      version_number: 1,
+      previous_version_id: null,
+    });
+
+    await publishPrompt(null);
+
+    const [, options] = request.mock.calls[0] as [
+      string,
+      { method: string; body?: Record<string, unknown> },
+    ];
+    expect(options.body).toEqual({ seen_updated_at: null });
   });
 
   it("restaurar é POST /versoes/{id}/restaurar com o id da versão", async () => {
@@ -138,7 +159,7 @@ describe("as mutações batem na rota certa, com o corpo do contrato", () => {
   });
 });
 
-describe("os cinco `detail` da publicação viram frase", () => {
+describe("os seis `detail` da publicação viram frase", () => {
   it.each([
     ["not_admin", "Sem permissão para publicar."],
     ["draft_not_found", "Salve o rascunho antes de publicar."],
@@ -150,6 +171,11 @@ describe("os cinco `detail` da publicação viram frase", () => {
     [
       "draft_unchanged",
       "O texto já está no ar: nada mudou desde a última publicação.",
+    ],
+    [
+      "draft_moved",
+      "O rascunho mudou desde que você abriu esta tela — recarregue antes de " +
+        "publicar. Nada foi alterado.",
     ],
   ])("%s → %s", (detail, phrase) => {
     expect(publishFailureMessage(new ApiError(409, detail))).toBe(phrase);

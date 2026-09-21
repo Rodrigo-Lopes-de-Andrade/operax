@@ -3,6 +3,9 @@ import "server-only";
 import { ApiError, requestApi } from "@/lib/api";
 import {
   CONFIG_PATH,
+  type AssistantCostByVersion,
+  type AssistantRun,
+  type AssistantTestCost,
   type CapabilityRow,
   type PromptScreen,
   type VersionsScreen,
@@ -54,4 +57,74 @@ export function loadVersions(): Promise<VersionsScreen | null> {
 /** Todas as linhas, como quem chama as vê — a desligada e a fora de alcance também. */
 export function loadCapabilities(): Promise<CapabilityRow[] | null> {
   return readOrNull<CapabilityRow[]>(`${CONFIG_PATH}/capacidades`);
+}
+
+/** As três leituras da aba Execuções, na mesma janela. */
+export type ExecutionsScreen = {
+  runs: AssistantRun[];
+  cost: AssistantCostByVersion[];
+  testCost: AssistantTestCost[];
+};
+
+/**
+ * Três estados, e nenhum deles é exceção:
+ *
+ * - `ok` — as três leituras voltaram (lista curta, inclusive vazia, é `ok`:
+ *   a RLS de `app.ai_query` é própria-ou-admin, então quem não administra vê
+ *   os próprios turnos, e isso não é falta de permissão);
+ * - `out_of_range` — 422: a janela pedida está fora de 1..52. A pessoa
+ *   digitou `?semanas=` à mão, e a tela diz a faixa em vez de quebrar;
+ * - `unavailable` — 401/403, ou a sessão acabou.
+ */
+export type ExecutionsResult =
+  | { status: "ok"; screen: ExecutionsScreen }
+  | { status: "out_of_range" }
+  | { status: "unavailable" };
+
+/**
+ * A aba Execuções: os turnos, o custo por competência e o total de teste — as
+ * três na mesma janela, porque as três RPCs usam a mesma expressão de semana e
+ * a tela as mostra sob um seletor só.
+ *
+ * As três saem em paralelo e falham juntas: um custo lido com a janela de uma
+ * leitura e um total lido com a de outra é pior do que não mostrar nenhum.
+ */
+export async function loadExecutions(weeks: number): Promise<ExecutionsResult> {
+  const supabase = await getServerSupabase();
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+
+  if (!token) {
+    return { status: "unavailable" };
+  }
+
+  const query = `?weeks=${encodeURIComponent(weeks)}`;
+
+  try {
+    const [runs, cost, testCost] = await Promise.all([
+      requestApi<AssistantRun[]>(`${CONFIG_PATH}/execucoes${query}`, {
+        accessToken: token,
+      }),
+      requestApi<AssistantCostByVersion[]>(`${CONFIG_PATH}/custo${query}`, {
+        accessToken: token,
+      }),
+      requestApi<AssistantTestCost[]>(`${CONFIG_PATH}/custo-de-teste${query}`, {
+        accessToken: token,
+      }),
+    ]);
+
+    return { status: "ok", screen: { runs, cost, testCost } };
+  } catch (error) {
+    if (error instanceof ApiError) {
+      if (error.status === 422) {
+        return { status: "out_of_range" };
+      }
+
+      if (error.status === 401 || error.status === 403) {
+        return { status: "unavailable" };
+      }
+    }
+
+    throw error;
+  }
 }

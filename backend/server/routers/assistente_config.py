@@ -1,11 +1,12 @@
 """The assistant configuration — Caminho 2, and the pattern of `canais.py`.
 
-Four tabs of the panel read here (SPEC-AGENTE §1, §2, §4, §5): the two layers
-of the prompt and the draft, the history with rollback, the capabilities, and
-the test. Reading is done **as the user** (`user_scope`): the three policies of
-A1 and the one ruler of A2 (`fn_assistant_catalog`) already say what each
-person sees, and a non-admin getting `draft = null` is the screen in read mode,
-not an error. Writing follows `canais.py` to the letter: `util.is_admin` asked
+Five tabs of the panel read here (SPEC-AGENTE §0.3, §1, §2, §4, §5): the two
+layers of the prompt and the draft, the history with rollback, the
+capabilities, the test, and the runs with what they cost. Reading is done **as
+the user** (`user_scope`): the three policies of A1 and the one ruler of A2
+(`fn_assistant_catalog`) already say what each person sees, and a non-admin
+getting `draft = null` is the screen in read mode, not an error. Writing
+follows `canais.py` to the letter: `util.is_admin` asked
 to the database as the user (`_require_admin`, 403 before any transaction),
 then the write **and** its `app.audit_log` line in one `service_role`
 transaction (`tenant_scope`). The scope trigger of A1 and the RLS stay as the
@@ -30,10 +31,10 @@ is what the screen read: the RPC answers `draft_moved` when the draft changed
 under it, and a body that does not send it keeps the behaviour of before.
 
 READING THE RUNS IS THE POLICY, NOT THE ROUTE
-`/execucoes` and `/custo` have no `_require_admin`: the two RPCs are
-`security invoker` and `ai_query_read` is own-or-admin, so a common member
-seeing their own turns is the design. Adding a role check here would be a
-second copy of that rule, drifting at the first change.
+`/execucoes`, `/custo` and `/custo-de-teste` have no `_require_admin`: the
+three RPCs are `security invoker` and `ai_query_read` is own-or-admin, so a
+common member seeing their own turns is the design. Adding a role check here
+would be a second copy of that rule, drifting at the first change.
 
 THE DRAFT FREEZES ITS ORIGIN ONLY ON INSERT
 `PUT /rascunho` sets `frozen_from_version_id` to the tenant version on the air
@@ -62,6 +63,7 @@ from server.models import (
     AssistantDraft,
     AssistantRun,
     AssistantTest,
+    AssistantTestCost,
     CapabilityRow,
     CapabilityWrite,
     DraftWrite,
@@ -167,10 +169,23 @@ _RUNS_SQL = """
     from public.fn_assistant_runs(%(weeks)s)
 """
 
+#: ⚠️ `model` is in the list because it is in the schema: the column entered
+#: the key on 20/09 and this select did not follow it. The stub of the tests
+#: answers by the subject of the statement, so a missing column is invisible
+#: here and is a 500 against the real database — `AssistantCostByVersion.model`
+#: is required. `test_o_select_de_cada_leitura_traz_todo_campo_do_schema`
+#: reads both sides and is what catches the next one.
 _COST_SQL = """
-    select month_start, version_label, prompt_version_id, runs, refused_runs,
-           input_tokens, output_tokens, avg_latency_ms
+    select month_start, version_label, prompt_version_id, model, runs,
+           refused_runs, input_tokens, output_tokens, avg_latency_ms
     from public.fn_assistant_cost_by_version(%(weeks)s)
+"""
+
+#: O gasto da aba Teste, por competência — só dry run, sem versão e sem
+#: modelo. Total à parte, nunca coluna da tabela de custo.
+_TEST_COST_SQL = """
+    select month_start, runs, input_tokens, output_tokens
+    from public.fn_assistant_test_cost(%(weeks)s)
 """
 
 #: A janela das duas telas de Execuções, em semanas, a atual inclusa. O teto
@@ -647,3 +662,23 @@ async def cost(
         await scope.execute(_COST_SQL, {"weeks": weeks})
         rows = await scope.fetchall()
     return [AssistantCostByVersion.model_validate(dict(row)) for row in rows]
+
+
+@router.get("/custo-de-teste")
+async def test_cost(
+    tenant: CurrentTenant, weeks: WeeksWindow = _DEFAULT_WEEKS
+) -> list[AssistantTestCost]:
+    """O gasto da aba Teste na mesma janela — o que `/custo` deixa de fora.
+
+    `not is_dry_run` lá está certo, e por isso esta rota existe: o dry run é
+    dinheiro real, e num mês de ajuste de prompt é a maior parte da conta.
+    Uma linha por competência, **sem** versão e **sem** modelo: é um total à
+    parte (decisão do dono, 20/09/2026), e o formato é o que impede que
+    alguém o some com o tráfego sem perceber.
+
+    O mesmo recorte de invoker das irmãs, e por isso sem `_require_admin`.
+    """
+    async with user_scope(tenant) as scope:
+        await scope.execute(_TEST_COST_SQL, {"weeks": weeks})
+        rows = await scope.fetchall()
+    return [AssistantTestCost.model_validate(dict(row)) for row in rows]

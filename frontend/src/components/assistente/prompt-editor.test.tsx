@@ -28,7 +28,9 @@ vi.mock("@/lib/assistente/config", async () => {
   return {
     ...actual,
     saveDraft: (...args: unknown[]) => saveDraft(...args),
-    publishPrompt: () => publishPrompt(),
+    // Com o argumento: é ELE que a corrida do `draft_moved` depende — um mock
+    // que o descarta deixa `publishPrompt(null)` passar na suíte inteira.
+    publishPrompt: (...args: unknown[]) => publishPrompt(...args),
   };
 });
 
@@ -289,6 +291,36 @@ describe("salvar e publicar", () => {
 
     expect(await screen.findByText("Publicada a v8.")).toBeVisible();
     expect(publishPrompt).toHaveBeenCalledTimes(1);
+    // ⛔ E diz QUAL rascunho a tela viu: o `updated_at` do render. Sem isso a
+    // RPC congela o que estiver na tabela na hora, e dois admins no mesmo
+    // minuto publicam o texto um do outro.
+    expect(publishPrompt).toHaveBeenCalledWith("2026-09-17T12:00:00Z");
+  });
+
+  it("⛔ Salvar e depois Publicar manda o updated_at NOVO, não o do render", async () => {
+    // Se o `seenAt` não acompanhasse o salvamento, todo Publicar depois de um
+    // Salvar viraria `draft_moved` — o painel deixaria de publicar, com a
+    // suíte verde. O mock devolve um `updated_at` posterior ao do render.
+    const user = userEvent.setup();
+    saveDraft.mockResolvedValue(
+      draft({ content: "Texto zz novo", updated_at: "2026-09-20T15:30:00Z" }),
+    );
+    publishPrompt.mockResolvedValue({
+      version_id: "88888888-8888-4888-8888-888888888888",
+      version_number: 8,
+      previous_version_id: V3_ID,
+    });
+    render(<PromptEditor screen={AHEAD} versions={VERSIONS} />);
+
+    await user.clear(textarea());
+    await user.type(textarea(), "Texto zz novo");
+    await user.click(salvar());
+    expect(await screen.findByText("Rascunho salvo.")).toBeVisible();
+    await user.click(publicar());
+
+    expect(await screen.findByText("Publicada a v8.")).toBeVisible();
+    expect(publishPrompt).toHaveBeenCalledWith("2026-09-20T15:30:00Z");
+    expect(publishPrompt).not.toHaveBeenCalledWith("2026-09-17T12:00:00Z");
     expect(refresh).toHaveBeenCalled();
   });
 

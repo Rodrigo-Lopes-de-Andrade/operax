@@ -751,7 +751,7 @@ begin
   if falhas <> '' then raise exception 'FALHA: capacidades do assistente -> %', falhas; end if;
 end $$;
 
-\echo '--- 20. Assistente / A4: as duas funções de Execuções são INVOKER, sem dry run e sem recorte de papel no corpo'
+\echo '--- 20. Assistente / A4: as três funções de Execuções são INVOKER, com o dry run do lado certo e sem recorte de papel no corpo'
 -- O item 17 fez isto para `fn_delivery_by_channel` e a razão aqui é a mesma,
 -- com uma diferença que importa: a policy herdada NÃO é só de administrador.
 -- `ai_query_read` é `user_id = auth.uid() OR util.is_admin(tenant_id)`, então
@@ -761,15 +761,22 @@ end $$;
 -- no item 9 se lembrasse do search_path. Por isso: definer é falha, e filtro de
 -- papel escrito no corpo também é — seria a segunda cópia da mesma regra.
 --
--- A terceira garantia é o `not is_dry_run`. A aba Teste roda consulta real
--- sobre dado real, e roda muitas; um teste dentro da média de custo move o
--- único número que esta etapa produz (SPEC-AGENTE §0.3). O índice parcial
+-- A terceira garantia é o `is_dry_run`, e desde a onda 2 ele tem DOIS lados.
+-- A aba Teste roda consulta real sobre dado real, e roda muitas; um teste
+-- dentro da média de custo move o único número que esta etapa produz
+-- (SPEC-AGENTE §0.3). Então as duas primeiras o NEGAM. A terceira,
+-- `fn_assistant_test_cost`, é o total à parte desse gasto e o AFIRMA — um
+-- `not` a mais no corpo dela faria a linha "Testes do período" virar uma
+-- segunda cópia do tráfego com outro nome, e o painel mostraria o mesmo
+-- número duas vezes chamando um deles de teste. Por isso o sinal é conferido
+-- nos dois sentidos, função por função. O índice parcial
 -- `ai_query_dry_run_idx` nasceu com esse predicado, então o filtro é também o
 -- que faz a janela usá-lo.
 do $$
 declare r record; falhas text := ''; cols text[]; v text;
 begin
-  foreach v in array array['fn_assistant_runs', 'fn_assistant_cost_by_version'] loop
+  foreach v in array array['fn_assistant_runs', 'fn_assistant_cost_by_version',
+                           'fn_assistant_test_cost'] loop
     select p.oid, p.prosecdef, p.proconfig, pg_get_functiondef(p.oid) as src
       into r
       from pg_proc p join pg_namespace n on n.oid = p.pronamespace
@@ -797,32 +804,51 @@ begin
     if r.src !~ 'from app\.ai_query' then
       falhas := falhas || format('%s não lê app.ai_query ', v);
     end if;
-    -- ⛔ O dry run negado, no corpo das duas.
-    if r.src !~ 'not q\.is_dry_run' then
-      falhas := falhas || format('%s conta o dry run — a aba Teste entraria na média de custo ', v);
-    end if;
     -- ⛔ Nenhum recorte de papel escrito à mão: a policy é o recorte.
     if r.src ~* 'is_admin|user_tenants|has_tenant' then
       falhas := falhas || format('%s escreve recorte de papel no corpo — ela é invoker justamente para herdar ai_query_read ', v);
     end if;
-    -- E a linha cuja versão o leitor não alcança: `ai_query` é log e não tem
-    -- trigger de escopo (§A3-b1 mede que a FK aceita versão de outro tenant),
-    -- então sob invoker o join vem vazio. Sem este ramo o rótulo sai NULO — e
-    -- `version_label` é `str` nos schemas, então a aba inteira vira 500 por
-    -- causa de uma linha de log.
-    if r.src not like '%versão fora do alcance%' or r.src !~ 'v\.id is null' then
-      falhas := falhas || format('%s não rotula a linha cuja versão o leitor não alcança ', v);
-    end if;
-    -- Procedência: nulo é "antes do versionamento", nunca v1.
-    if r.src not like '%antes do versionamento%' or r.src !~ 'q\.prompt_version_id is null' then
-      falhas := falhas || format('%s não rotula a linha sem versão como "antes do versionamento" — atribuí-la a uma versão seria inventar procedência ', v);
-    end if;
     if r.src not like '%greatest(p_weeks, 1)%' then
       falhas := falhas || format('%s perdeu o piso de p_weeks ', v);
     end if;
+
+    if v = 'fn_assistant_test_cost' then
+      -- ⛔ Aqui o dry run é AFIRMATIVO, e é a função inteira. Conferido nos
+      -- dois sentidos: sem o positivo ela totaliza o tráfego; com o negativo
+      -- ela vira uma segunda cópia dele chamada de teste.
+      if r.src !~ 'where q\.is_dry_run' then
+        falhas := falhas || format('%s não filtra q.is_dry_run afirmativamente — o total de testes seria o tráfego ', v);
+      end if;
+      if r.src ~ 'not q\.is_dry_run' then
+        falhas := falhas || format('%s nega is_dry_run — quem nega são as irmãs; esta é o total dos testes ', v);
+      end if;
+      -- ⛔ É um TOTAL, não uma quebra: sem versão e sem modelo, ninguém a
+      -- encosta na tabela de custo e soma as duas sem perceber (decisão do
+      -- dono, 20/09/2026).
+      if r.src ~* 'prompt_version_id|version_label' then
+        falhas := falhas || format('%s quebra o total por versão — o dono pediu linha à parte, não coluna na mesma tabela ', v);
+      end if;
+    else
+      -- ⛔ O dry run negado, no corpo das duas.
+      if r.src !~ 'not q\.is_dry_run' then
+        falhas := falhas || format('%s conta o dry run — a aba Teste entraria na média de custo ', v);
+      end if;
+      -- E a linha cuja versão o leitor não alcança: `ai_query` é log e não tem
+      -- trigger de escopo (§A3-b1 mede que a FK aceita versão de outro tenant),
+      -- então sob invoker o join vem vazio. Sem este ramo o rótulo sai NULO — e
+      -- `version_label` é `str` nos schemas, então a aba inteira vira 500 por
+      -- causa de uma linha de log.
+      if r.src not like '%versão fora do alcance%' or r.src !~ 'v\.id is null' then
+        falhas := falhas || format('%s não rotula a linha cuja versão o leitor não alcança ', v);
+      end if;
+      -- Procedência: nulo é "antes do versionamento", nunca v1.
+      if r.src not like '%antes do versionamento%' or r.src !~ 'q\.prompt_version_id is null' then
+        falhas := falhas || format('%s não rotula a linha sem versão como "antes do versionamento" — atribuí-la a uma versão seria inventar procedência ', v);
+      end if;
+    end if;
   end loop;
 
-  -- Os dois contratos, por nome exato.
+  -- Os três contratos, por nome exato.
   select p.oid into r from pg_proc p join pg_namespace n on n.oid = p.pronamespace
    where n.nspname = 'public' and p.proname = 'fn_assistant_runs';
   select array_agg(a.n order by a.n) into cols
@@ -841,6 +867,28 @@ begin
   if cols is distinct from array['avg_latency_ms', 'input_tokens', 'model', 'month_start', 'output_tokens',
                                  'prompt_version_id', 'refused_runs', 'runs', 'version_label'] then
     falhas := falhas || format('fn_assistant_cost_by_version mudou de contrato: %s ', cols);
+  end if;
+  select p.oid into r from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+   where n.nspname = 'public' and p.proname = 'fn_assistant_test_cost';
+  select array_agg(a.n order by a.n) into cols
+    from pg_proc p, unnest(p.proargnames, p.proargmodes) as a(n, m)
+   where p.oid = r.oid and a.m = 't';
+  if cols is distinct from array['input_tokens', 'month_start', 'output_tokens', 'runs'] then
+    falhas := falhas || format('fn_assistant_test_cost mudou de contrato: %s ', cols);
+  end if;
+  -- ⛔ E a janela é a MESMA expressão nas três: a aba mostra as duas tabelas e
+  -- o total sob um seletor só, e uma janela que deriva faz o total pertencer a
+  -- um período que a tabela acima dele não cobre.
+  if (select count(distinct src) from (
+        select pg_get_functiondef(p.oid) as src
+          from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+         where n.nspname = 'public'
+           and p.proname in ('fn_assistant_runs', 'fn_assistant_cost_by_version',
+                             'fn_assistant_test_cost')
+           and pg_get_functiondef(p.oid) like
+               '%date_trunc(''week'', now()) - make_interval(weeks => greatest(p_weeks, 1) - 1)%'
+      ) t) <> 3 then
+    falhas := falhas || 'as três funções de Execuções não usam a mesma expressão de janela — o total pertenceria a um período diferente do da tabela ';
   end if;
 
   -- E a policy de que as duas dependem continua sendo própria-ou-admin: se ela

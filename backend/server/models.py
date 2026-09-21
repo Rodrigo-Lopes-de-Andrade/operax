@@ -1633,6 +1633,27 @@ class AssistantCostByVersion(BaseModel):
     avg_latency_ms: Decimal | None
 
 
+class AssistantTestCost(BaseModel):
+    """O gasto da aba Teste numa competência — um TOTAL, não uma quebra.
+
+    `fn_assistant_cost_by_version` responde "custo do tráfego" e fica sem o
+    dry run, que é o certo: teste não é tráfego, e teste dentro da média move
+    o único número que esta etapa produz. Mas o dry run é dinheiro real, e num
+    mês de ajuste de prompt é a maior parte da conta — quem lê a tabela de
+    custo como fatura lê menos do que gastou.
+
+    Sem versão e sem modelo de propósito (decisão do dono, 20/09/2026): é uma
+    linha à parte, e nada aqui se junta à irmã por outra coisa que não a
+    competência. Somar as duas não significa nada, e o formato é o que impede
+    que alguém as some sem perceber.
+    """
+
+    month_start: date
+    runs: int
+    input_tokens: int
+    output_tokens: int
+
+
 class ChannelCapabilities(BaseModel):
     """O que o canal permite. Cópia de `operax.alertas.capacidades`, nunca decisão daqui.
 

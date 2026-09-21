@@ -3766,6 +3766,16 @@ public.fn_assistant_runs(p_weeks integer DEFAULT 8)
 Os turnos REAIS (nunca dry run) das últimas p_weeks semanas, a atual inclusa, mais novo primeiro, com a versão de prompt que os produziu. version_label é texto pronto: "v3" para camada de tenant, "plataforma v1" para a doutrina, e "antes do versionamento" quando prompt_version_id é nulo — nunca "v1", que seria inventar procedência. Security INVOKER: lê app.ai_query pela policy ai_query_read (próprio turno OU is_admin), então quem não é admin vê só os próprios turnos, e isso é o recorte inteiro.
 
 
+### `fn_assistant_test_cost`
+
+```sql
+public.fn_assistant_test_cost(p_weeks integer DEFAULT 8)
+  returns TABLE(month_start date, runs bigint, input_tokens bigint, output_tokens bigint)
+```
+
+O gasto da aba Teste por competência, nas últimas p_weeks semanas (a atual inclusa): turnos de dry run, tokens de entrada e de saída. É o complemento de fn_assistant_cost_by_version, que conta só o tráfego real — e é um TOTAL À PARTE, sem versão e sem modelo, para ninguém somar os dois sem perceber: um é tráfego, o outro é ajuste de prompt. Decisão do dono em 20/09/2026. q.is_dry_run é AFIRMATIVO aqui e negado nas irmãs; a janela é a mesma expressão das três. Security INVOKER: o recorte é ai_query_read (próprio turno OU is_admin), como nas irmãs.
+
+
 ### `fn_channel_readiness`
 
 ```sql

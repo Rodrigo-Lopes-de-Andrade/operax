@@ -160,6 +160,12 @@ export function PromptEditor({
   const [saved, setSaved] = useState<string | null>(
     screen.draft?.content ?? null,
   );
+  // O `updated_at` do rascunho que ESTA tela leu. Vai no publicar: sem ele a
+  // RPC congela o que estiver na tabela na hora, e outra pessoa pode ter
+  // salvado por cima entre o render e o clique.
+  const [seenAt, setSeenAt] = useState<string | null>(
+    screen.draft?.updated_at ?? null,
+  );
   const [busy, setBusy] = useState<"save" | "publish" | null>(null);
   const [outcome, setOutcome] = useState<Outcome | null>(null);
 
@@ -173,6 +179,9 @@ export function PromptEditor({
     try {
       const draft = await saveDraft(text);
       setSaved(draft.content);
+      // A data do que o servidor tem agora: é ela que viaja no publicar, para
+      // a recusa `draft_moved` poder existir.
+      setSeenAt(draft.updated_at);
       setOutcome({ kind: "saved" });
       router.refresh();
     } catch (caught) {
@@ -199,7 +208,7 @@ export function PromptEditor({
     setBusy("publish");
 
     try {
-      const result = await publishPrompt();
+      const result = await publishPrompt(seenAt);
       setOutcome({ kind: "published", version_number: result.version_number });
       router.refresh();
     } catch (caught) {

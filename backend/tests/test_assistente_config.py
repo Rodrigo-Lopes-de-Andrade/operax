@@ -34,6 +34,7 @@ from operax.agente import agente
 from operax.agente.agente import Record
 from operax.agente.prompt import PromptLayers
 from operax.core.tenant import TenantContext
+from server.models import AssistantCostByVersion, AssistantRun, AssistantTestCost
 from server.routers import assistente, assistente_config
 from tests.conftest import TENANT_ID, USER_ID
 from tests.fixtures.fake_llm import FakeChatModel
@@ -147,6 +148,7 @@ def db(monkeypatch: pytest.MonkeyPatch):
         catalog_one: dict[str, Any] | None = None,
         runs: list[dict[str, Any]] | None = None,
         cost: list[dict[str, Any]] | None = None,
+        test_cost: list[dict[str, Any]] | None = None,
         draft_saved: dict[str, Any] | None = None,
         pointer_moved: dict[str, Any] | None = None,
         scope_saved: dict[str, Any] | None = None,
@@ -162,6 +164,7 @@ def db(monkeypatch: pytest.MonkeyPatch):
                 "fn_publish_assistant_prompt": publish,
                 "fn_assistant_runs": runs if runs is not None else [],
                 "fn_assistant_cost_by_version": cost if cost is not None else [],
+                "fn_assistant_test_cost": test_cost if test_cost is not None else [],
                 "where code = %(code)s": catalog_one,
                 "order by code": catalog if catalog is not None else CATALOG,
             }
@@ -1087,6 +1090,102 @@ def test_custo_recusa_a_janela_fora_da_faixa(client: TestClient, cabecalho: dict
     assert (
         client.get("/assistente/configuracao/custo?weeks=53", headers=cabecalho).status_code == 422
     )
+
+
+TEST_COST_ROW = {
+    "month_start": "2026-09-01",
+    "runs": 12,
+    "input_tokens": 1998,
+    "output_tokens": 430,
+}
+
+
+def test_custo_de_teste_traz_o_total_por_competencia(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """O gasto da aba Teste é dinheiro real e `/custo` o deixa de fora — de
+    propósito. Esta rota é o outro lado, e a janela é a mesma."""
+    user, _, _ = db(test_cost=[TEST_COST_ROW])
+
+    resposta = client.get("/assistente/configuracao/custo-de-teste?weeks=4", headers=cabecalho)
+
+    assert resposta.status_code == 200
+    (linha,) = resposta.json()
+    assert linha["runs"] == 12
+    assert linha["input_tokens"] == 1998
+    assert "public.fn_assistant_test_cost(%(weeks)s)" in user.statements[0]
+    assert user.params[0] == {"weeks": 4}
+
+
+def test_o_custo_de_teste_e_um_total_sem_versao_e_sem_modelo(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """⛔ Decisão do dono, 20/09/2026: linha de total à parte, não coluna na
+    mesma tabela. Sem versão e sem modelo, nada se junta ao tráfego por outra
+    coisa que não a competência — e ninguém soma os dois sem perceber."""
+    db(test_cost=[TEST_COST_ROW | {"version_label": "v2", "model": "gpt-5.4"}])
+
+    (linha,) = client.get("/assistente/configuracao/custo-de-teste", headers=cabecalho).json()
+
+    assert set(linha) == {"month_start", "runs", "input_tokens", "output_tokens"}
+
+
+def test_custo_de_teste_recusa_a_janela_fora_da_faixa(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    db(test_cost=[])
+
+    for fora in ("0", "53", "-1"):
+        resposta = client.get(
+            f"/assistente/configuracao/custo-de-teste?weeks={fora}", headers=cabecalho
+        )
+        assert resposta.status_code == 422, fora
+
+
+def test_custo_de_teste_nao_pede_admin_e_nao_abre_service_role(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """O mesmo recorte das irmãs: `fn_assistant_test_cost` é invoker e
+    `ai_query_read` é próprio-ou-admin, então um membro comum totaliza os
+    próprios testes. Um `_require_admin` aqui seria a segunda cópia da regra."""
+    user, _, bound_ctx = db(admin=False, test_cost=[TEST_COST_ROW])
+
+    resposta = client.get("/assistente/configuracao/custo-de-teste", headers=cabecalho)
+
+    assert resposta.status_code == 200
+    assert len(resposta.json()) == 1
+    assert not any("util.is_admin" in statement for statement in user.statements)
+    assert bound_ctx.opened == 0
+
+
+def _select_columns(statement: str) -> set[str]:
+    """As colunas que o `select` de fato pede, pelo apelido quando há um."""
+    corpo = statement[statement.index("select") + len("select") : statement.index("from")]
+    return {item.strip().split()[-1].split(".")[-1] for item in corpo.split(",")}
+
+
+def test_o_select_de_cada_leitura_traz_todo_campo_do_schema():
+    """⛔ O stub responde pelo ASSUNTO do statement, então uma coluna que falta
+    no `select` é invisível aqui e vira 500 contra o banco de verdade — o campo
+    é obrigatório no Pydantic e não chega.
+
+    Foi o que aconteceu com `model` quando ele entrou na chave do custo em
+    20/09: a função passou a devolvê-lo, o schema a exigi-lo, e o `select` da
+    rota ficou onde estava. Cada caso de `/custo` seguia verde.
+
+    E nos DOIS sentidos: uma coluna a mais no `select` que a função não devolve
+    é a mesma classe de defeito ao contrário — `column does not exist`, 500
+    contra o banco, verde no stub. Igualdade de conjuntos, não subconjunto.
+    """
+    for sql, schema in (
+        (assistente_config._RUNS_SQL, AssistantRun),
+        (assistente_config._COST_SQL, AssistantCostByVersion),
+        (assistente_config._TEST_COST_SQL, AssistantTestCost),
+    ):
+        faltando = set(schema.model_fields) - _select_columns(sql)
+        sobrando = _select_columns(sql) - set(schema.model_fields)
+        assert not faltando, f"{schema.__name__}: {sorted(faltando)} fora do select"
+        assert not sobrando, f"{schema.__name__}: {sorted(sobrando)} no select sem campo no schema"
 
 
 def test_as_duas_leituras_de_execucoes_nao_abrem_transacao_de_service_role(

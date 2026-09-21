@@ -1,10 +1,10 @@
 -- ============================================================================
 -- OperaX — TESTE DAS CAMADAS DO ASSISTENTE (SPEC-AGENTE §2, §3a, §3b, §3c, §3d, §3e, §4, §5)
 -- ----------------------------------------------------------------------------
--- 221 asserções (95 do A1 + 46 do A2 + 23 do A3 + 57 do A4), contadas pelas
+-- 236 asserções (95 do A1 + 46 do A2 + 23 do A3 + 72 do A4), contadas pelas
 -- chamadas a assert_eq, deve_falhar, rpc_recusa e rpc_recusa_seen. A saída traz
--- 226 linhas de `ok`, e não 221: o laço da A4-e roda cinco chamadas para cada
--- uma das duas funções. Garantias que só valem se o banco as sustentar:
+-- 246 linhas de `ok`, e não 236: o laço da A4-e roda cinco chamadas para cada
+-- uma das TRÊS funções. Garantias que só valem se o banco as sustentar:
 --
 --   A) As sete linhas da SPEC §3a — coerência de escopo, modelo só na
 --      plataforma, versão imutável, um ponteiro por escopo, versão apontada
@@ -49,7 +49,13 @@
 --      próprio e owner o tenant (não-vácuo dos dois lados), a janela cortando
 --      linha e custo, a soma batendo com a soma bruta, competências
 --      separadas, e `version_label` dizendo "antes do versionamento" onde a
---      procedência não existe — nunca "v1".
+--      procedência não existe — nunca "v1". E o total à parte
+--      (`fn_assistant_test_cost`, migration `assistant_test_cost_fn`): ele
+--      conta SÓ dry run — o positivo (bate com a soma bruta dos testes) e o
+--      negativo (não é o tráfego nem o total de tudo) —, particiona a janela
+--      com a irmã (tráfego + teste = a janela inteira, nada contado duas
+--      vezes), corta pela mesma janela e herda o mesmo recorte: o supervisor
+--      totaliza os próprios testes, e o do outro tenant fica fora.
 --
 -- A fidelidade da transcrição da v1 (o texto da migration renderizado ==
 -- o que agente._prompt produzia, pinado em fixture antes de o literal sair)
@@ -1586,13 +1592,14 @@ reset role;
 -- ---------------------------------------------------------------------------
 -- (e) Estrutura das duas funções
 -- ---------------------------------------------------------------------------
-\echo '    (e) as duas funções: invoker com search_path, anon fora, authenticated dentro'
+\echo '    (e) as três funções: invoker com search_path, anon fora, authenticated dentro'
 do $$
 declare
   v_nome text;
   v_oid  oid;
 begin
-  foreach v_nome in array array['fn_assistant_runs', 'fn_assistant_cost_by_version'] loop
+  foreach v_nome in array array['fn_assistant_runs', 'fn_assistant_cost_by_version',
+                                'fn_assistant_test_cost'] loop
     perform pg_temp.assert_eq(format('A4-e. public.%s existe com uma assinatura só', v_nome),
       (select count(*) from pg_proc p join pg_namespace n on n.oid = p.pronamespace
         where n.nspname = 'public' and p.proname = v_nome), 1);
@@ -1622,6 +1629,139 @@ begin
   perform pg_temp.assert_eq('A4-e. e anon continua fora dela',
     case when has_function_privilege('anon', v_oid, 'EXECUTE') then 1 else 0 end, 0);
 end $$;
+
+-- ---------------------------------------------------------------------------
+-- (f) fn_assistant_test_cost — o total à parte, e a soma que fecha
+-- ---------------------------------------------------------------------------
+-- `not is_dry_run` nas irmãs está certo: teste não é tráfego. Mas o dry run é
+-- dinheiro real, e quem lê a tabela de custo como fatura lê menos do que
+-- gastou. Esta função é o outro lado, e é um TOTAL — sem versão e sem modelo,
+-- para ninguém somar os dois sem perceber (decisão do dono, 20/09/2026).
+--
+-- As três perguntas: conta SÓ dry run (o positivo e o negativo), bate com a
+-- soma bruta, e junto com a irmã particiona a janela — nada contado duas
+-- vezes, nada deixado de fora. E o recorte é o mesmo: a policy.
+\echo '    (f) fn_assistant_test_cost: só dry run, soma que fecha, e o mesmo recorte'
+reset role;
+do $$
+declare
+  v_a       uuid := 'a1a00000-0000-0000-0000-00000000000a';
+  v_b       uuid := 'a1b00000-0000-0000-0000-00000000000b';
+  v_owner_a uuid := 'a1000000-0000-0000-0000-000000000001';
+  v_super_a uuid := 'a1000000-0000-0000-0000-000000000002';
+  v_owner_b uuid := 'a1000000-0000-0000-0000-000000000004';
+  v_hash    text := repeat('b', 64);
+begin
+  -- Plantados DEPOIS das asserções de (c) e (d), que contam turnos: estas
+  -- linhas são todas dry run e nenhuma se chama 'A4 R%', então nenhuma soma
+  -- anterior muda de valor.
+  insert into app.ai_query (tenant_id, user_id, question, model, metric_code, rows_returned,
+                            latency_ms, input_tokens, output_tokens, refused, refusal_reason,
+                            prompt_version_id, is_dry_run, draft_content_hash, created_at)
+  values
+    -- T1: teste do owner na competência corrente.
+    (v_a, v_owner_a, 'A4 T1 teste do owner', 'fake-1', null, null,
+     40, 40, 7, false, null, null, true, v_hash, now()),
+    -- T2: teste na competência anterior, dentro da janela.
+    (v_a, v_owner_a, 'A4 T2 teste do mês passado', 'fake-1', null, null,
+     30, 3, 1, false, null, null, true, v_hash,
+     date_trunc('month', now()) - interval '1 day'),
+    -- T3: teste velho demais para a janela padrão.
+    (v_a, v_owner_a, 'A4 T3 teste fora da janela', 'fake-1', null, null,
+     20, 5000, 5000, false, null, null, true, v_hash, now() - interval '20 weeks'),
+    -- T4: teste do supervisor — é ele que faz o recorte de papel não ser vácuo.
+    (v_a, v_super_a, 'A4 T4 teste do supervisor', 'fake-1', null, null,
+     10, 11, 2, false, null, null, true, v_hash, now()),
+    -- T5: teste do outro tenant.
+    (v_b, v_owner_b, 'A4 T5 teste do tenant B', 'fake-1', null, null,
+     10, 777, 77, false, null, null, true, v_hash, now());
+  perform pg_temp.assert_eq('A4-f0. o cenário do teste tem 5 dry runs novos',
+    (select count(*) from app.ai_query where question like 'A4 T%'), 5);
+end $$;
+
+set local role authenticated;
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000001';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000001","role":"authenticated"}';
+do $$
+declare
+  v_inicio    timestamptz := date_trunc('week', now()) - make_interval(weeks => 7);
+  v_teste     bigint;
+  v_trafego   bigint;
+  v_bruto_dry bigint;
+  v_bruto_tot bigint;
+begin
+  select coalesce(sum(t.input_tokens), 0) into v_teste from public.fn_assistant_test_cost() t;
+  select coalesce(sum(c.input_tokens), 0) into v_trafego
+    from public.fn_assistant_cost_by_version() c;
+  select coalesce(sum(q.input_tokens), 0) into v_bruto_dry from app.ai_query q
+   where q.is_dry_run and q.created_at >= v_inicio;
+  select coalesce(sum(q.input_tokens), 0) into v_bruto_tot from app.ai_query q
+   where q.created_at >= v_inicio;
+
+  -- ⛔ O positivo: o total é a soma bruta dos dry runs da janela — inclusive o
+  -- R4 de 999 tokens, que nenhuma média pode ter visto.
+  perform pg_temp.assert_eq('A4-f1. o total de teste bate com a soma bruta dos dry runs',
+    v_teste, v_bruto_dry);
+  -- ⛔ O negativo: não é o tráfego, e não é o total de tudo. Sem estes dois, um
+  -- `not` a mais no corpo passaria despercebido — e a linha "Testes do
+  -- período" viraria uma segunda cópia do tráfego com outro nome.
+  perform pg_temp.assert_eq('A4-f2. e NÃO é a soma do tráfego (um "not" a mais no corpo cairia aqui)',
+    case when v_teste = v_trafego then 1 else 0 end, 0);
+  perform pg_temp.assert_eq('A4-f2b. nem a soma de tudo (o teste não é vácuo dos dois lados)',
+    case when v_teste = v_bruto_tot then 1 else 0 end, 0);
+  -- ⛔ As duas funções particionam a janela: nada contado duas vezes, nada
+  -- deixado de fora. É esta asserção que prova que somar as duas é somar o
+  -- período inteiro — e por que elas são DUAS leituras, não uma.
+  perform pg_temp.assert_eq('A4-f3. tráfego + teste = a janela inteira (nada duplicado, nada perdido)',
+    v_teste + v_trafego, v_bruto_tot);
+  perform pg_temp.assert_eq('A4-f4. e os turnos contados são os dry runs da janela',
+    (select coalesce(sum(t.runs), 0)::bigint from public.fn_assistant_test_cost() t),
+    (select count(*) from app.ai_query q where q.is_dry_run and q.created_at >= v_inicio));
+
+  -- Competências separadas, como na irmã: o T2 é de outro mês.
+  perform pg_temp.assert_eq('A4-f5. as competências não se misturam (2 meses distintos)',
+    (select count(distinct t.month_start) from public.fn_assistant_test_cost() t), 2);
+  perform pg_temp.assert_eq('A4-f6. a competência anterior traz só o T2 (3 tokens de entrada)',
+    (select t.input_tokens from public.fn_assistant_test_cost() t
+      where t.month_start < date_trunc('month', now())::date), 3);
+
+  -- A janela corta igual à das irmãs: os 5000 do T3 só entram na larga.
+  perform pg_temp.assert_eq('A4-f7. os 5000 tokens de 20 semanas atrás só entram na janela larga',
+    (select coalesce(sum(t.input_tokens), 0)::bigint from public.fn_assistant_test_cost(52) t)
+    - (select coalesce(sum(t.input_tokens), 0)::bigint from public.fn_assistant_test_cost() t), 5000);
+  perform pg_temp.assert_eq('A4-f8. p_weeks zero ou negativo é a semana corrente, nunca "tudo"',
+    (select count(*) from public.fn_assistant_test_cost(0) t
+      where t.month_start < date_trunc('month', now())::date), 0);
+
+  -- ⛔ E o tenant: o teste de B não entra na conta de A.
+  perform pg_temp.assert_eq('A4-f9. os 777 tokens de teste do tenant B ficam fora da conta de A',
+    (select count(*) from public.fn_assistant_test_cost() t where t.input_tokens = 777), 0);
+end $$;
+
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000002';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000002","role":"authenticated"}';
+do $$ begin
+  -- O mesmo recorte de `ai_query_read`, e por herança, não por cópia: o
+  -- supervisor totaliza os próprios testes — o T4, e só ele.
+  perform pg_temp.assert_eq('A4-f10. supervisor de A totaliza só os próprios testes (11 de entrada)',
+    (select coalesce(sum(t.input_tokens), 0)::bigint from public.fn_assistant_test_cost() t), 11);
+  perform pg_temp.assert_eq('A4-f11. e é um turno só (não-vácuo dos dois lados)',
+    (select coalesce(sum(t.runs), 0)::bigint from public.fn_assistant_test_cost() t), 1);
+end $$;
+
+set local request.jwt.claim.sub = 'a1000000-0000-0000-0000-000000000004';
+set local request.jwt.claims = '{"sub":"a1000000-0000-0000-0000-000000000004","role":"authenticated"}';
+do $$ begin
+  perform pg_temp.assert_eq('A4-f12. owner B totaliza só o teste de B (777 de entrada)',
+    (select coalesce(sum(t.input_tokens), 0)::bigint from public.fn_assistant_test_cost() t), 777);
+end $$;
+
+set local role anon;
+do $$ begin
+  perform pg_temp.deve_falhar('A4-f13. anon não executa fn_assistant_test_cost',
+    $q$select * from public.fn_assistant_test_cost()$q$, 'permission denied');
+end $$;
+reset role;
 
 \echo ''
 \echo '================================================'

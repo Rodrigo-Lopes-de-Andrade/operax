@@ -766,6 +766,121 @@ pode escrever "a v2 custou X". `version_label` é renderizado como vem:
 atribuir procedência que não se tem é o erro que a etapa existe para não
 cometer.
 
+**Onda 2 entregue em 20/09/2026, em revisão + guardião.**
+`20260920192201_assistant_test_cost_fn` (uma linha por competência, só dry
+run, janela copiada caractere por caractere das irmãs — e o `do $$` falha
+alto se **qualquer uma das três** derivar); `97` com 236 asserções; `99`
+item 20 iterando sobre as três, com o `is_dry_run` afirmativo em ramo
+próprio; a aba com as quatro frases (ele acrescentou uma à minha lista, e
+tinha razão: a janela é semanas e a competência é mês, então a competência
+mais antiga é **sempre** parcial — sem a ressalva, "agosto custou X" lê meio
+mês como mês inteiro, e isso acontece em toda abertura da aba). 67
+migrations, pytest 1405, vitest 1082, build verde. Dez mutações de tela e
+duas de banco, todas mortas.
+
+⚠️ **Defeito meu, que ele achou e consertou:** ao fechar a onda 1 eu pus
+`model` na função, no schema, no `97`, no `99` e nos testes de rota — e
+**não** no `SELECT` do router. `GET /custo` respondia **500 contra banco de
+verdade**, e os 1400 testes ficavam verdes porque o stub responde pelo
+assunto do statement e devolve a fixture inteira. A guarda que faltava é
+dele: `test_o_select_de_cada_leitura_traz_todo_campo_do_schema` compara o
+`SELECT` de cada leitura com os campos do schema, e com o SQL de antes ela
+acusa `['model']`.
+
+**Fechado por mim antes da revisão, porque a onda 1 deixou a porta aberta
+na única entrada que o usuário usa:** o `draft_moved` existia no banco e na
+rota, mas a tela **não mandava** `seen_updated_at` e não tinha frase para o
+código — a corrida que a onda 1 fechou continuava aberta pelo painel, e o
+usuário leria `draft_moved` cru. Agora `publishPrompt(seenAt)` manda o que
+a tela leu (atualizado a cada salvamento), a sexta frase existe, e um teste
+prende o corpo da requisição.
+
+**Guardião (onda 2): APROVADO, sete de sete — e o item 4 foi a varredura
+da etapa inteira, o último gate de superfície dela.** Toda função de
+`public` cujo nome tem `assistant` ou cujo corpo lê `app.ai_query`/
+`app.assistant_*`: as quatro de leitura são invoker, definer só na de
+escrita e com uma assinatura só; as cinco tabelas do assistente com RLS,
+`tenant_id` e sem `DELETE` para papel nenhum — e a sonda discrimina, porque
+34 das 73 tabelas de `app` dão `DELETE` a alguém, então o `false` nas cinco
+é decisão, não default. Zero views de `public` citando `ai_query` ou
+`assistant_*`. Prova viva sob identidade real: admin lê e edita o próprio
+rascunho, lê o próprio turno, executa a função nova — e não apaga nada.
+Com a app real: `/custo` responde **200 com `model` no corpo** (era 500),
+`/custo-de-teste` recorta por papel, `draft_moved` dispara pelo caminho
+real e o `detail` tem 25 bytes. Diff de catálogo 66→67: uma função, nada
+mais. Correção factual dele ao meu despacho: são **cinco** funções, não
+seis — não existe sexta, e o item ficou verde por medida, não por lista.
+
+**Revisão (onda 2): REPROVADA — um ALTO no meu conserto e dois MÉDIOs, todos
+de guarda; o código correto em tudo o que ele mediu.** O ALTO: o mock de
+`publishPrompt` no teste do editor **descartava o argumento** e a única
+asserção era "foi chamado uma vez" — `publishPrompt(null)` sempre passava
+em 1084/1084, e retirar o `setSeenAt` do salvamento passava também. A
+consequência do segundo em produção: todo Publicar depois de um Salvar
+viraria `draft_moved` e o painel deixaria de publicar, com a suíte verde.
+Eu fechei a corrida no banco, na rota e na tela — e não prendi o
+fechamento no único ponto que importa. Ele mediu que o conserto em si está
+certo (o `seenAt` nasce do render, acompanha o `PUT`, e o round-trip
+psycopg → ISO → navegador → `timestamptz` é idêntico ao microssegundo).
+Os MÉDIOs: o total de teste tinha fixture de uma competência só, e um total
+lendo `rows[0]` sub-reportava com a suíte verde — sendo que a janela quase
+sempre tem mais de uma; e a guarda do `SELECT` só olhava num sentido: uma
+coluna **a mais** que a função não devolve é `column does not exist`, 500
+contra o banco, verde no stub — a classe do meu defeito da onda 1, ao
+contrário. Vinte e sete mutações, vinte e três mortas.
+
+**Fechado por mim antes do commit**, cada um provado na cópia: o mock passa
+o argumento e dois testes prendem o `updated_at` do render e o **novo**
+depois de salvar (f-D1 cai em dois, f-D2 em um); o total com duas
+competências cobra a soma (f11 cai); a guarda do `SELECT` virou igualdade de
+conjuntos (b2 cai). BAIXOs registrados: a migration confere a janela de uma
+irmã só (o `99` pega a outra); `semanas=-1` cai no padrão em silêncio; a
+quarta frase diz "começa no meio do mês" quando "pode começar" é o certo;
+"Testes do período" não usa a palavra da tela. Falso verde novo dele, e é
+bom: **a tabela de turnos mostra a hora no fuso do tenant e a de custo a
+competência em UTC** — o próprio fixture tem "30/09, 21:30" contra "outubro
+de 2026" — e só o cartão de custo avisa; contar turnos de setembro numa e
+comparar com "Turnos" da outra dá números diferentes.
+
+### ✅ A4 fechada no código em 21/09/2026 — as duas ondas
+
+Backend em `c95a569`; a aba Execuções nesta. O gate da sprint está preso em
+teste dos dois lados: no banco, a linha sem versão sai como "antes do
+versionamento" e nunca "v1" (`97` A4-c4/c5, `99` item 20); na tela, o
+rótulo é renderizado como vem, e remontá-lo por `prompt_version_id` é a
+primeira mutação que cai. Custo por competência **e por modelo**, dry run
+fora de toda média e visível como total à parte. Gates: 67 migrations RC=0,
+pytest 1405, vitest 1086, `tsc`, `prettier`, lint 0 erros, build.
+
+O que a etapa deixa nomeado e não fechado — e são decisões de produto, não
+de código: (1) **a aba mostra token e quem lê entende dinheiro** — não
+existe preço por modelo em lugar nenhum do produto, e a coluna "Modelo" é a
+única defesa; (2) `ai_query` guarda uma camada só, a do tenant — "qual
+texto respondeu" é respondido pela metade enquanto não houver a versão de
+plataforma por turno; (3) turnos no fuso do tenant e competência em UTC na
+mesma tela, com aviso só no cartão de custo; (4) a linha de uma versão soma
+as duas eras de um rollback; (5) `is_owner` vs `is_admin` para editar e
+publicar o prompt.
+
+---
+
+## ✅ A etapa Agente fechada no código em 21/09/2026
+
+Quatro sprints, sete ondas, catorze gates independentes (sete revisões,
+sete guardiões), nenhum aprovado no primeiro ciclo sem conserto. O que a
+etapa entrega: o prompt do assistente virou versão imutável com ponteiro e
+rascunho; o cliente edita, publica, testa e restaura pelo painel, sem
+deploy; liga e desliga métrica sabendo que ligar não concede nada; e cada
+turno do assistente diz qual versão o produziu e o que custou — com "antes
+do versionamento" para o que veio antes, nunca uma procedência inventada.
+
+**O que fecha a etapa de verdade** ("uma mudança de prompt publicada pelo
+painel, em produção, sem deploy — e a execução seguinte aparecendo em
+Execuções com a versão nova ao lado") **ainda não aconteceu**, e depende de
+três coisas na mão do dono: as **sete** migrations do agente em produção
+(2 A1, 2 A2, 1 A3, 2 A4) **antes** do push de `88b7c4d` em diante;
+`OPENAI_API_KEY` no `operax-api`; e o `vercel promote` depois disso.
+
 **Gate:** custo por competência **quebrado por versão de prompt** — é o que as
 colunas de token existiam para responder e não respondiam (SPEC §0.3). Dry-run
 fora de toda média. Linha anterior ao versionamento aparece como "antes do

@@ -116,6 +116,69 @@ export type CapabilityRow = {
 export type CapabilityWrite = { enabled: boolean };
 
 /**
+ * Um turno REAL da aba Execuções — dry run nunca chega aqui.
+ *
+ * ⛔ `version_label` É TEXTO PRONTO, MONTADO PELO BANCO
+ * `"v3"`, `"plataforma v1"`, `"antes do versionamento"` (quando
+ * `prompt_version_id` é nulo) e `"versão fora do alcance"` (quando o turno
+ * aponta para uma versão que quem lê não alcança). A tela **renderiza como
+ * veio**: remontar o rótulo a partir do id seria atribuir procedência que não
+ * se tem, que é o erro que esta etapa inteira existe para não cometer.
+ *
+ * `refusal_reason` é igualmente texto pronto — o `motivo` em pt-BR que o
+ * agente gravou, não um código para traduzir aqui.
+ */
+export type AssistantRun = {
+  created_at: string;
+  question: string;
+  metric_code: string | null;
+  rows_returned: number | null;
+  latency_ms: number | null;
+  input_tokens: number | null;
+  output_tokens: number | null;
+  model: string | null;
+  /** Recusa é resposta válida, não erro. */
+  refused: boolean;
+  refusal_reason: string | null;
+  prompt_version_id: string | null;
+  version_label: string;
+};
+
+/**
+ * O custo de uma competência numa versão de prompt E num modelo.
+ *
+ * O modelo está na chave porque é ele que vira preço: a versão gravada é a do
+ * tenant, e quem escolhe o modelo é a camada de plataforma. Duas linhas com o
+ * mesmo rótulo e modelos diferentes são duas linhas, e a tela não as soma.
+ *
+ * `avg_latency_ms` chega como string (`Decimal` do Pydantic) ou nula quando
+ * nenhum turno do grupo cronometrou.
+ */
+export type AssistantCostByVersion = {
+  month_start: string;
+  version_label: string;
+  prompt_version_id: string | null;
+  model: string | null;
+  runs: number;
+  refused_runs: number;
+  input_tokens: number;
+  output_tokens: number;
+  avg_latency_ms: string | null;
+};
+
+/**
+ * O gasto da aba Teste numa competência — um TOTAL, não uma quebra: sem
+ * versão e sem modelo, de propósito, para que ninguém o some ao tráfego sem
+ * perceber (decisão do dono, 20/09/2026).
+ */
+export type AssistantTestCost = {
+  month_start: string;
+  runs: number;
+  input_tokens: number;
+  output_tokens: number;
+};
+
+/**
  * A pergunta do teste: a mesma da conversa, gravada como dry run. `use_draft`
  * roda o rascunho no lugar da camada de tenant — e roda sempre como quem
  * chamou: não há seletor de papel (SPEC §5), e não haverá.
@@ -139,9 +202,21 @@ export function saveDraft(content: string): Promise<AssistantDraft> {
   });
 }
 
-export function publishPrompt(): Promise<PublishResult> {
+/**
+ * Publica o rascunho — e diz QUAL rascunho a tela estava vendo.
+ *
+ * `seenUpdatedAt` é o `updated_at` do rascunho lido nesta tela. Sem ele a RPC
+ * congela o que estiver na tabela no instante da chamada: dois administradores
+ * no mesmo minuto, e um publica o texto do outro, que nunca viu. O banco fecha
+ * essa corrida desde a A4 (`draft_moved`), mas só quando o cliente manda o que
+ * viu — mandar é o que faz a recusa existir.
+ */
+export function publishPrompt(
+  seenUpdatedAt: string | null,
+): Promise<PublishResult> {
   return requestApiAsUser<PublishResult>(`${CONFIG_PATH}/publicar`, {
     method: "POST",
+    body: { seen_updated_at: seenUpdatedAt },
   });
 }
 
@@ -184,7 +259,7 @@ export function testAssistant(
 // ---------------------------------------------------------------------------
 
 /**
- * As cinco recusas de `fn_publish_assistant_prompt`, que chegam como
+ * As seis recusas de `fn_publish_assistant_prompt`, que chegam como
  * `detail` = o código (`assistente_config.py`). A tela prende o código, não o
  * status: `draft_unchanged` e `platform_layer_missing` são os dois 409.
  */
@@ -196,6 +271,9 @@ export const PUBLISH_DETAIL_MESSAGE: Record<string, string> = {
     "A camada da plataforma não está publicada — fale com o suporte.",
   draft_unchanged:
     "O texto já está no ar: nada mudou desde a última publicação.",
+  draft_moved:
+    "O rascunho mudou desde que você abriu esta tela — recarregue antes de " +
+    "publicar. Nada foi alterado.",
 };
 
 const PUBLISH_FAILED = "Não consegui publicar. Nada foi alterado.";

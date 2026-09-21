@@ -3,10 +3,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import AssistenteConfigPage from "@/app/dashboard/administracao/assistente/page";
 import type {
+  AssistantCostByVersion,
+  AssistantRun,
+  AssistantTestCost,
   CapabilityRow,
   PromptScreen,
   VersionsScreen,
 } from "@/lib/assistente/config";
+import type { ExecutionsResult } from "@/lib/assistente/queries";
 import type { Identity } from "@/lib/identity";
 import type { RawSearchParams } from "@/lib/ponto/filters";
 
@@ -25,6 +29,7 @@ const loadIdentity = vi.fn();
 const loadPromptScreen = vi.fn();
 const loadVersions = vi.fn();
 const loadCapabilities = vi.fn();
+const loadExecutions = vi.fn();
 
 vi.mock("@/lib/identity", async () => {
   const actual =
@@ -38,6 +43,7 @@ vi.mock("@/lib/assistente/queries", () => ({
   loadPromptScreen: () => loadPromptScreen(),
   loadVersions: () => loadVersions(),
   loadCapabilities: () => loadCapabilities(),
+  loadExecutions: (weeks: number) => loadExecutions(weeks),
 }));
 
 function identidade(role: string): Identity {
@@ -108,11 +114,51 @@ const CAPABILITIES: CapabilityRow[] = [
   },
 ];
 
+const RUN: AssistantRun = {
+  created_at: "2026-10-01T00:30:00Z",
+  question: "quantos desvios ontem?",
+  metric_code: "deviations_total",
+  rows_returned: 3,
+  latency_ms: 500,
+  input_tokens: 100,
+  output_tokens: 20,
+  model: "fake-1",
+  refused: false,
+  refusal_reason: null,
+  prompt_version_id: V3_ID,
+  version_label: "v3",
+};
+
+const COST: AssistantCostByVersion = {
+  month_start: "2026-10-01",
+  version_label: "v3",
+  prompt_version_id: V3_ID,
+  model: "gpt-zz",
+  runs: 4,
+  refused_runs: 1,
+  input_tokens: 400,
+  output_tokens: 90,
+  avg_latency_ms: "275.5",
+};
+
+const TEST_COST: AssistantTestCost = {
+  month_start: "2026-10-01",
+  runs: 12,
+  input_tokens: 1998,
+  output_tokens: 430,
+};
+
+const EXECUCOES: ExecutionsResult = {
+  status: "ok",
+  screen: { runs: [RUN], cost: [COST], testCost: [TEST_COST] },
+};
+
 async function abrir(role: string, params: RawSearchParams = {}) {
   loadIdentity.mockResolvedValue(identidade(role));
   loadPromptScreen.mockResolvedValue(PROMPT);
   loadVersions.mockResolvedValue(VERSIONS);
   loadCapabilities.mockResolvedValue(CAPABILITIES);
+  loadExecutions.mockResolvedValue(EXECUCOES);
 
   return render(
     await AssistenteConfigPage({ searchParams: Promise.resolve(params) }),
@@ -131,6 +177,7 @@ beforeEach(() => {
   loadPromptScreen.mockReset();
   loadVersions.mockReset();
   loadCapabilities.mockReset();
+  loadExecutions.mockReset();
 });
 
 describe("a porta é `isAdmin`, como em Conexões", () => {
@@ -144,6 +191,7 @@ describe("a porta é `isAdmin`, como em Conexões", () => {
     expect(loadPromptScreen).not.toHaveBeenCalled();
     expect(loadVersions).not.toHaveBeenCalled();
     expect(loadCapabilities).not.toHaveBeenCalled();
+    expect(loadExecutions).not.toHaveBeenCalled();
   });
 
   it("⛔ `executive` também: ele lê a área de RH e não configura o assistente", async () => {
@@ -182,7 +230,7 @@ describe("a porta é `isAdmin`, como em Conexões", () => {
     await abrir("personnel");
 
     expect(notFound).not.toHaveBeenCalled();
-    expect(abas().getAllByRole("link")).toHaveLength(4);
+    expect(abas().getAllByRole("link")).toHaveLength(5);
   });
 });
 
@@ -240,6 +288,54 @@ describe("a aba mora na query string", () => {
     expect(loadPromptScreen).not.toHaveBeenCalled();
   });
 
+  it("⛔ `?aba=execucoes` abre as Execuções, e lê só os turnos da janela", async () => {
+    await abrir("owner", { aba: "execucoes" });
+
+    expect(abas().getByRole("link", { name: "Execuções" })).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+    expect(screen.getByText("quantos desvios ontem?")).toBeVisible();
+    // A janela padrão é 8 semanas, e nenhuma outra aba é lida.
+    expect(loadExecutions).toHaveBeenCalledWith(8);
+    expect(loadPromptScreen).not.toHaveBeenCalled();
+    expect(loadCapabilities).not.toHaveBeenCalled();
+  });
+
+  it("⛔ `?semanas=` é a janela, e ela vai inteira para a leitura", async () => {
+    await abrir("owner", { aba: "execucoes", semanas: "26" });
+
+    expect(loadExecutions).toHaveBeenCalledWith(26);
+  });
+
+  it("um `semanas=` que não é número cai no padrão, sem erro", async () => {
+    await abrir("owner", { aba: "execucoes", semanas: "'; drop table --" });
+
+    expect(loadExecutions).toHaveBeenCalledWith(8);
+  });
+
+  it("⛔ um `semanas=` fora da faixa passa como veio — e o 422 vira frase", async () => {
+    // Nada de apertar o número em silêncio: quem digitou 99 tem de ler que a
+    // faixa é 1..52, e não receber calado um recorte diferente do que pediu.
+    loadIdentity.mockResolvedValue(identidade("owner"));
+    loadExecutions.mockResolvedValue({ status: "out_of_range" });
+
+    render(
+      await AssistenteConfigPage({
+        searchParams: Promise.resolve({ aba: "execucoes", semanas: "99" }),
+      }),
+    );
+
+    expect(loadExecutions).toHaveBeenCalledWith(99);
+    expect(
+      screen.getByText(
+        "A janela precisa estar entre 1 e 52 semanas. Escolha uma das opções acima.",
+      ),
+    ).toBeVisible();
+    // E a navegação por abas continua: a pessoa não fica presa.
+    expect(abas().getAllByRole("link")).toHaveLength(5);
+  });
+
   it("uma aba que não existe cai na primeira, sem erro", async () => {
     await abrir("owner", { aba: "zz-inventada" });
 
@@ -289,7 +385,7 @@ describe("o estado em que a API não respondeu", () => {
 
     expect(screen.getByText("A configuração não pôde ser lida")).toBeVisible();
     // A navegação por abas continua: a pessoa não fica presa.
-    expect(abas().getAllByRole("link")).toHaveLength(4);
+    expect(abas().getAllByRole("link")).toHaveLength(5);
   });
 
   it("catálogo nulo na aba Capacidades também vira frase", async () => {
