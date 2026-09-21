@@ -172,6 +172,68 @@ outbox, executadas como o sender as executa — e o gatilho de verdade no meio:
   `fn_delivery_by_channel` como o owner: conta por semana, canal e provedor, e
   o owner do outro tenant vê zero.
 
+OITAVA PARTE — DESTINATÁRIOS E REGRAS (C6), DE PONTA A PONTA, CONTRA O BANCO
+As vinte e nove instruções de `server/routers/canais_regras.py`, executadas
+como as rotas as executam, mais `ciclo.py`, `outbox._TARGETS_SQL`/`_ENQUEUE_SQL`
+e `sender._GATE_SQL`/`_WAITING_SQL` — o cenário que o C6 vende:
+
+* **contato → responsável**: o `insert` do contato; a matriz apagada e
+  reinserida pela porta do `PUT`, e a unidade de outro tenant não entra (a
+  rota confere a contagem); a lista como o owner traz a matriz inteira e como
+  o supervisor sem escopo traz `units: []` (`can_see_unit` decidindo); a
+  unidade do outro tenant não volta em `_VISIBLE_UNITS_SQL` (o 404);
+* **regra nasce desligada** (`_INSERT_RULE_SQL` leva `false`); a lista como o
+  supervisor traz a regra com `targets: []` — a policy `regra_destino_admin` é
+  a única dos destinos, e é por isso que `GET /regras` é do admin;
+* **ligar sem destino é o 409**: o `update` roda, `_ACTIVE_TARGETS_SQL` diz 0,
+  e o `rollback to savepoint` é a saída por exceção da rota — a regra segue
+  desligada;
+* **destino → a regra 7 pelo gatilho**: `_INSERT_TARGETS_SQL` numa regra
+  `individual` com um `whatsapp_group` levanta `P0001` com a frase de
+  `util.validate_alert_target`; e **as duas portas que o gatilho não vigia**:
+  `_UPDATE_RULE_SQL` levando `content` a `individual` com grupo já cadastrado
+  PASSA (medido), e `_REVALIDATE_RULE_TARGETS_SQL` faz o gatilho recusar;
+  `_UPDATE_CONTACT_SQL` levando `type` a `whatsapp_group` num contato que é
+  destino de regra individual PASSA, e `_REVALIDATE_CONTACT_TARGETS_SQL`
+  recusa — nos dois, a frase é a do gatilho e o savepoint desfaz;
+* **`validate_alert_template`**: ligar uma regra de WhatsApp cujo template não
+  existe põe a regra em `_BLOCKED_SQL` com `meta_status` nulo (o 409
+  `template_not_found` da rota); e o gatilho da fila recusa nomeado a linha
+  com esse template;
+* **ligar com tudo**: `_SET_RULE_ACTIVE_SQL`, `_ACTIVE_TARGETS_SQL` = 1, a regra
+  fora de `_BLOCKED_SQL`, a trilha;
+* **o outbox enfileira um alerta real**: `ciclo._UNITS_SQL` só vê a unidade
+  com a regra ligada, o ciclo reserva os desvios do cenário,
+  `outbox._TARGETS_SQL` resolve o contato e `_ENQUEUE_SQL` grava UMA linha
+  `pending` com `rule_id` — e a mesma chave de novo é 0 linhas;
+* **o sender, com o gate fechado, conta 1 esperando e não grava nada**:
+  `_GATE_SQL` diz `promovido = false`; com um `detection_run` de produção
+  completo e nenhum `alert_release`, diz `liberado = false`; nos dois estados
+  `_WAITING_SQL` = 1, a linha continua `pending` com 0 tentativas e
+  `alert_sent` está vazia;
+* **o teste do S6**: o chamador achado pelo e-mail do owner
+  (`_CALLER_CONTACT_SQL`), as duas entradas de `route` (`_CALLER_ROUTE_SQL`),
+  a unidade do recorte ou a primeira ativa (`_TEST_UNIT_SQL`), os fatos lidos
+  e não reservados (`_TEST_FACTS_SQL` conta o que o ciclo já reservou, sem
+  mover nada), a linha com `report_cycle_id` nulo e a chave com `:test:`;
+  `_WAITING_SQL` passa a 2;
+* **desativar contato**: sob regra ligada, `_CONTACT_ACTIVE_RULES_SQL` a
+  lista (o 409); depois de desligar, `_DEACTIVATE_CONTACT_SQL` é 1 linha, o
+  contato continua existindo, `_ACTIVE_TARGETS_SQL` cai a 0 e
+  `outbox._TARGETS_SQL` não o traz mais; desativar de novo é 0 linhas;
+* **silenciar**, e **isolamento**: como `postgres`, o `tenant_id` escrito basta
+  — ligado ao outro tenant, a lista de contatos traz só o dele e a de regras
+  traz zero;
+* **a quarta porta pelo outro lado, e o último responsável**: o contato que
+  é `unit_manager` da Alfa aparece em `_NON_GROUP_RESPONSIBILITY_SQL` (o 422
+  de virar grupo) e o grupo só com `group` não; com a regra ligada por
+  responsabilidade, `_LAST_RESPONSIBLE_RULES_SQL` lista a regra quando o
+  contato é o único `unit_manager` ativo (o 409 de desativar e do `PUT` que
+  tira a responsabilidade), e não lista quando a matriz nova a mantém, quando
+  a regra está desligada, ou quando há uma segunda gestora ativa — e aí
+  `outbox._TARGETS_SQL` cai da primária inativa para a segunda, que passa a
+  ser a última.
+
 O valor de teste é uma string óbvia; nenhum segredo real passa por aqui.
 """
 
@@ -199,6 +261,8 @@ WEBHOOK = RAIZ / "backend" / "server" / "routers" / "webhooks.py"
 TENANT_PY = RAIZ / "backend" / "operax" / "core" / "tenant.py"
 OUTBOX = RAIZ / "backend" / "operax" / "alertas" / "outbox.py"
 SENDER = RAIZ / "backend" / "operax" / "alertas" / "sender.py"
+CICLO = RAIZ / "backend" / "operax" / "alertas" / "ciclo.py"
+REGRAS = RAIZ / "backend" / "server" / "routers" / "canais_regras.py"
 
 USUARIO = "7c000000-0000-0000-0000-000000000001"
 TENANT = "7ca70000-0000-0000-0000-0000000000a1"
@@ -302,6 +366,37 @@ R_META = "7ca70000-0000-0000-0000-0000000004b3"
 R_UAZAPI_INATIVA = "7ca70000-0000-0000-0000-0000000004b4"
 R_SECULLUM = "7ca70000-0000-0000-0000-0000000004b5"
 R_INVITE_LINK = "https://t.me/RotaBot?start=token-que-nao-pode-ficar-na-fila-0000"
+# Destinatários e regras (C6): um tenant com owner (com contato próprio) e
+# supervisor sem escopo, duas unidades, um colaborador com desvios de produção,
+# um WhatsApp não oficial ativo e um template; e um segundo tenant com o próprio
+# owner, um contato e uma unidade, só para provar o recorte.
+D_TENANT = "7ca70000-0000-0000-0000-000000000501"
+D_OUTRO = "7ca70000-0000-0000-0000-000000000502"
+D_OWNER = "7c000000-0000-0000-0000-000000000501"
+D_SUPERVISOR = "7c000000-0000-0000-0000-000000000502"
+D_OUTRO_OWNER = "7c000000-0000-0000-0000-000000000503"
+D_OWNER_EMAIL = "owner@regras"
+D_COMPANY = "7ca70000-0000-0000-0000-0000000005e1"
+D_OUTRO_COMPANY = "7ca70000-0000-0000-0000-0000000005e2"
+D_UNIT = "7ca70000-0000-0000-0000-0000000005c1"
+D_UNIT2 = "7ca70000-0000-0000-0000-0000000005c2"
+D_OUTRO_UNIT = "7ca70000-0000-0000-0000-0000000005c3"
+D_EMPLOYEE = "7ca70000-0000-0000-0000-0000000005b1"
+D_CONTACT = "7ca70000-0000-0000-0000-00000000f501"
+D_GROUP = "7ca70000-0000-0000-0000-00000000f502"
+D_OUTRO_CONTACT = "7ca70000-0000-0000-0000-00000000f503"
+D_SEGUNDA = "7ca70000-0000-0000-0000-00000000f504"
+D_RULE = "7ca70000-0000-0000-0000-0000000005d1"
+D_RULE_IND = "7ca70000-0000-0000-0000-0000000005d2"
+D_RULE_GRP = "7ca70000-0000-0000-0000-0000000005d3"
+D_RULE_NOTPL = "7ca70000-0000-0000-0000-0000000005d4"
+D_ZAPI = "7ca70000-0000-0000-0000-0000000005b2"
+D_CYCLE = "7ca70000-0000-0000-0000-0000000005a1"
+D_TEST_ID = "7ca70000-0000-0000-0000-0000000005a2"
+D_PHONE = "+5511999990501"
+D_HOJE = "2026-09-21"
+D_DE = "2026-09-15"
+D_TRIGGER_PHRASE = "Alerta de conteúdo individual não pode ter grupo como destinatário."
 
 
 def _hash(token: str) -> str:
@@ -2292,6 +2387,539 @@ rollback;
 """
 
 
+CENARIO_REGRAS = """
+begin;
+
+create or replace function pg_temp.assert_eq(rotulo text, obtido text, esperado text)
+returns void language plpgsql as $$
+begin
+  if obtido is distinct from esperado then
+    raise exception 'FALHA [%]: esperado %, obtido %', rotulo, esperado, obtido;
+  end if;
+  raise notice '  ok  % (%)', rotulo, obtido;
+end $$;
+
+insert into auth.users (id, email) values
+  ('{D_OWNER}',       '{D_OWNER_EMAIL}'),
+  ('{D_SUPERVISOR}',  'supervisor@regras'),
+  ('{D_OUTRO_OWNER}', 'owner@regras-outro');
+insert into app.tenant (id, slug, name) values
+  ('{D_TENANT}', 'regras-teste', 'Regras'),
+  ('{D_OUTRO}',  'regras-outro', 'Outro');
+insert into app.tenant_member (tenant_id, user_id, role) values
+  ('{D_TENANT}', '{D_OWNER}',       'owner'),
+  ('{D_TENANT}', '{D_SUPERVISOR}',  'unit_supervisor'),
+  ('{D_OUTRO}',  '{D_OUTRO_OWNER}', 'owner');
+insert into app.company (id, tenant_id, legal_name) values
+  ('{D_COMPANY}',       '{D_TENANT}', 'Empresa Regras LTDA'),
+  ('{D_OUTRO_COMPANY}', '{D_OUTRO}',  'Empresa Outra LTDA');
+insert into app.unit (id, tenant_id, company_id, code, name) values
+  ('{D_UNIT}',       '{D_TENANT}', '{D_COMPANY}',       'RG-1', 'Unidade Alfa'),
+  ('{D_UNIT2}',      '{D_TENANT}', '{D_COMPANY}',       'RG-2', 'Unidade Beta'),
+  ('{D_OUTRO_UNIT}', '{D_OUTRO}',  '{D_OUTRO_COMPANY}', 'OU-1', 'Unidade do Outro');
+-- O supervisor tem escopo numa unidade só: é o que recorta a matriz dele.
+insert into app.user_scope (tenant_id, user_id, unit_id) values
+  ('{D_TENANT}', '{D_SUPERVISOR}', '{D_UNIT}');
+insert into app.employee (id, tenant_id, company_id, unit_id, name) values
+  ('{D_EMPLOYEE}', '{D_TENANT}', '{D_COMPANY}', '{D_UNIT}', 'Colaborador Regras');
+-- Os desvios do cenário: dois de produção, ativos, na janela; um em sombra.
+insert into app.deviation_event
+  (tenant_id, employee_id, company_id, unit_id, reference_date, type, minutes, mode, status) values
+  ('{D_TENANT}', '{D_EMPLOYEE}', '{D_COMPANY}', '{D_UNIT}', '2026-09-17', 'late_entry', -26, 'production', 'active'),
+  ('{D_TENANT}', '{D_EMPLOYEE}', '{D_COMPANY}', '{D_UNIT}', '2026-09-18', 'late_exit',   21, 'production', 'active'),
+  ('{D_TENANT}', '{D_EMPLOYEE}', '{D_COMPANY}', '{D_UNIT}', '2026-09-18', 'early_exit', -30, 'shadow',     'active');
+-- WhatsApp não oficial ativo (o gatilho da fila não exige aprovação) e o template.
+insert into app.integration (id, tenant_id, provider, alias, config, active) values
+  ('{D_ZAPI}', '{D_TENANT}', 'z_api', 'z_api', '{"instance_id": "X"}', true);
+insert into app.message_template (tenant_id, code, variables, body, language) values
+  ('{D_TENANT}', 'deviation_summary', array['unit','total_events','link'],
+   'FastPark: {{1}} teve {{2}} ocorrências — {{3}}', 'pt_BR');
+-- O outro tenant tem um contato e nada mais.
+insert into app.contact (id, tenant_id, name, type, whatsapp) values
+  ('{D_OUTRO_CONTACT}', '{D_OUTRO}', 'Contato do Outro', 'person', '+5511999990599');
+
+-- ---------------------------------------------------------------------------
+-- 1. Contato → responsável: a matriz pela porta do PUT, e o que cada um vê
+-- ---------------------------------------------------------------------------
+do $$
+declare rec record; n int; lista json;
+begin
+  execute $q${INSERT_CONTACT}$q$ into rec;
+  perform pg_temp.assert_eq('o contato nasce ativo, pessoa, com o número', rec.active::text || ' ' || rec.type || ' ' || rec.whatsapp, 'true person {D_PHONE}');
+  update app.contact set id = '{D_CONTACT}' where id = rec.id;
+  execute $q${INSERT_GROUP}$q$ into rec;
+  update app.contact set id = '{D_GROUP}' where id = rec.id;
+
+  -- A matriz: duas linhas pedidas, uma delas na unidade do OUTRO tenant.
+  -- A rota já teria dito 404 como o usuário; aqui o join pelo tenant é a
+  -- segunda cerca: só a do tenant entra, e a rota confere a contagem.
+  execute $q${INSERT_MATRIX_MISTA}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('matriz: a unidade do outro tenant não entra (1 de 2)', n::text, '1');
+  execute $q${DELETE_MATRIX}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('PUT da matriz: apaga o que havia (1)', n::text, '1');
+  execute $q${INSERT_MATRIX}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('PUT da matriz: reinsere as duas (Alfa unit_manager primária, Beta hr)', n::text, '2');
+
+  -- O 404 da unidade, como o usuário: a do outro tenant não volta.
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{D_OWNER}';
+  select count(*) into n from ({VISIBLE_UNITS_MISTA}) x;
+  reset role;
+  perform pg_temp.assert_eq('_VISIBLE_UNITS_SQL como o owner: só a do tenant (1 de 2)', n::text, '1');
+
+  -- A lista como o owner: dois contatos, a matriz inteira no primeiro.
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{D_OWNER}';
+  select json_agg(json_build_object('name', c.name, 'units', c.units) order by c.name) into lista from ({CONTACTS}) c;
+  reset role;
+  perform pg_temp.assert_eq('lista como o owner: os dois contatos do tenant', json_array_length(lista)::text, '2');
+  perform pg_temp.assert_eq('lista como o owner: a matriz inteira (Alfa e Beta)',
+    (select string_agg(u ->> 'unit_name' || ':' || (u ->> 'responsibility') || ':' || (u ->> 'is_primary'), ',')
+       from json_array_elements(lista) c, json_array_elements(c -> 'units') u where c ->> 'name' = 'Owner Regras'),
+    'Unidade Alfa:unit_manager:true,Unidade Beta:hr:false');
+
+  -- A lista como o supervisor com escopo na Alfa: os contatos (has_tenant),
+  -- e só a linha da Alfa (can_see_unit) — o desenho, não a rota.
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{D_SUPERVISOR}';
+  select json_agg(json_build_object('name', c.name, 'units', c.units) order by c.name) into lista from ({CONTACTS}) c;
+  reset role;
+  perform pg_temp.assert_eq('lista como o supervisor: os dois contatos', json_array_length(lista)::text, '2');
+  perform pg_temp.assert_eq('lista como o supervisor: só a responsabilidade da unidade dele',
+    (select string_agg(u ->> 'unit_name', ',')
+       from json_array_elements(lista) c, json_array_elements(c -> 'units') u where c ->> 'name' = 'Owner Regras'),
+    'Unidade Alfa');
+
+  -- O contato, como o usuário (o 404 antes de escrever): o do outro tenant não volta.
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{D_OWNER}';
+  select count(*) into n from ({VISIBLE_CONTACT_OUTRO}) x;
+  reset role;
+  perform pg_temp.assert_eq('_VISIBLE_CONTACT_SQL: o contato do outro tenant, ligado a este, é zero', n::text, '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 2. A regra nasce desligada; o supervisor vê a regra e não vê os destinos
+-- ---------------------------------------------------------------------------
+do $$
+declare rec record; lista json; n int;
+begin
+  execute $q${INSERT_RULE}$q$ into rec;
+  update app.alert_rule set id = '{D_RULE}' where id = rec.id;
+  execute $q${INSERT_RULE_IND}$q$ into rec;
+  update app.alert_rule set id = '{D_RULE_IND}' where id = rec.id;
+  execute $q${INSERT_RULE_GRP}$q$ into rec;
+  update app.alert_rule set id = '{D_RULE_GRP}' where id = rec.id;
+  execute $q${INSERT_RULE_NOTPL}$q$ into rec;
+  update app.alert_rule set id = '{D_RULE_NOTPL}' where id = rec.id;
+  perform pg_temp.assert_eq('as quatro regras nascem desligadas',
+    (select count(*) from app.alert_rule where tenant_id = '{D_TENANT}' and not active)::text, '4');
+
+  -- O tipo de desvio: catálogo global, como o usuário.
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{D_OWNER}';
+  select count(*) into n from ({DEVIATION_TYPE_OK}) x;
+  perform pg_temp.assert_eq('_DEVIATION_TYPE_SQL: late_entry existe', n::text, '1');
+  select count(*) into n from ({DEVIATION_TYPE_NAO}) x;
+  perform pg_temp.assert_eq('_DEVIATION_TYPE_SQL: o inventado não', n::text, '0');
+  select count(*) into n from ({VISIBLE_RULE_OUTRO}) x;
+  perform pg_temp.assert_eq('_VISIBLE_RULE_SQL: a regra ligada ao outro tenant é zero', n::text, '0');
+  reset role;
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 3. Ligar sem destino é o 409: o update roda, a contagem diz 0, o savepoint desfaz
+-- ---------------------------------------------------------------------------
+do $$
+declare n int;
+begin
+  begin
+    execute $q${SET_ACTIVE_TRUE}$q$;
+    select x.n into n from ({ACTIVE_TARGETS}) x;
+    perform pg_temp.assert_eq('ligar sem destino: _ACTIVE_TARGETS_SQL diz 0', n::text, '0');
+    raise exception using errcode = 'OX409', message = 'rule_has_no_target';
+  exception when sqlstate 'OX409' then
+    raise notice '  ok  ligar sem destino: a rota levanta e a transação desfaz (%)', sqlerrm;
+  end;
+  perform pg_temp.assert_eq('e a regra continua desligada',
+    (select active::text from app.alert_rule where id = '{D_RULE}'), 'false');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 4. Destinos: a substituição, e a regra 7 pelo gatilho
+-- ---------------------------------------------------------------------------
+do $$
+declare n int; falhou boolean := false; mensagem text; lista json;
+begin
+  execute $q${INSERT_TARGETS_RULE}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('destinos da regra agregada: o contato pessoa entra', n::text, '1');
+  execute $q${INSERT_TARGETS_GRP}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('destinos da regra agregada de grupo: o grupo entra', n::text, '1');
+  execute $q${INSERT_TARGETS_IND}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('destinos da regra individual: o contato pessoa entra', n::text, '1');
+  execute $q${INSERT_TARGETS_NOTPL}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('destinos da regra sem template: o contato entra', n::text, '1');
+  execute $q${INSERT_TARGETS_OUTRO_CONTATO}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('o contato do outro tenant não entra como destino (0 de 1)', n::text, '0');
+
+  -- A regra 7: grupo numa regra individual, recusado pelo gatilho com a frase.
+  begin
+    execute $q${INSERT_TARGETS_IND_GRUPO}$q$;
+  exception when raise_exception then
+    falhou := true; mensagem := sqlerrm;
+  end;
+  perform pg_temp.assert_eq('regra 7 pelo gatilho: grupo em regra individual é P0001', falhou::text, 'true');
+  perform pg_temp.assert_eq('regra 7 pelo gatilho: a frase que a rota devolve como detail', mensagem, '{D_TRIGGER_PHRASE}');
+  perform pg_temp.assert_eq('e a regra individual continua com um destino só',
+    (select count(*) from app.alert_rule_target where rule_id = '{D_RULE_IND}')::text, '1');
+
+  -- O PUT dos destinos: apaga e reinsere (a regra 7 de novo, agora pela
+  -- substituição inteira: o grupo não entra e a lista anterior volta pelo rollback).
+  select x.n into n from ({ACTIVE_TARGETS}) x;
+  perform pg_temp.assert_eq('_ACTIVE_TARGETS_SQL: a regra agregada tem 1 destino ativo', n::text, '1');
+
+  -- A lista como o supervisor: a regra sim (has_tenant), os destinos não
+  -- (regra_destino_admin é a única policy) — é por isso que GET /regras é do admin.
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{D_SUPERVISOR}';
+  select json_agg(json_build_object('name', r.name, 'targets', r.targets) order by r.name) into lista from ({RULES}) r;
+  reset role;
+  perform pg_temp.assert_eq('lista como o supervisor: as quatro regras', json_array_length(lista)::text, '4');
+  perform pg_temp.assert_eq('lista como o supervisor: targets vazio em todas (policy só de admin)',
+    (select count(*) from json_array_elements(lista) r where json_array_length(r -> 'targets') = 0)::text, '4');
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{D_OWNER}';
+  select json_agg(json_build_object('name', r.name, 'targets', r.targets) order by r.name) into lista from ({RULES}) r;
+  reset role;
+  perform pg_temp.assert_eq('lista como o owner: a regra agregada traz o destino com contact_active',
+    (select (r -> 'targets' -> 0 ->> 'contact_active') from json_array_elements(lista) r where r ->> 'name' = 'Resumo por unidade'), 'true');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 5. As duas portas que o gatilho não vigia — e o re-toque que o faz julgar
+-- ---------------------------------------------------------------------------
+do $$
+declare falhou boolean := false; mensagem text; rec record;
+begin
+  -- Porta da regra: content → individual com grupo já cadastrado PASSA...
+  begin
+    execute $q${UPDATE_RULE_GRP_INDIVIDUAL}$q$ into rec;
+    perform pg_temp.assert_eq('a porta da regra: o update de content passa sem o gatilho (medido)',
+      (select content from app.alert_rule where id = '{D_RULE_GRP}'), 'individual');
+    -- ...e o re-toque faz o gatilho recusar, com a frase dele.
+    execute $q${REVALIDATE_RULE_GRP}$q$;
+  exception when raise_exception then
+    falhou := true; mensagem := sqlerrm;
+  end;
+  perform pg_temp.assert_eq('a porta da regra: o re-toque dos destinos é recusado pelo gatilho', falhou::text, 'true');
+  perform pg_temp.assert_eq('a porta da regra: a frase é a do gatilho', mensagem, '{D_TRIGGER_PHRASE}');
+  perform pg_temp.assert_eq('a porta da regra: o savepoint devolve content a aggregate',
+    (select content from app.alert_rule where id = '{D_RULE_GRP}'), 'aggregate');
+
+  -- Porta do contato: type → whatsapp_group num contato que é destino de regra individual PASSA...
+  falhou := false; mensagem := null;
+  begin
+    execute $q${UPDATE_CONTACT_TO_GROUP}$q$ into rec;
+    perform pg_temp.assert_eq('a porta do contato: o update de type passa sem o gatilho (medido)',
+      (select type from app.contact where id = '{D_CONTACT}'), 'whatsapp_group');
+    execute $q${REVALIDATE_CONTACT}$q$;
+  exception when raise_exception then
+    falhou := true; mensagem := sqlerrm;
+  end;
+  perform pg_temp.assert_eq('a porta do contato: o re-toque dos destinos é recusado pelo gatilho', falhou::text, 'true');
+  perform pg_temp.assert_eq('a porta do contato: a frase é a do gatilho', mensagem, '{D_TRIGGER_PHRASE}');
+  perform pg_temp.assert_eq('a porta do contato: o savepoint devolve type a person',
+    (select type from app.contact where id = '{D_CONTACT}'), 'person');
+
+  -- O mesmo re-toque numa regra sem grupo passa em silêncio (não muda nada).
+  execute $q${UPDATE_CONTACT_SAME}$q$ into rec;
+  perform pg_temp.assert_eq('o PUT do contato devolve o antes', rec.before ->> 'name', 'Owner Regras');
+  execute $q${REVALIDATE_CONTACT}$q$;
+  perform pg_temp.assert_eq('o re-toque sem grupo passa e o destino continua',
+    (select count(*) from app.alert_rule_target where contact_id = '{D_CONTACT}')::text, '3');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 6. validate_alert_template: sem template no catálogo não se liga, e a fila recusa
+-- ---------------------------------------------------------------------------
+do $$
+declare falhou boolean := false; mensagem text; achados text;
+begin
+  begin
+    execute $q${SET_ACTIVE_NOTPL}$q$;
+    select string_agg(rule_name || ':' || coalesce(meta_status, 'nulo'), ',') into achados from ({BLOCKED}) b;
+    perform pg_temp.assert_eq('ligar com template inexistente: _BLOCKED_SQL a lista com meta_status nulo',
+      achados, 'Sem template no catálogo:nulo');
+    raise exception using errcode = 'OX409', message = 'template_not_found';
+  exception when sqlstate 'OX409' then
+    raise notice '  ok  ligar com template inexistente: a rota levanta e a transação desfaz (%)', sqlerrm;
+  end;
+  perform pg_temp.assert_eq('e a regra continua desligada',
+    (select active::text from app.alert_rule where id = '{D_RULE_NOTPL}'), 'false');
+
+  -- E o gatilho da fila recusa nomeado a linha com esse template.
+  begin
+    execute $q${ENQUEUE_NOTPL}$q$;
+  exception when raise_exception then
+    falhou := true; mensagem := sqlerrm;
+  end;
+  perform pg_temp.assert_eq('validate_alert_template: a fila recusa o template inexistente', falhou::text, 'true');
+  perform pg_temp.assert_eq('validate_alert_template: nomeado', mensagem, 'Template inexistente não existe para este tenant.');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 7. Ligar com tudo — e a trilha
+-- ---------------------------------------------------------------------------
+do $$
+declare n int; rec record; achados text;
+begin
+  execute $q${SET_ACTIVE_TRUE}$q$ into rec;
+  perform pg_temp.assert_eq('ligar: o update devolve active = true', rec.active::text, 'true');
+  select x.n into n from ({ACTIVE_TARGETS}) x;
+  perform pg_temp.assert_eq('ligar: 1 destino ativo', n::text, '1');
+  -- O juiz do template é a lista de Conexões, lida DEPOIS do update: a regra
+  -- aparece nela com o template em `draft` — e o provedor não é o oficial
+  -- (`fn_channel_readiness.official = false`), então a rota deixa ligar. O que
+  -- a barraria em qualquer provedor é `meta_status` nulo (template ausente).
+  select count(*) into n from ({BLOCKED}) b where rule_name = 'Resumo por unidade' and meta_status is null;
+  perform pg_temp.assert_eq('ligar: a regra não está em _BLOCKED_SQL com meta_status nulo (o template existe)', n::text, '0');
+  select string_agg(coalesce(meta_status, 'nulo'), ',') into achados from ({BLOCKED}) b where rule_name = 'Resumo por unidade';
+  perform pg_temp.assert_eq('ligar: a lista a traz com o template em draft', achados, 'draft');
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{D_OWNER}';
+  select string_agg(provider || ':' || official::text, ',') into achados from ({READINESS}) r;
+  reset role;
+  perform pg_temp.assert_eq('ligar: e o provedor de WhatsApp não é o oficial — draft não barra', achados, 'z_api:false');
+  execute $q${AUDIT_LIGAR}$q$;
+  perform pg_temp.assert_eq('a trilha de ligar',
+    (select antes ->> 'active' || '>' || (depois ->> 'active') from app.audit_log
+      where tenant_id = '{D_TENANT}' and entity = 'alert_rule' and entity_id = '{D_RULE}'), 'false>true');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 8. O outbox enfileira um alerta real a partir dos desvios do cenário
+-- ---------------------------------------------------------------------------
+create temp table unidades as {UNITS};
+do $$
+declare n int; rec record; alvo record;
+begin
+  perform pg_temp.assert_eq('ciclo: a regra ligada sem recorte cobre as duas unidades (a Beta, vazia, cairia no _DROP_EMPTY_SQL)',
+    (select string_agg(unit_name, ',' order by unit_name) from unidades), 'Unidade Alfa,Unidade Beta');
+  perform pg_temp.assert_eq('ciclo: o período da Alfa começa no desvio mais antigo sem ciclo',
+    (select period_start::text from unidades where unit_id = '{D_UNIT}'), '2026-09-17');
+  insert into app.report_cycle (id, tenant_id, unit_id, period_start, period_end, status)
+  select '{D_CYCLE}', '{D_TENANT}', unit_id, period_start, '{D_HOJE}', 'open' from unidades where unit_id = '{D_UNIT}';
+  execute $q${RESERVE}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('ciclo: os dois desvios de produção são reservados (a sombra não)', n::text, '2');
+
+  select * into alvo from ({TARGETS}) t;
+  perform pg_temp.assert_eq('outbox._TARGETS_SQL: a regra alcança o contato pelo destino direto',
+    alvo.contact_id::text || ' ' || alvo.whatsapp, '{D_CONTACT} {D_PHONE}');
+  execute $q${ENQUEUE_REAL}$q$ into rec;
+  perform pg_temp.assert_eq('outbox: UMA linha na fila, pending, com a regra',
+    (select status || ' ' || rule_id::text || ' ' || report_cycle_id::text from app.alert_queue where id = rec.id),
+    'pending {D_RULE} {D_CYCLE}');
+  execute $q${ENQUEUE_REAL}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('outbox: a mesma chave de novo é 0 linhas', n::text, '0');
+end $$;
+drop table unidades;
+
+-- ---------------------------------------------------------------------------
+-- 9. O sender, com o gate fechado: conta 1 esperando e não grava nada
+--    (`_GATE_SQL` e `_WAITING_SQL` são leituras; o "não grava" do ramo Python
+--    está em `test_alertas_sender.py::test_com_o_gate_aberto_nada_e_reservado_nem_escrito`)
+-- ---------------------------------------------------------------------------
+do $$
+declare gate record; esperando int;
+begin
+  select * into gate from ({GATE}) g;
+  perform pg_temp.assert_eq('gate: o motor nunca rodou em produção (promovido = false)', gate.promovido::text, 'false');
+  select waiting into esperando from ({WAITING}) w;
+  perform pg_temp.assert_eq('gate fechado: 1 esperando', esperando::text, '1');
+
+  -- Motor promovido, e ainda sem liberação: continua fechado.
+  insert into app.detection_run (tenant_id, mode, period_start, period_end, status, finished_at)
+  values ('{D_TENANT}', 'production', '{D_DE}', '{D_HOJE}', 'completed', now());
+  select * into gate from ({GATE}) g;
+  perform pg_temp.assert_eq('gate: promovido, mas não liberado', gate.promovido::text || ' ' || gate.liberado::text, 'true false');
+  select waiting into esperando from ({WAITING}) w;
+  perform pg_temp.assert_eq('gate fechado ainda: 1 esperando', esperando::text, '1');
+  perform pg_temp.assert_eq('e as duas leituras não gravaram: a linha segue pending com 0 tentativas',
+    (select status || ' ' || attempts::text from app.alert_queue where tenant_id = '{D_TENANT}' and rule_id = '{D_RULE}'), 'pending 0');
+  perform pg_temp.assert_eq('e alert_sent está vazia',
+    (select count(*) from app.alert_sent where tenant_id = '{D_TENANT}')::text, '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 10. O teste do S6: para quem clicou, e só para ele
+-- ---------------------------------------------------------------------------
+do $$
+declare quem record; rota record; unidade record; fatos record; rec record; esperando int; n int;
+begin
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{D_OWNER}';
+  select * into quem from ({CALLER}) c;
+  select * into unidade from ({TEST_UNIT_ANY}) u;
+  reset role;
+  perform pg_temp.assert_eq('o chamador é achado pelo e-mail do token', quem.id::text, '{D_CONTACT}');
+  perform pg_temp.assert_eq('regra sem recorte: a primeira unidade ativa por nome', unidade.name, 'Unidade Alfa');
+  set local role authenticated;
+  set local request.jwt.claim.sub = '{D_OWNER}';
+  select * into unidade from ({TEST_UNIT_BETA}) u;
+  reset role;
+  perform pg_temp.assert_eq('regra com recorte: a unidade do recorte', unidade.name, 'Unidade Beta');
+
+  select * into rota from ({CALLER_ROUTE}) r;
+  perform pg_temp.assert_eq('as duas entradas de route: sem identidade, bot não pronto, o número',
+    coalesce(rota.telegram_external_id, 'nulo') || ' ' || rota.telegram_ready::text || ' ' || rota.whatsapp, 'nulo false {D_PHONE}');
+
+  select * into fatos from ({TEST_FACTS}) f;
+  perform pg_temp.assert_eq('os fatos: contam os dois desvios de produção (47 min), já reservados no ciclo',
+    fatos.total_events::text || ' ' || fatos.deviation_minutes::text, '2 47');
+  perform pg_temp.assert_eq('e nada foi movido: os dois continuam no ciclo',
+    (select count(*) from app.deviation_event where tenant_id = '{D_TENANT}' and report_cycle_id = '{D_CYCLE}')::text, '2');
+
+  execute $q${ENQUEUE_TEST}$q$ into rec;
+  perform pg_temp.assert_eq('o teste: uma linha sem ciclo, com a regra, para o número do chamador',
+    (select coalesce(report_cycle_id::text, 'nulo') || ' ' || rule_id::text || ' ' || destination
+       from app.alert_queue where id = rec.id), 'nulo {D_RULE} {D_PHONE}');
+  perform pg_temp.assert_eq('o teste: a chave tem o sufixo do clique',
+    (select idempotency_key like '%:test:{D_TEST_ID}' from app.alert_queue where id = rec.id)::text, 'true');
+  select waiting into esperando from ({WAITING}) w;
+  perform pg_temp.assert_eq('_WAITING_SQL: agora 2 esperando (a real e o teste)', esperando::text, '2');
+  execute $q${AUDIT_TEST}$q$;
+  select count(*) into n from app.audit_log where tenant_id = '{D_TENANT}' and entity = 'alert_queue' and depois ->> 'test_id' = '{D_TEST_ID}';
+  perform pg_temp.assert_eq('a trilha do teste leva o test_id', n::text, '1');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 11. Desativar contato: 409 sob regra ligada; depois, active = false e nunca delete
+-- ---------------------------------------------------------------------------
+do $$
+declare n int; regras text;
+begin
+  select string_agg(name, ',') into regras from ({CONTACT_ACTIVE_RULES}) r;
+  perform pg_temp.assert_eq('desativar sob regra ligada: _CONTACT_ACTIVE_RULES_SQL lista a regra (o 409)', regras, 'Resumo por unidade');
+  execute $q${SET_ACTIVE_FALSE}$q$;
+  select count(*) into n from ({CONTACT_ACTIVE_RULES}) r;
+  perform pg_temp.assert_eq('desligada a regra, nenhuma segura o contato', n::text, '0');
+  execute $q${DEACTIVATE_CONTACT}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('desativar: 1 linha', n::text, '1');
+  perform pg_temp.assert_eq('o contato continua existindo, inativo',
+    (select active::text from app.contact where id = '{D_CONTACT}'), 'false');
+  select x.n into n from ({ACTIVE_TARGETS}) x;
+  perform pg_temp.assert_eq('_ACTIVE_TARGETS_SQL: o destino com contato inativo não conta (0)', n::text, '0');
+  perform pg_temp.assert_eq('e a linha de ligação fica',
+    (select count(*) from app.alert_rule_target where rule_id = '{D_RULE}')::text, '1');
+  execute $q${SET_ACTIVE_TRUE}$q$;
+  select count(*) into n from ({TARGETS}) t;
+  perform pg_temp.assert_eq('outbox._TARGETS_SQL: o contato inativo não é alcançado (0)', n::text, '0');
+  execute $q${SET_ACTIVE_FALSE}$q$;
+  execute $q${DEACTIVATE_CONTACT}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('desativar de novo é 0 linhas (idempotente)', n::text, '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 12. Silenciar, substituir destinos, e o isolamento
+-- ---------------------------------------------------------------------------
+do $$
+declare rec record; n int;
+begin
+  execute $q${MUTE}$q$ into rec;
+  perform pg_temp.assert_eq('silenciar grava muted_until', (rec.muted_until > now())::text, 'true');
+  execute $q${MUTE_NULL}$q$ into rec;
+  perform pg_temp.assert_eq('silenciar com nulo tira o silêncio', (rec.muted_until is null)::text, 'true');
+
+  execute $q${DELETE_TARGETS}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('PUT dos destinos: apaga os da regra (1)', n::text, '1');
+  execute $q${INSERT_TARGETS_RESP}$q$;
+  get diagnostics n = row_count;
+  perform pg_temp.assert_eq('PUT dos destinos: reinsere por responsabilidade (1)', n::text, '1');
+
+  -- Isolamento, como postgres (ignora RLS): o tenant_id escrito basta.
+  select count(*) into n from ({CONTACTS_OUTRO}) c;
+  perform pg_temp.assert_eq('isolamento: ligada ao outro tenant, a lista traz só o contato dele', n::text, '1');
+  select count(*) into n from ({RULES_OUTRO}) r;
+  perform pg_temp.assert_eq('isolamento: ligada ao outro tenant, a lista de regras é zero', n::text, '0');
+  select count(*) into n from ({VISIBLE_CONTACTS_OUTRO}) c;
+  perform pg_temp.assert_eq('isolamento: o contato deste tenant, ligado ao outro, é zero', n::text, '0');
+end $$;
+
+-- ---------------------------------------------------------------------------
+-- 13. A quarta porta pelo outro lado, e o último responsável de regra ligada
+-- ---------------------------------------------------------------------------
+do $$
+declare rec record; n int; regras text; alvo text;
+begin
+  -- Herdado: a regra desligada com destino por responsabilidade (unit_manager,
+  -- seção 12) e o contato inativo (seção 11) — reativado aqui, como o owner faria.
+  update app.contact set active = true where id = '{D_CONTACT}';
+
+  -- A quarta porta pelo outro lado: pessoa → unit_manager → grupo. O contato é
+  -- unit_manager primário da Alfa e hr na Beta; a consulta traz as duas, e a
+  -- rota diz 422.
+  select count(*) into n from ({NON_GROUP_RESP}) x;
+  perform pg_temp.assert_eq('_NON_GROUP_RESPONSIBILITY_SQL: unit_manager na Alfa e hr na Beta (o 422 de virar grupo)', n::text, '2');
+  -- O positivo: o grupo com a responsabilidade `group` na Alfa tem zero.
+  execute $q${INSERT_MATRIX_GROUP}$q$;
+  select count(*) into n from ({NON_GROUP_RESP_GROUP}) x;
+  perform pg_temp.assert_eq('_NON_GROUP_RESPONSIBILITY_SQL: o grupo só com `group` tem zero (pode ser grupo)', n::text, '0');
+
+  -- A regra ligada por responsabilidade: o contato é o único unit_manager ativo da Alfa.
+  execute $q${SET_ACTIVE_TRUE}$q$;
+  select string_agg(name, ',') into regras from ({LAST_RESPONSIBLE}) r;
+  perform pg_temp.assert_eq('desativar o único unit_manager ativo sob regra ligada: _LAST_RESPONSIBLE_RULES_SQL lista a regra (o 409)', regras, 'Resumo por unidade');
+  select count(*) into n from ({LAST_RESPONSIBLE_KEPT_ALFA}) r;
+  perform pg_temp.assert_eq('PUT da matriz que MANTÉM Alfa unit_manager: nada segura (0)', n::text, '0');
+  execute $q${SET_ACTIVE_FALSE}$q$;
+  select count(*) into n from ({LAST_RESPONSIBLE}) r;
+  perform pg_temp.assert_eq('com a regra desligada, nada segura (0)', n::text, '0');
+  execute $q${SET_ACTIVE_TRUE}$q$;
+
+  -- Uma segunda gestora ativa como unit_manager (não primária) da Alfa: agora
+  -- desativar a primária não deixa a regra sem destino…
+  execute $q${INSERT_SEGUNDA}$q$ into rec;
+  update app.contact set id = '{D_SEGUNDA}' where id = rec.id;
+  execute $q${INSERT_MATRIX_SEGUNDA}$q$;
+  select count(*) into n from ({LAST_RESPONSIBLE}) r;
+  perform pg_temp.assert_eq('com uma segunda unit_manager ativa, desativar a primária não segura (0)', n::text, '0');
+  execute $q${DEACTIVATE_CONTACT}$q$;
+  -- …porque o outbox escolhe entre os ATIVOS: a primária inativa cai para a
+  -- segunda. (Com o `active` só fora da subconsulta, isto era 0 linhas — a
+  -- regra ligada entregando a ninguém com uma gestora ativa na unidade.)
+  select string_agg(contact_id::text, ',') into alvo from ({TARGETS}) t where t.rule_id = '{D_RULE}';
+  perform pg_temp.assert_eq('outbox._TARGETS_SQL: a primária inativa cai para a segunda unit_manager', alvo, '{D_SEGUNDA}');
+  -- E a segunda passa a ser a última: desativá-la seria o 409.
+  select string_agg(name, ',') into regras from ({LAST_RESPONSIBLE_SEGUNDA}) r;
+  perform pg_temp.assert_eq('agora a segunda é a última unit_manager ativa: _LAST_RESPONSIBLE_RULES_SQL lista a regra', regras, 'Resumo por unidade');
+  -- Sem ninguém ativo na Alfa (a segunda desativada por baixo da API), a
+  -- primária, já inativa, não tem o que perder: a consulta só conta contato
+  -- ATIVO — desativar de novo segue idempotente, e o outbox não alcança ninguém.
+  update app.contact set active = false where id = '{D_SEGUNDA}';
+  select count(*) into n from ({LAST_RESPONSIBLE}) r;
+  perform pg_temp.assert_eq('já inativa e sem outro titular, a primária não segura regra nenhuma (0)', n::text, '0');
+  select count(*) into n from ({TARGETS}) t where t.rule_id = '{D_RULE}';
+  perform pg_temp.assert_eq('outbox._TARGETS_SQL: sem unit_manager ativo na Alfa, a regra não alcança ninguém (0)', n::text, '0');
+  execute $q${SET_ACTIVE_FALSE}$q$;
+end $$;
+
+rollback;
+"""
+
+
 def webhook(webhook_sql: dict[str, str], tenant_sql: dict[str, str]) -> str:
     """O cenário do webhook, com o SQL real de `webhooks.py` e `tenant.py`."""
 
@@ -2823,6 +3451,267 @@ def roteamento(outbox_sql: dict[str, str], sender_sql: dict[str, str], webhook_s
     return script
 
 
+def regras(
+    fixas: dict[str, str],
+    regras_sql: dict[str, str],
+    outbox_rota: dict[str, str],
+    outbox_sql: dict[str, str],
+    sender_sql: dict[str, str],
+    ciclo_sql: dict[str, str],
+) -> str:
+    """O cenário de destinatários e regras, com o SQL real de `canais_regras.py`
+    (e o que ele importa de `canais.py` e `outbox.py`), de `ciclo.py` e de
+    `sender.py` ligado aos valores."""
+
+    def nulls(sql: str, *nomes: str) -> str:
+        for nome in nomes:
+            sql = sql.replace(f"%({nome})s", "null")
+        return sql
+
+    def contact(name: str, tipo: str, whatsapp: str, email: str | None) -> str:
+        sql = ligar(regras_sql["_INSERT_CONTACT_SQL"], tenant_id=D_TENANT, name=name, whatsapp=whatsapp, type=tipo)
+        return nulls(sql, "email") if email is None else ligar(sql, email=email)
+
+    def matrix_of(contact_id: str, unit_ids: str, responsibilities: str, primaries: str) -> str:
+        return ligar(
+            regras_sql["_INSERT_UNIT_RESPONSIBLE_SQL"],
+            tenant_id=D_TENANT,
+            contact_id=contact_id,
+            unit_ids=unit_ids,
+            responsibilities=responsibilities,
+            primaries=primaries,
+        )
+
+    def matrix(unit_ids: str, responsibilities: str, primaries: str) -> str:
+        return matrix_of(D_CONTACT, unit_ids, responsibilities, primaries)
+
+    def last_responsible(contact_id: str, kept_unit_ids: str, kept_responsibilities: str) -> str:
+        return ligar(
+            regras_sql["_LAST_RESPONSIBLE_RULES_SQL"],
+            tenant_id=D_TENANT,
+            contact_id=contact_id,
+            kept_unit_ids=kept_unit_ids,
+            kept_responsibilities=kept_responsibilities,
+        )
+
+    def rule(name: str, content: str, template_code: str, deviation_type: str | None = None) -> str:
+        sql = ligar(
+            regras_sql["_INSERT_RULE_SQL"],
+            tenant_id=D_TENANT,
+            name=name,
+            content=content,
+            channel="whatsapp",
+            template_code=template_code,
+        )
+        sql = nulls(sql, "scope_unit_id", "cron_window", "threshold_minutes", "threshold_occurrences")
+        return nulls(sql, "deviation_type") if deviation_type is None else ligar(sql, deviation_type=deviation_type)
+
+    def targets(rule_id: str, contact_ids: str, responsibilities: str = "{NULL}") -> str:
+        return ligar(
+            regras_sql["_INSERT_TARGETS_SQL"],
+            tenant_id=D_TENANT,
+            rule_id=rule_id,
+            contact_ids=contact_ids,
+            responsibilities=responsibilities,
+        )
+
+    def set_active(rule_id: str, active: str) -> str:
+        return ligar(regras_sql["_SET_RULE_ACTIVE_SQL"], tenant_id=D_TENANT, rule_id=rule_id, active=active)
+
+    def update_contact(tipo: str) -> str:
+        return ligar(
+            regras_sql["_UPDATE_CONTACT_SQL"],
+            tenant_id=D_TENANT,
+            contact_id=D_CONTACT,
+            name="Owner Regras",
+            whatsapp=D_PHONE,
+            email=D_OWNER_EMAIL,
+            type=tipo,
+        )
+
+    def enqueue(rule_id: str, cycle_id: str | None, key: str, template_code: str, payload: str) -> str:
+        sql = ligar(
+            outbox_sql["_ENQUEUE_SQL"],
+            tenant_id=D_TENANT,
+            rule_id=rule_id,
+            channel="whatsapp",
+            destination=D_PHONE,
+            payload=payload,
+            idempotency_key=key,
+            template_code=template_code,
+            provider="z_api",
+        )
+        return nulls(sql, "cycle_id") if cycle_id is None else ligar(sql, cycle_id=cycle_id)
+
+    def audit(action: str, entity: str, entity_id: str | None, antes: str | None, depois: str) -> str:
+        sql = ligar(
+            regras_sql["_AUDIT_SQL"], tenant_id=D_TENANT, user_id=D_OWNER, action=action, entity=entity, depois=depois
+        )
+        sql = nulls(sql, "entity_id") if entity_id is None else ligar(sql, entity_id=entity_id)
+        return nulls(sql, "antes") if antes is None else ligar(sql, antes=antes)
+
+    def test_unit(unit_id: str | None) -> str:
+        sql = ligar(regras_sql["_TEST_UNIT_SQL"], tenant_id=D_TENANT)
+        return nulls(sql, "unit_id") if unit_id is None else ligar(sql, unit_id=unit_id)
+
+    payload_real = (
+        '{"unit": "Unidade Alfa", "total_events": "2", "link": "http://localhost:3000/dashboard?un=' + D_UNIT + '"}'
+    )
+    key_real = f"{D_RULE}:{D_HOJE}:{D_CONTACT}:whatsapp:deadbeefdeadbeef"
+    update_rule_grp = ligar(
+        regras_sql["_UPDATE_RULE_SQL"],
+        tenant_id=D_TENANT,
+        rule_id=D_RULE_GRP,
+        name="Resumo para o grupo",
+        content="individual",
+        channel="whatsapp",
+        template_code="deviation_summary",
+    )
+    update_rule_grp = nulls(
+        update_rule_grp, "deviation_type", "scope_unit_id", "cron_window", "threshold_minutes", "threshold_occurrences"
+    )
+    substituicoes = {
+        "{INSERT_CONTACT}": contact("Owner Regras", "person", D_PHONE, D_OWNER_EMAIL),
+        "{INSERT_GROUP}": contact("Grupo da Alfa", "whatsapp_group", "+5511999990502", None),
+        "{INSERT_MATRIX_MISTA}": matrix("{" + D_UNIT + "," + D_OUTRO_UNIT + "}", "{unit_manager,hr}", "{true,false}"),
+        "{INSERT_MATRIX}": matrix("{" + D_UNIT + "," + D_UNIT2 + "}", "{unit_manager,hr}", "{true,false}"),
+        "{DELETE_MATRIX}": ligar(regras_sql["_DELETE_UNIT_RESPONSIBLE_SQL"], tenant_id=D_TENANT, contact_id=D_CONTACT),
+        "{VISIBLE_UNITS_MISTA}": ligar(
+            regras_sql["_VISIBLE_UNITS_SQL"], tenant_id=D_TENANT, unit_ids="{" + D_UNIT + "," + D_OUTRO_UNIT + "}"
+        ),
+        "{CONTACTS_OUTRO}": nulls(ligar(regras_sql["_CONTACTS_SQL"], tenant_id=D_OUTRO), "contact_id"),
+        "{CONTACTS}": nulls(ligar(regras_sql["_CONTACTS_SQL"], tenant_id=D_TENANT), "contact_id"),
+        "{VISIBLE_CONTACT_OUTRO}": ligar(
+            regras_sql["_VISIBLE_CONTACT_SQL"], tenant_id=D_TENANT, contact_id=D_OUTRO_CONTACT
+        ),
+        "{VISIBLE_CONTACTS_OUTRO}": ligar(
+            regras_sql["_VISIBLE_CONTACTS_SQL"], tenant_id=D_OUTRO, contact_ids="{" + D_CONTACT + "}"
+        ),
+        "{INSERT_RULE_IND}": rule("Atraso individual", "individual", "deviation_summary", "late_entry"),
+        "{INSERT_RULE_GRP}": rule("Resumo para o grupo", "aggregate", "deviation_summary"),
+        "{INSERT_RULE_NOTPL}": rule("Sem template no catálogo", "aggregate", "inexistente"),
+        "{INSERT_RULE}": rule("Resumo por unidade", "aggregate", "deviation_summary"),
+        "{DEVIATION_TYPE_OK}": ligar(regras_sql["_DEVIATION_TYPE_SQL"], code="late_entry"),
+        "{DEVIATION_TYPE_NAO}": ligar(regras_sql["_DEVIATION_TYPE_SQL"], code="inventado"),
+        "{VISIBLE_RULE_OUTRO}": ligar(regras_sql["_VISIBLE_RULE_SQL"], tenant_id=D_OUTRO, rule_id=D_RULE),
+        "{SET_ACTIVE_TRUE}": set_active(D_RULE, "true"),
+        "{SET_ACTIVE_FALSE}": set_active(D_RULE, "false"),
+        "{SET_ACTIVE_NOTPL}": set_active(D_RULE_NOTPL, "true"),
+        "{ACTIVE_TARGETS}": ligar(regras_sql["_ACTIVE_TARGETS_SQL"], tenant_id=D_TENANT, rule_id=D_RULE),
+        "{INSERT_TARGETS_RULE}": targets(D_RULE, "{" + D_CONTACT + "}"),
+        "{INSERT_TARGETS_GRP}": targets(D_RULE_GRP, "{" + D_GROUP + "}"),
+        "{INSERT_TARGETS_IND_GRUPO}": targets(D_RULE_IND, "{" + D_GROUP + "}"),
+        "{INSERT_TARGETS_IND}": targets(D_RULE_IND, "{" + D_CONTACT + "}"),
+        "{INSERT_TARGETS_NOTPL}": targets(D_RULE_NOTPL, "{" + D_CONTACT + "}"),
+        "{INSERT_TARGETS_OUTRO_CONTATO}": targets(D_RULE, "{" + D_OUTRO_CONTACT + "}"),
+        "{INSERT_TARGETS_RESP}": targets(D_RULE, "{NULL}", "{unit_manager}"),
+        "{RULES_OUTRO}": nulls(ligar(regras_sql["_RULES_SQL"], tenant_id=D_OUTRO), "rule_id"),
+        "{RULES}": nulls(ligar(regras_sql["_RULES_SQL"], tenant_id=D_TENANT), "rule_id"),
+        "{UPDATE_RULE_GRP_INDIVIDUAL}": update_rule_grp,
+        "{REVALIDATE_RULE_GRP}": ligar(
+            regras_sql["_REVALIDATE_RULE_TARGETS_SQL"], tenant_id=D_TENANT, rule_id=D_RULE_GRP
+        ),
+        "{UPDATE_CONTACT_TO_GROUP}": update_contact("whatsapp_group"),
+        "{UPDATE_CONTACT_SAME}": update_contact("person"),
+        "{REVALIDATE_CONTACT}": ligar(
+            regras_sql["_REVALIDATE_CONTACT_TARGETS_SQL"], tenant_id=D_TENANT, contact_id=D_CONTACT
+        ),
+        "{BLOCKED}": ligar(fixas["_BLOCKED_SQL"], tenant_id=D_TENANT),
+        "{READINESS}": ligar(fixas["_READINESS_SQL"], tenant_id=D_TENANT),
+        "{ENQUEUE_NOTPL}": enqueue(
+            D_RULE_NOTPL, None, "k-notpl", "inexistente", '{"unit": "x", "total_events": "1", "link": "http://x"}'
+        ),
+        "{AUDIT_LIGAR}": audit("update", "alert_rule", D_RULE, '{"active": false}', '{"active": true}'),
+        "{UNITS}": ligar(ciclo_sql["_UNITS_SQL"], tenant_id=D_TENANT, ate=D_HOJE),
+        "{RESERVE}": ligar(ciclo_sql["_RESERVE_SQL"], tenant_id=D_TENANT, cycle_id=D_CYCLE, unit_id=D_UNIT, ate=D_HOJE),
+        "{TARGETS}": ligar(
+            outbox_rota["_TARGETS_SQL"],
+            tenant_id=D_TENANT,
+            unit_id=D_UNIT,
+            telegram_channel="telegram",
+            telegram_providers="{telegram}",
+            telegram_health="connected",
+        ),
+        "{ENQUEUE_REAL}": enqueue(D_RULE, D_CYCLE, key_real, "deviation_summary", payload_real),
+        "{GATE}": ligar(sender_sql["_GATE_SQL"], tenant_id=D_TENANT),
+        "{WAITING}": ligar(sender_sql["_WAITING_SQL"], tenant_id=D_TENANT),
+        "{CALLER_ROUTE}": ligar(
+            regras_sql["_CALLER_ROUTE_SQL"],
+            tenant_id=D_TENANT,
+            contact_id=D_CONTACT,
+            telegram_channel="telegram",
+            telegram_providers="{telegram}",
+            telegram_health="connected",
+        ),
+        "{CALLER}": ligar(regras_sql["_CALLER_CONTACT_SQL"], tenant_id=D_TENANT, email=D_OWNER_EMAIL.upper()),
+        "{TEST_UNIT_ANY}": test_unit(None),
+        "{TEST_UNIT_BETA}": test_unit(D_UNIT2),
+        "{TEST_FACTS}": ligar(regras_sql["_TEST_FACTS_SQL"], tenant_id=D_TENANT, unit_id=D_UNIT, de=D_DE, ate=D_HOJE),
+        "{ENQUEUE_TEST}": enqueue(
+            D_RULE, None, key_real + ":test:" + D_TEST_ID, "deviation_summary", payload_real
+        ),
+        "{AUDIT_TEST}": audit(
+            "insert", "alert_queue", None, None,
+            '{"test_id": "' + D_TEST_ID + '", "rule_id": "' + D_RULE + '", "channel": "whatsapp"}',
+        ),
+        "{CONTACT_ACTIVE_RULES}": ligar(
+            regras_sql["_CONTACT_ACTIVE_RULES_SQL"], tenant_id=D_TENANT, contact_id=D_CONTACT
+        ),
+        "{DEACTIVATE_CONTACT}": ligar(regras_sql["_DEACTIVATE_CONTACT_SQL"], tenant_id=D_TENANT, contact_id=D_CONTACT),
+        "{MUTE_NULL}": nulls(ligar(regras_sql["_MUTE_RULE_SQL"], tenant_id=D_TENANT, rule_id=D_RULE), "until"),
+        "{MUTE}": ligar(
+            regras_sql["_MUTE_RULE_SQL"], tenant_id=D_TENANT, rule_id=D_RULE, until="2099-01-01T00:00:00+00:00"
+        ),
+        "{DELETE_TARGETS}": ligar(regras_sql["_DELETE_TARGETS_SQL"], tenant_id=D_TENANT, rule_id=D_RULE),
+        "{NON_GROUP_RESP}": ligar(
+            regras_sql["_NON_GROUP_RESPONSIBILITY_SQL"], tenant_id=D_TENANT, contact_id=D_CONTACT
+        ),
+        "{NON_GROUP_RESP_GROUP}": ligar(
+            regras_sql["_NON_GROUP_RESPONSIBILITY_SQL"], tenant_id=D_TENANT, contact_id=D_GROUP
+        ),
+        "{INSERT_MATRIX_GROUP}": matrix_of(D_GROUP, "{" + D_UNIT + "}", "{group}", "{false}"),
+        "{LAST_RESPONSIBLE}": last_responsible(D_CONTACT, "{}", "{}"),
+        "{LAST_RESPONSIBLE_KEPT_ALFA}": last_responsible(D_CONTACT, "{" + D_UNIT + "}", "{unit_manager}"),
+        "{LAST_RESPONSIBLE_SEGUNDA}": last_responsible(D_SEGUNDA, "{}", "{}"),
+        "{INSERT_SEGUNDA}": contact("Segunda Gestora", "person", "+5511999990503", None),
+        "{INSERT_MATRIX_SEGUNDA}": matrix_of(D_SEGUNDA, "{" + D_UNIT + "}", "{unit_manager}", "{false}"),
+    }
+    script = CENARIO_REGRAS
+    for marcador, texto in substituicoes.items():
+        script = script.replace(marcador, texto)
+    for nome, valor in {
+        "{D_TENANT}": D_TENANT,
+        "{D_OUTRO}": D_OUTRO,
+        "{D_OWNER}": D_OWNER,
+        "{D_SUPERVISOR}": D_SUPERVISOR,
+        "{D_OUTRO_OWNER}": D_OUTRO_OWNER,
+        "{D_OWNER_EMAIL}": D_OWNER_EMAIL,
+        "{D_COMPANY}": D_COMPANY,
+        "{D_OUTRO_COMPANY}": D_OUTRO_COMPANY,
+        "{D_UNIT}": D_UNIT,
+        "{D_UNIT2}": D_UNIT2,
+        "{D_OUTRO_UNIT}": D_OUTRO_UNIT,
+        "{D_EMPLOYEE}": D_EMPLOYEE,
+        "{D_CONTACT}": D_CONTACT,
+        "{D_GROUP}": D_GROUP,
+        "{D_OUTRO_CONTACT}": D_OUTRO_CONTACT,
+        "{D_SEGUNDA}": D_SEGUNDA,
+        "{D_RULE}": D_RULE,
+        "{D_RULE_IND}": D_RULE_IND,
+        "{D_RULE_GRP}": D_RULE_GRP,
+        "{D_RULE_NOTPL}": D_RULE_NOTPL,
+        "{D_ZAPI}": D_ZAPI,
+        "{D_CYCLE}": D_CYCLE,
+        "{D_TEST_ID}": D_TEST_ID,
+        "{D_PHONE}": D_PHONE,
+        "{D_HOJE}": D_HOJE,
+        "{D_DE}": D_DE,
+        "{D_TRIGGER_PHRASE}": D_TRIGGER_PHRASE,
+    }.items():
+        script = script.replace(nome, valor)
+    return script
+
+
 def provider_list_plain() -> str:
     """`meta_cloud,z_api,uazapi,telegram` — o array de `CHANNEL_PROVIDERS` como o
     driver o renderiza para `%(providers)s`."""
@@ -2937,6 +3826,10 @@ def main() -> None:
         if nome in ("_TARGETS_SQL", "_PROVIDER_SQL")
     }
     sender_sql = instrucoes(SENDER)
+    # O C6: as instruções de `canais_regras.py` inteiras e as duas do ciclo
+    # que o cenário de ponta a ponta executa.
+    regras_sql = instrucoes(REGRAS)
+    ciclo_sql = {nome: sql for nome, sql in instrucoes(CICLO).items() if nome in ("_UNITS_SQL", "_RESERVE_SQL")}
     # Só a do webhook: as outras três de `tenant.py` são o bootstrap e o
     # `set_config`, que nenhum cenário daqui executa.
     tenant_sql = {
@@ -3014,6 +3907,49 @@ def main() -> None:
     if set(outbox_rota) != {"_TARGETS_SQL", "_PROVIDER_SQL"}:
         print("  ✖ _TARGETS_SQL ou _PROVIDER_SQL não está em outbox.py")
         sys.exit(1)
+    esperadas_regras = {
+        "_CONTACTS_SQL",
+        "_INSERT_CONTACT_SQL",
+        "_UPDATE_CONTACT_SQL",
+        "_DEACTIVATE_CONTACT_SQL",
+        "_CONTACT_ACTIVE_RULES_SQL",
+        "_VISIBLE_CONTACT_SQL",
+        "_VISIBLE_CONTACTS_SQL",
+        "_VISIBLE_UNITS_SQL",
+        "_DELETE_UNIT_RESPONSIBLE_SQL",
+        "_INSERT_UNIT_RESPONSIBLE_SQL",
+        "_REVALIDATE_CONTACT_TARGETS_SQL",
+        "_RULES_SQL",
+        "_VISIBLE_RULE_SQL",
+        "_DEVIATION_TYPE_SQL",
+        "_INSERT_RULE_SQL",
+        "_UPDATE_RULE_SQL",
+        "_REVALIDATE_RULE_TARGETS_SQL",
+        "_SET_RULE_ACTIVE_SQL",
+        "_MUTE_RULE_SQL",
+        "_ACTIVE_TARGETS_SQL",
+        "_DELETE_TARGETS_SQL",
+        "_INSERT_TARGETS_SQL",
+        "_AUDIT_SQL",
+        "_CALLER_CONTACT_SQL",
+        "_CALLER_ROUTE_SQL",
+        "_TEST_UNIT_SQL",
+        "_TEST_FACTS_SQL",
+        "_NON_GROUP_RESPONSIBILITY_SQL",
+        "_LAST_RESPONSIBLE_RULES_SQL",
+    }
+    if set(regras_sql) != esperadas_regras:
+        print(f"  ✖ esperava {sorted(esperadas_regras)} em canais_regras.py, achei {sorted(regras_sql)}")
+        sys.exit(1)
+    if set(ciclo_sql) != {"_UNITS_SQL", "_RESERVE_SQL"}:
+        print("  ✖ _UNITS_SQL ou _RESERVE_SQL não está em ciclo.py")
+        sys.exit(1)
+    # ⛔ O módulo não apaga contato nem regra: os únicos `delete` são das duas
+    # linhas de ligação.
+    apagados = sorted(re.findall(r"delete from app\.(\w+)", "\n".join(regras_sql.values())))
+    if apagados != ["alert_rule_target", "unit_responsible"]:
+        print(f"  ✖ canais_regras.py apaga o que não devia: {apagados}")
+        sys.exit(1)
     # ⛔ O titular pelo chat_id não seleciona o chat_id; o log não guarda destino.
     if "external_id" in sender_sql["_IDENTITY_HOLDER_SQL"].split("from")[0]:
         print("  ✖ _IDENTITY_HOLDER_SQL seleciona external_id")
@@ -3037,6 +3973,8 @@ def main() -> None:
         ("webhooks.py", webhook_sql),
         ("tenant.py", tenant_sql),
         ("outbox.py", outbox_sql),
+        ("canais_regras.py", regras_sql),
+        ("ciclo.py", ciclo_sql),
     ):
         for nome, sql in lote.items():
             r = psql(["-c", f"prepare p as {posicionar(sql)}"])
@@ -3053,7 +3991,7 @@ def main() -> None:
         f"  instruções fixas compiladas: {len(fixas)} de canais.py "
         f"(+{len(por_canal)} na renderização do bot), {len(cofre)} de vault.py, "
         f"{len(saude)} de saude.py, {len(webhook_sql)} de webhooks.py, {len(tenant_sql)} de tenant.py, "
-        f"{len(outbox_sql)} de outbox.py"
+        f"{len(outbox_sql)} de outbox.py, {len(regras_sql)} de canais_regras.py, {len(ciclo_sql)} de ciclo.py"
     )
 
     script = (
@@ -3084,8 +4022,11 @@ def main() -> None:
     print("\n--- o roteamento e o sender: as entradas de route, a reserva, o scrub, o blocked, o relatório")
     rodar(roteamento(outbox_rota, sender_sql, webhook_sql))
 
+    print("\n--- destinatários e regras: contato → responsável → regra → destino → ligar → outbox → sender com o gate fechado")
+    rodar(regras(fixas, regras_sql, outbox_rota, outbox_sql, sender_sql, ciclo_sql))
+
     print("\n================================================")
-    print(" CONEXÕES, CREDENCIAL, TEMPLATES, BOT, WEBHOOK, CONVITE E ROTEAMENTO: TODOS OS TESTES OK")
+    print(" CONEXÕES, CREDENCIAL, TEMPLATES, BOT, WEBHOOK, CONVITE, ROTEAMENTO E REGRAS: TODOS OS TESTES OK")
     print("================================================")
 
 

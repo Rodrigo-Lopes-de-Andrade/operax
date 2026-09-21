@@ -11,7 +11,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
 from operax.core.tenant import UserRole
 
@@ -1951,3 +1951,262 @@ class TelegramLink(BaseModel):
     revoked_at: datetime | None
     #: Convite em aberto, se houver.
     invite_open_until: datetime | None
+
+
+# ---------------------------------------------------------------------------
+# Destinatários e regras de alerta (SPRINTS-CANAIS, C6) — `/canais/destinatarios`
+# e `/canais/regras`
+# ---------------------------------------------------------------------------
+
+#: Os valores dos `check` de `app.unit_responsible.responsibility` e de
+#: `app.alert_rule_target.responsibility` (migrations 04 e 06). `group` é o
+#: valor que `util.validate_alert_target` recusa num alerta individual.
+Responsibility = Literal[
+    "unit_manager", "regional_supervisor", "personnel", "hr", "executive", "group"
+]
+#: `app.contact.type`. `whatsapp_group` é o outro valor que a regra 7 recusa.
+ContactType = Literal["person", "whatsapp_group", "email_list"]
+#: `app.alert_rule.channel`: mensageria, e-mail ou as duas metades. Nunca
+#: `telegram` — a regra diz mensageria e quem escolhe o canal é a identidade
+#: (SPEC-CANAIS §8, migration `ch_queue_telegram`).
+RuleChannel = Literal["whatsapp", "email", "both"]
+RuleContent = Literal["individual", "aggregate"]
+
+#: O `check` de `app.contact.whatsapp`, copiado para o 422 chegar antes do banco.
+WHATSAPP_PATTERN = r"^\+?\d{10,15}$"
+
+
+class UnitResponsibilityRow(BaseModel):
+    """Uma linha da matriz unidade × responsabilidade de um contato.
+
+    Lida como o usuário: `unit_responsible_read` é `util.can_see_unit`, então
+    um supervisor vê só as responsabilidades das unidades dele — é o desenho,
+    não um filtro da rota.
+    """
+
+    unit_id: UUID
+    unit_name: str
+    responsibility: Responsibility
+    #: Entre dois contatos com a mesma responsabilidade na unidade, o outbox
+    #: entrega ao primário (`order by is_primary desc limit 1`).
+    is_primary: bool
+
+
+class ContactRow(BaseModel):
+    """Um destinatário, como está em `app.contact`, com a matriz de unidades.
+
+    `active` é coluna: a lista traz os desativados e a tela decide. Um contato
+    nunca é apagado — ele pode ser destino de regra e alvo de auditoria.
+    """
+
+    id: UUID
+    name: str
+    #: E.164 com ou sem `+` — o `check` da tabela.
+    whatsapp: str | None
+    email: str | None
+    type: ContactType
+    active: bool
+    units: list[UnitResponsibilityRow]
+
+
+class ContactWrite(BaseModel):
+    """O que o administrador grava num contato.
+
+    Ao menos um endereço: um contato sem `whatsapp` e sem `email` não alcança
+    ninguém, e como destino de regra seria uma regra ligada sem ter como
+    entregar. ⚠️ `whatsapp_group` aceita só o que o `check` aceita — um número
+    E.164 —, e nenhum provedor deste produto entrega a grupo hoje: o tipo
+    existe para a regra 7 (`util.validate_alert_target`) recusá-lo em alerta
+    individual, não porque haja onde guardar o endereço de um grupo.
+    `active` não está aqui: desativar é `POST /desativar`, com trilha própria.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    whatsapp: str | None = Field(default=None, pattern=WHATSAPP_PATTERN)
+    email: str | None = Field(
+        default=None, min_length=3, max_length=254, pattern=r"^[^@\s]+@[^@\s]+$"
+    )
+    type: ContactType = "person"
+
+    @model_validator(mode="after")
+    def _at_least_one_address(self) -> ContactWrite:
+        if self.whatsapp is None and self.email is None:
+            raise ValueError("informe ao menos um endereço: `whatsapp` ou `email`")
+        return self
+
+
+class UnitResponsibilityWrite(BaseModel):
+    """Uma linha da matriz a gravar. A unidade tem de ser do tenant (404 antes
+    de escrever, como o usuário)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    unit_id: UUID
+    responsibility: Responsibility
+    is_primary: bool = False
+
+
+class ContactUnits(BaseModel):
+    """A matriz inteira do contato, substituída de uma vez (`PUT`).
+
+    `app.unit_responsible` é linha de ligação — apagar e reinserir na mesma
+    transação é o que um `PUT` significa; a trilha leva o antes e o depois.
+    Sem repetição de `(unit_id, responsibility)`: é a chave única da tabela.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    units: list[UnitResponsibilityWrite]
+
+    @model_validator(mode="after")
+    def _no_duplicates(self) -> ContactUnits:
+        pairs = [(u.unit_id, u.responsibility) for u in self.units]
+        if len(set(pairs)) != len(pairs):
+            raise ValueError("a mesma responsabilidade na mesma unidade aparece duas vezes")
+        return self
+
+
+class AlertRuleTargetRow(BaseModel):
+    """Um destino de regra: um contato nomeado OU uma responsabilidade que o
+    outbox resolve por unidade em `app.unit_responsible`.
+
+    `contact_active` é nulo no destino por responsabilidade. Um contato
+    desativado continua listado — a linha de ligação fica —, mas não conta como
+    destino para `ligar` nem para `blocked_reason`: o outbox filtra `c.active`.
+    """
+
+    id: UUID
+    contact_id: UUID | None
+    contact_name: str | None
+    contact_active: bool | None
+    responsibility: Responsibility | None
+
+
+class AlertRuleRow(BaseModel):
+    """Uma regra de alerta, como está em `app.alert_rule`, com destinos e o que
+    a impede de entregar hoje.
+
+    `blocked_reason` só existe em regra ligada, e vem de duas leituras que já
+    existem — `public.fn_channel_readiness` (o canal está pronto?) e a lista
+    de `BlockedAlertRule` da tela de Conexões (o template segura a regra?) —
+    mais o que é da própria regra: nenhum destino ativo. Nulo é "nada a
+    apontar", não "vai entregar": o gate G4 e a saúde do provedor na hora do
+    envio são do sender.
+    """
+
+    id: UUID
+    name: str
+    deviation_type: str | None
+    scope_unit_id: UUID | None
+    scope_unit_name: str | None
+    content: RuleContent
+    channel: RuleChannel
+    cron_window: str | None
+    threshold_minutes: int | None
+    threshold_occurrences: int | None
+    muted_until: datetime | None
+    template_code: str | None
+    active: bool
+    targets: list[AlertRuleTargetRow]
+    blocked_reason: str | None
+
+
+class AlertRuleWrite(BaseModel):
+    """O que o administrador grava numa regra — e o que ele NÃO grava.
+
+    `active` não existe aqui de propósito, e `extra="forbid"` faz um `active`
+    no corpo virar 422: uma regra nasce desligada (migration 06) e a única
+    porta que a liga é `POST /{id}/ligar`, que exige destino e template.
+    `muted_until` é de `POST /{id}/silenciar`. `deviation_type` nulo é "todo
+    tipo"; `scope_unit_id` nulo é "todas as unidades"; `template_code` nulo só
+    serve a uma regra de e-mail — a mensageria exige template, e `ligar` recusa.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=120)
+    deviation_type: str | None = Field(default=None, max_length=64)
+    scope_unit_id: UUID | None = None
+    content: RuleContent = "aggregate"
+    channel: RuleChannel
+    #: Nulo = dispara na detecção. Texto livre no banco; a rota não o interpreta.
+    cron_window: str | None = Field(default=None, max_length=64)
+    threshold_minutes: int | None = Field(default=None, ge=0)
+    threshold_occurrences: int | None = Field(default=None, ge=0)
+    template_code: str | None = Field(default=None, max_length=64)
+
+
+class AlertRuleTargetWrite(BaseModel):
+    """Um destino a gravar: exatamente um de `contact_id` e `responsibility`.
+
+    O `check` da tabela aceita os dois preenchidos e o outbox ignora a
+    responsabilidade quando há contato; aqui a forma é uma só, para a tela não
+    gravar um destino que ela mesma não sabe ler.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    contact_id: UUID | None = None
+    responsibility: Responsibility | None = None
+
+    @model_validator(mode="after")
+    def _exactly_one(self) -> AlertRuleTargetWrite:
+        if (self.contact_id is None) == (self.responsibility is None):
+            raise ValueError("informe exatamente um: `contact_id` ou `responsibility`")
+        return self
+
+
+class AlertRuleTargets(BaseModel):
+    """Os destinos inteiros da regra, substituídos de uma vez (`PUT`).
+
+    A regra 7 é do gatilho `util.validate_alert_target`: um destino de grupo
+    numa regra `individual` levanta no banco, e a rota devolve 409 com a frase
+    dele. Lista vazia numa regra ligada é 409 — desligue antes.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    targets: list[AlertRuleTargetWrite]
+
+    @model_validator(mode="after")
+    def _no_duplicates(self) -> AlertRuleTargets:
+        keys = [(t.contact_id, t.responsibility) for t in self.targets]
+        if len(set(keys)) != len(keys):
+            raise ValueError("o mesmo destino aparece duas vezes")
+        return self
+
+
+class MuteRequest(BaseModel):
+    """Até quando a regra fica muda. Com fuso, sempre; no passado, 422.
+    Nulo tira o silêncio."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    until: AwareDatetime | None
+
+
+class QueuedTestMessage(BaseModel):
+    """Uma linha que o teste pôs na fila: o canal ROTEADO (`telegram`,
+    `whatsapp` ou `email`) e o provedor. Sem destino — o destino é quem clicou."""
+
+    channel: str
+    provider: str | None
+
+
+class RuleTestResult(BaseModel):
+    """O modo de teste do S6: a regra, enfileirada UMA vez por metade, para o
+    próprio administrador que clicou.
+
+    `test_id` é o que distingue este clique dos outros na chave de idempotência
+    e na auditoria. Quem entrega é o sender: com o gate G4 fechado a linha fica
+    esperando — e é o que o gate do C6 mede.
+    """
+
+    rule_id: UUID
+    test_id: UUID
+    #: O contato do chamador — achado pelo e-mail do token em `app.contact`.
+    contact_id: UUID
+    contact_name: str
+    queued: list[QueuedTestMessage]

@@ -24,6 +24,7 @@ from server.routers import (
     assistente,
     assistente_config,
     canais,
+    canais_regras,
     curadoria,
     dp,
     employees,
@@ -51,11 +52,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="OperaX API", version="0.1.0", lifespan=lifespan)
 
 # Exact origins, never "*": the dashboard calls this API with credentials.
+# `PUT` is listed because the panel calls the API cross-origin and the browser
+# preflights every `PUT`: without it Starlette answers 400 "Disallowed CORS
+# method" and the templates, assistant-config and rules `PUT` routes are
+# unreachable from the panel while every test stays green (measured, C6).
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.cors_origins),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type"],
 )
 
@@ -81,6 +86,7 @@ async def validation_error_without_echo(_: Request, exc: RequestValidationError)
 app.include_router(assistente.router)
 app.include_router(assistente_config.router)
 app.include_router(canais.router)
+app.include_router(canais_regras.router)
 app.include_router(curadoria.router)
 app.include_router(dp.router)
 app.include_router(employees.router)

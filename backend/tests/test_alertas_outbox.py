@@ -140,6 +140,17 @@ def test_targets_sql_liga_o_tenant_na_regra_na_identidade_e_na_integracao() -> N
     assert "ur.tenant_id = %(tenant_id)s" in sql
 
 
+def test_targets_sql_escolhe_o_responsavel_entre_os_ativos_antes_do_limit_1() -> None:
+    """Por responsabilidade, o primário desativado cai para o próximo ativo: o
+    filtro de `active` está DENTRO da subconsulta, antes de `order by … limit 1`
+    — fora dela, o escolhido era descartado e a regra entregava a ninguém."""
+    sql = outbox._TARGETS_SQL
+    inicio = sql.index("(select ur.contact_id from app.unit_responsible ur")
+    sub = sql[inicio : sql.index("limit 1))")]
+    assert "join app.contact rc on rc.id = ur.contact_id and rc.active" in sub
+    assert sub.index("rc.active") < sub.index("order by ur.is_primary desc")
+
+
 def test_targets_sql_le_so_a_identidade_vigente_do_contato_e_so_o_bot_pronto() -> None:
     sql = outbox._TARGETS_SQL
     lateral = sql[sql.index("left join lateral") : sql.index(") mi on true")]

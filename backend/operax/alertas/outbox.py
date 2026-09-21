@@ -81,7 +81,11 @@ EMAIL_CHANNEL = "email"
 
 #: As regras que cobrem uma unidade, com o destino já resolvido. Um destino sai de
 #: um contato nomeado na regra ou da responsabilidade dele na unidade — as duas
-#: formas que `app.alert_rule_target` aceita.
+#: formas que `app.alert_rule_target` aceita. Por responsabilidade, a escolha
+#: (primário primeiro) só olha contato ATIVO: um primário desativado cai para o
+#: próximo, em vez de ser escolhido e depois descartado pelo `c.active` de fora —
+#: o que deixava a regra entregando a ninguém com um segundo responsável ativo
+#: (medido no C6).
 #:
 #: Mais duas colunas desde o C5, as duas entradas de `route`: a identidade de
 #: Telegram VIGENTE do contato (`left join lateral` — o índice parcial
@@ -108,6 +112,7 @@ left join app.contact c
        on c.id = coalesce(
             t.contact_id,
             (select ur.contact_id from app.unit_responsible ur
+               join app.contact rc on rc.id = ur.contact_id and rc.active
               where ur.unit_id = %(unit_id)s
                 and ur.responsibility = t.responsibility
                 and ur.tenant_id = %(tenant_id)s

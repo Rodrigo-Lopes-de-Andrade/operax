@@ -1253,6 +1253,124 @@ rota é o contrato com 409 nomeado. Nada de delete físico em contato ou regra
 cenário de ponta a ponta (contato → responsável → regra → destino → o outbox
 enfileira → o sender, com o gate fechado, conta 1 esperando).
 
+**Onda 1 entregue em 21/09/2026; revisada, corrigida e fechada no mesmo dia (abaixo).** `canais_regras.py`
+(13 rotas, 27 instruções compiladas pelo `97`), modelos, `97_teste_canais.py`
+com a oitava parte (contato → responsável → regra → destino → ligar → outbox
+enfileira → sender com o gate fechado conta 1 e não grava). pytest 1500
+(+91), suíte 67 migrations exit 0, sete mutações mortas. Decisões dele que
+eu endosso e registro: `GET /regras` é do admin, porque `alert_rule_target`
+só tem policy de admin e um supervisor receberia toda regra com `targets:
+[]` e um "sem destino" **falso** (medido); desativar contato que é destino
+direto de regra ligada é **409** listando as regras, porque `_TARGETS_SQL`
+filtra `c.active` e a regra ficaria ligada entregando a ninguém em
+silêncio; `ligar` exige também template **aprovado** quando o WhatsApp é o
+oficial, porque a `RaiseException` do gatilho da fila sai de
+`outbox.enqueue` matando o lote **inteiro** do tenant (pré-existente); o
+chamador do `testar` é o contato pessoa com o e-mail do token — o único
+fato de identidade que `auth.users` e `app.contact` carregam sem migration.
+
+⚠️ **Dois achados que não são desta sprint:** (1) **`PUT` não estava em
+`allow_methods` do CORS** — o preflight respondia 400, então
+`PUT /canais/templates/{code}` (C1) e os `PUT` da configuração do assistente
+(A3) **eram inalcançáveis pelo navegador em produção** com a suíte verde;
+uma palavra em `main.py`, pinada por teste, e é o próximo deploy que
+conserta. (2) **A regra 7 tem portas que o gatilho não vigia**:
+`update content → individual` numa regra com grupo e `update type →
+whatsapp_group` num contato destino de regra individual passam no banco
+(medido); a API re-toca os destinos e faz o gatilho julgar. E a quarta porta
+— o destino **por responsabilidade**, que o gatilho só reconhece como grupo
+se `responsibility = 'group'` — fecha nos dois sentidos: grupo entrando na
+matriz como `unit_manager` (422 em `PUT /unidades`) **e** pessoa que já é
+`unit_manager` virando grupo (422 em `PUT /contatos`, o sentido que o
+revisor mostrou aberto). A recomendação segue sendo uma migration futura
+com `after update` fazendo o mesmo do lado do banco. Hoje nenhum produtor
+emite conteúdo individual (`_TARGETS_SQL` filtra `aggregate`), então o furo
+é latente.
+
+**Guardião de superfície da onda 1 — APROVADO, 7/7, em 21/09/2026.** Suíte
+inteira com o ensaio Deno (67 migrations, 434 `ok` no `97`, 98, 99, dicionário
+sem diff, 39 documentos verificados); catálogo de banco idêntico antes e depois
+(105 policies, 18 RPCs, 9 views, 94 colunas de view, 18 triggers — snapshot
+por `diff`, não por leitura); API real com RLS real em dois tenants: 214
+asserções, treze rotas com ids alheios → 404 e nunca 403, 24 × 403 de
+supervisor e executivo **sem `tenant_scope` abrir** (contador de runtime) e
+sem linha nova em `audit_log`; regra 7 pelas três portas (destino, regra,
+contato) recusando 409 e o positivo entrando; trilha e log sem telefone (regex
+sobre 10–15 dígitos fora de uuid, máscara `•••0611` aparecendo três vezes para
+a varredura não ser vácua); dois cliques no `testar` = duas linhas com
+`report_cycle_id` nulo, `deviation_event` intocado, e o sender contando 2 e não
+gravando nada; preflight `PUT` do HEAD medido em overlay → 400 em sete rotas
+(as três pré-existentes e as quatro desta sprint), na árvore → 200; o pino do
+`97` contra delete físico **discrimina** (cópia mutada com `delete from
+app.contact` cai). Árvore não editada: 16/16 hashes iguais em oito pontos.
+Registros dele que ficam nomeados, sem reprovar: o supervisor de unidade lê o
+WhatsApp de **todo** contato do tenant em `GET /contatos` (`contact_read =
+has_tenant`, migration 04 — recortar é policy nova, parada obrigatória); o
+e-mail do contato vai inteiro para a trilha (`audit_read = is_admin`, o mesmo
+que lê `app.contact` em claro).
+
+**Revisão independente da onda 1 — REPROVADA em 21/09/2026, e o que eu
+consertei no mesmo dia.** O revisor rodou a API real contra o banco em oito
+cenários, matou 20/20 mutantes em cópia e confirmou regra 4, `ligar` como
+única porta, o modo de teste, a trilha, o CORS e o isolamento. Três gaps:
+
+- **ALTO — a quarta porta da regra 7 só fechava num sentido.** Pessoa →
+  `unit_manager` na matriz → `PUT /contatos type = whatsapp_group` chegava,
+  só pela API e com três 2xx, a "regra `individual` ligada com um grupo
+  resolvido por responsabilidade" — o estado que `PUT /unidades` recusa. O
+  relatório da onda dizia "fechado" e não estava. Consertado: `update_contact`
+  lê `_NON_GROUP_RESPONSIBILITY_SQL` dentro da transação e recusa 422
+  `group_responsibility` (mesma frase) antes do `update`; teste pinando a
+  ordem; o `97` mede as duas linhas do contato (Alfa `unit_manager`, Beta
+  `hr`) e o zero do grupo só com `group`.
+- **MÉDIO — regra ligada por responsabilidade ficava entregando a ninguém.**
+  Desativar o único `unit_manager` ativo da unidade, ou tirá-lo da matriz
+  pelo `PUT /unidades`, era 200 e silêncio — e pior: com uma **segunda**
+  gestora ativa, o outbox escolhia a primária (`order by is_primary desc
+  limit 1`) **antes** de filtrar `c.active`, e a regra entregava a ninguém
+  mesmo assim. Consertado nos dois lados: (a) `desativar` e `PUT /unidades`
+  perguntam `_LAST_RESPONSIBLE_RULES_SQL` — as regras ligadas cujo destino
+  por responsabilidade deixaria de resolver em alguma unidade, descontado o
+  que a matriz nova mantém (`kept`) e contando só contato ATIVO — e recusam
+  409 `contact_last_responsible` listando as regras, na mesma transação;
+  (b) `outbox._TARGETS_SQL` filtra `rc.active` **dentro** da subconsulta,
+  antes do `limit 1`: a primária inativa cai para a próxima ativa. É a única
+  linha fora de `canais_regras.py`, e é a raiz — sem ela a cerca da API
+  teria de espelhar um defeito. O `97` mede o fallback (a segunda gestora
+  alcançada com a primária inativa) e o `0` quando não sobra ninguém.
+- **MÉDIO, pré-existente (C3/C5), não desta sprint:** `ciclo.assemble`
+  commita a reserva dos desvios e `outbox.enqueue`, noutra transação,
+  levanta no primeiro alvo doente — o lote inteiro do tenant volta, e os
+  desvios ficam reservados num ciclo `open` sem mensagem (`report_cycle_id
+  is null` é a cláusula da reserva; eles **não voltam**). O `ligar` desta
+  sprint só mitiga ao ligar. Fica nomeado para sprint própria: pular a regra
+  doente com log e `blocked_reason`, ou reservar e enfileirar na mesma
+  transação.
+
+Sete mutantes meus, mortos na minha cópia (nunca na árvore): a cerca de
+`update_contact` (mA), a de `desativar` (mB), a de `PUT /unidades` (mC), o
+outbox do HEAD (mD — o pytest pina o texto e o `97` devolve nulo em vez da
+segunda gestora), `me.active` fora da consulta (mE — o `97` acusa 1 onde é 0,
+só com a segunda desativada também: com ela ativa o "outro titular" já zera e
+o mutante sobrevivia, e foi por isso que a seção 13 ganhou esse estado),
+`c.active` do outro titular (mF) e o `kept` ignorado (mG). BAIXOs do revisor
+consertados por serem texto: o comentário do `_TEST_FACTS_SQL` (não é
+"`_RESERVE_SQL` sem o `update`": não filtra `report_cycle_id is null`, de
+propósito) e o rótulo da seção 9 do `97` (as duas instruções do gate são
+leituras; o "não grava" do ramo Python está em `test_alertas_sender.py`).
+BAIXOs registrados sem mexer: `silenciar` audita com `antes = null`;
+`testar` identifica o chamador só pelo claim `email` (o Supabase o liga ao
+`sub` na emissão; não há o que cruzar sem migration) e não tem rate limit
+(admin-only, gate fechado); `_BLOCKED_SQL` casa por `rule_name`, não único
+(equivale por template; `rule_id` na lista é dívida do `canais.py`); race
+pequena entre `ligar`/`desativar` concorrentes (instância única). Pergunta
+de produto para o dono, que os dois gates levantaram: **o supervisor de
+unidade lê o WhatsApp e o e-mail de todo contato do tenant** em
+`GET /contatos` (`contact_read = has_tenant`, migration 04) enquanto a trilha
+mascara o número — recortar é policy nova, parada obrigatória. Gates depois
+das correções: pytest 1505 (+5), ruff limpo, `97` com 444 `ok` (seção 13
+nova), suíte de banco 67 migrations exit 0.
+
 **Onda 2 (frontend):** aba **Destinatários** (contatos e a matriz
 unidade × responsabilidade) e aba **Regras** em `/dashboard/administracao/`,
 porta `isAdmin`, e o modo de teste do S6: *"rodar primeiro com destino no
