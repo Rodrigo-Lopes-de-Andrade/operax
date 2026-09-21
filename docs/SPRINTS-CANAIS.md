@@ -1225,6 +1225,44 @@ pode ser banido sem recurso.
 
 ---
 
+## C6 — Destinatários e regras: a linha do S6 que nunca foi construída
+
+**Por que existe:** o S6 previa "Tela de configuração de regras e destinos" e
+entregou a esteira sem ela. Medido em produção em 21/09/2026: 27 unidades,
+**0 contatos, 0 responsáveis por unidade, 0 regras, 0 destinos de regra, 0
+templates**, nenhum canal ativo além do Secullum. A liberação do G4 abre uma
+porta pela qual não passa nada — e "o que segurava a entrega era não existir
+regra cadastrada" (migration 38) só é verdade porque não há como cadastrar.
+
+**O que já existe e não muda:** as cinco tabelas (`app.contact`,
+`app.unit_responsible`, `app.alert_rule`, `app.alert_rule_target`,
+`app.message_template`) com policy `*_admin` (`util.is_admin`) e leitura por
+`has_tenant`/`can_see_unit`; `util.validate_alert_target` (individual nunca
+para grupo — regra 7, no banco); `util.validate_alert_template` (WhatsApp
+oficial exige template do tenant); `active` nascendo `false`; a tela de
+Conexões já nomeando regra bloqueada. **Nenhuma policy nova, nenhuma coluna
+nova**: é aplicação sobre a fronteira que está lá.
+
+**Onda 1 (backend):** rotas em `/canais/destinatarios` (contatos e
+responsáveis por unidade) e `/canais/regras` (regra e destinos), padrão de
+`canais.py` (`_require_admin` → leitura como o usuário → escrita + `audit_log`
+sob `tenant_scope`). Regra nasce desligada; **ligar** exige ≥ 1 destino e, se
+o canal inclui WhatsApp, `template_code` existente — o trigger é a rede, a
+rota é o contrato com 409 nomeado. Nada de delete físico em contato ou regra
+(`active = false`). Testes de rota com stub, `97_teste_canais.py` com o
+cenário de ponta a ponta (contato → responsável → regra → destino → o outbox
+enfileira → o sender, com o gate fechado, conta 1 esperando).
+
+**Onda 2 (frontend):** aba **Destinatários** (contatos e a matriz
+unidade × responsabilidade) e aba **Regras** em `/dashboard/administracao/`,
+porta `isAdmin`, e o modo de teste do S6: *"rodar primeiro com destino no
+próprio owner"* como um botão, não como uma instrução.
+
+**Gate:** com o G4 fechado, cadastrar uma regra ligada com um destino faz o
+sender contar "1 esperando" no próximo turno — sem entregar. Com o G4 aberto,
+um alerta real chega ao destino de teste (o owner) e é o que fecha a etapa
+Canais.
+
 ## Ordem
 
 ```
