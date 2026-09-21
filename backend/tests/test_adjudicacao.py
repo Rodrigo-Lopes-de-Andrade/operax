@@ -13,7 +13,7 @@ para dizer "ainda não sei" — nunca `True` por silêncio.
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from io import BytesIO
 from typing import Any
 from uuid import UUID, uuid4
@@ -266,3 +266,34 @@ async def test_liberacao_recusa_taxa_acima_do_teto_sem_tocar_o_banco(
         await adjudicacao.release(
             object(), date(2026, 8, 12), date(2026, 9, 10), mode="shadow", author="x", note=None
         )
+
+
+# ---------------------------------------------------------------------------
+# A janela do censo
+# ---------------------------------------------------------------------------
+def test_a_janela_termina_hoje_por_padrao_e_onde_ate_mandar() -> None:
+    """`--ate` existe porque o dia em andamento não é censo: o motor ainda pode
+    revogar as linhas dele à noite, e um veredito sobre linha que vai sumir é
+    trabalho jogado fora. Medido em 21/09/2026: 3 dias terminando numa segunda
+    davam 36 indícios (sábado, domingo e a manhã); 2 dias úteis fechados, 352."""
+    import argparse
+
+    from operax.motor.adjudicacao import _window
+
+    hoje = date.today()
+    assert _window(argparse.Namespace(dias=3, ate=None)) == (hoje - timedelta(days=2), hoje)
+    assert _window(argparse.Namespace(dias=2, ate=date(2026, 9, 18))) == (
+        date(2026, 9, 17),
+        date(2026, 9, 18),
+    )
+    assert _window(argparse.Namespace(dias=1, ate=date(2026, 9, 18))) == (
+        date(2026, 9, 18),
+        date(2026, 9, 18),
+    )
+
+
+def test_o_parser_aceita_ate_em_iso_e_recusa_outra_grafia() -> None:
+    from operax.motor.adjudicacao import main
+
+    with pytest.raises(SystemExit):
+        main(["--ate", "18/09/2026", "medir"])

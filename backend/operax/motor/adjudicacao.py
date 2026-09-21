@@ -572,9 +572,20 @@ async def revoke_release(context: SystemContext, *, author: str, note: str) -> i
 # corpo síncrono e chama `run_cli` só para o trecho que fala com o banco.
 
 
+def _window(args: argparse.Namespace) -> tuple[date, date]:
+    """The census window: `--dias` days ending on `--ate` (today by default).
+
+    An explicit end exists because the day in progress is not a census: the
+    engine can still revoke its rows tonight, and a verdict on a row that is
+    about to vanish is work thrown away. Ending on yesterday, or on the last
+    closed workday, is the honest window.
+    """
+    end = args.ate or date.today()
+    return end - timedelta(days=args.dias - 1), end
+
+
 def _exportar(args: argparse.Namespace) -> int:
-    end = date.today()
-    start = end - timedelta(days=args.dias - 1)
+    start, end = _window(args)
 
     async def coletar() -> list[tuple[UUID, list[dict[str, Any]]]]:
         return [
@@ -620,8 +631,7 @@ def _importar(args: argparse.Namespace) -> int:
 
 
 def _medir(args: argparse.Namespace) -> int:
-    end = date.today()
-    start = end - timedelta(days=args.dias - 1)
+    start, end = _window(args)
 
     async def medir_todos() -> list[Measurement]:
         return [
@@ -634,8 +644,7 @@ def _medir(args: argparse.Namespace) -> int:
 
 
 def _liberar(args: argparse.Namespace) -> int:
-    end = date.today()
-    start = end - timedelta(days=args.dias - 1)
+    start, end = _window(args)
 
     if args.revogar:
         if not args.nota:
@@ -693,6 +702,12 @@ def main(argv: list[str] | None = None) -> int:
         description="Censo de adjudicação do modo sombra — a verdade de referência do G4."
     )
     parser.add_argument("--modo", default="shadow", help="shadow (padrão) ou production")
+    parser.add_argument(
+        "--ate",
+        type=date.fromisoformat,
+        default=None,
+        help="último dia da janela, AAAA-MM-DD (padrão hoje — que ainda está em andamento)",
+    )
     parser.add_argument(
         "--dias",
         type=int,

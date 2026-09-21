@@ -1186,6 +1186,41 @@ def test_run_constroi_o_cliente_pelo_verification_client() -> None:
     assert "NullProvider" not in fonte and "default_providers" not in fonte
 
 
+async def test_um_tenant_que_morre_no_lote_nao_leva_os_outros(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A dívida nomeada no fechamento do C5: `run()` era uma list comprehension,
+    e o cofre de um tenant fora do ar silenciava a fila de todos. Agora o tenant
+    que falhou aparece no relatório pelo nome, e o seguinte é despachado."""
+    tenant_a = SystemContext(tenant_id=UUID("aaaaaaaa-0000-4000-8000-000000000001"), task="teste")
+    tenant_b = SystemContext(tenant_id=UUID("bbbbbbbb-0000-4000-8000-000000000002"), task="teste")
+    despachados: list[UUID] = []
+
+    async def tenants(_task: str) -> list[SystemContext]:
+        return [tenant_a, tenant_b]
+
+    async def dispatch(ctx: SystemContext, _http: object, *, batch: int) -> sender.SendResult:
+        despachados.append(ctx.tenant_id)
+        if ctx is tenant_a:
+            raise RuntimeError("cofre fora do ar")
+        return sender.SendResult(tenant_id=ctx.tenant_id, gate_open=False, claimed=1, sent=1)
+
+    monkeypatch.setattr(sender, "active_tenants", tenants)
+    monkeypatch.setattr(sender, "dispatch", dispatch)
+
+    resultados = await sender.run(batch=5)
+
+    # O segundo tenant foi despachado apesar do primeiro.
+    assert despachados == [tenant_a.tenant_id, tenant_b.tenant_id]
+    falhou, seguiu = resultados
+    assert falhou.error == "RuntimeError" and falhou.claimed == 0
+    assert seguiu.error is None and seguiu.sent == 1
+    # E o relatório nomeia o tenant e o motivo, sem esconder o que seguiu.
+    texto = sender.relatorio(resultados)
+    assert f"tenant {tenant_a.tenant_id}: ✗ o lote morreu (RuntimeError)" in texto
+    assert f"tenant {tenant_b.tenant_id}: 1 reservada(s) · 1 enviada(s)" in texto
+
+
 # ---------------------------------------------------------------------------
 # 8. `alert_sent` roteado por canal e provedor
 # ---------------------------------------------------------------------------

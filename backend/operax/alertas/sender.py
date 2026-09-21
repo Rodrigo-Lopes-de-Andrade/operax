@@ -99,6 +99,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import logging
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -120,6 +121,8 @@ from operax.core.vault import read_secret
 # The webhook owns "revoke the current identity of this holder, with a reason";
 # the sender reuses the statement instead of writing a second one.
 from server.routers.webhooks import _REVOKE_PREVIOUS_SQL
+
+logger = logging.getLogger(__name__)
 
 TASK = "alertas.sender"
 
@@ -340,6 +343,10 @@ class SendResult:
     discarded: int = 0
     #: `sending` presas há mais de `STUCK_MINUTES`, retomadas neste lote.
     recovered: int = 0
+    #: O nome da exceção quando o lote deste tenant morreu antes de terminar.
+    #: Os outros tenants seguiram; as linhas que ficaram `sending` voltam pelo
+    #: `STUCK_MINUTES`. Nada foi reservado de novo neste turno.
+    error: str | None = None
     sent_by_channel: Mapping[str, int] = field(default_factory=dict)
 
 
@@ -647,13 +654,37 @@ async def dispatch(
 
 
 async def run(*, batch: int = BATCH) -> list[SendResult]:
+    """One dispatch per active tenant — and one tenant's failure is its own.
+
+    A vault that does not answer, a provider that raises what nobody mapped, a
+    pool that closes under one tenant: none of it may cost the others their
+    batch. The cron runs every quarter hour; a tenant that failed shows up in
+    the report by name and is tried again next round, with its stuck `sending`
+    rows reclaimed by `STUCK_MINUTES`.
+    """
+    results: list[SendResult] = []
     async with verification_client() as http:
-        return [await dispatch(ctx, http, batch=batch) for ctx in await active_tenants(TASK)]
+        for ctx in await active_tenants(TASK):
+            try:
+                results.append(await dispatch(ctx, http, batch=batch))
+            except Exception as exc:  # noqa: BLE001 — the boundary between tenants
+                logger.exception("sender: tenant %s falhou no lote", ctx.tenant_id)
+                results.append(
+                    SendResult(tenant_id=ctx.tenant_id, gate_open=False, error=type(exc).__name__)
+                )
+    return results
 
 
 def relatorio(resultados: list[SendResult]) -> str:
     linhas: list[str] = []
     for r in resultados:
+        if r.error is not None:
+            linhas.append(
+                f"tenant {r.tenant_id}: ✗ o lote morreu ({r.error}) — nada reservado neste "
+                f"turno; os outros tenants seguiram, e as `sending` presas voltam em "
+                f"{STUCK_MINUTES} min."
+            )
+            continue
         if r.gate_open:
             linhas.append(
                 f"tenant {r.tenant_id}: ⛔ gate G4 aberto — {r.waiting} mensagem(ns) esperando, "
