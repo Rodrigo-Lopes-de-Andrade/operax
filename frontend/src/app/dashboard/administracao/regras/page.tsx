@@ -7,12 +7,7 @@ import type { UnitChoice } from "@/components/dp/work-posts";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Card } from "@/components/ui/kpi-card";
 import { pageTitle } from "@/lib/brand";
-import {
-  loadContacts,
-  loadDeviationTypes,
-  loadRules,
-  loadTemplates,
-} from "@/lib/canais/queries";
+import { loadContacts, loadRules, loadTemplates } from "@/lib/canais/queries";
 import { isAdmin, loadIdentity } from "@/lib/identity";
 import { loadUnits } from "@/lib/ponto/queries";
 import { getServerSupabase } from "@/lib/supabase-server";
@@ -47,15 +42,12 @@ export default async function RegrasPage() {
   }
 
   const supabase = await getServerSupabase();
-  const [rules, deviationTypes, templates, contacts, units] = await Promise.all(
-    [
-      loadRules(),
-      loadDeviationTypes(),
-      loadTemplates(),
-      loadContacts(),
-      loadUnits(supabase),
-    ],
-  );
+  const [rules, templates, contacts, units] = await Promise.all([
+    loadRules(),
+    loadTemplates(),
+    loadContacts(),
+    loadUnits(supabase),
+  ]);
 
   const choices: UnitChoice[] = units.map((unit) => ({
     id: unit.unitId,
@@ -88,7 +80,6 @@ export default async function RegrasPage() {
           contacts={contacts}
           units={choices}
           now={now}
-          deviationTypes={deviationTypes}
           templates={templates}
         />
       ) : (

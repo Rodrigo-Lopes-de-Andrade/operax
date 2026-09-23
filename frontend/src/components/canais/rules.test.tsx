@@ -15,7 +15,6 @@ import type { TemplateRow } from "@/lib/canais/queries";
 import type {
   AlertRuleRow,
   ContactRow,
-  DeviationTypeRow,
   RuleTestResult,
 } from "@/lib/canais/regras";
 
@@ -44,15 +43,6 @@ const UNITS: UnitChoice[] = [
 ];
 
 /** Códigos que nenhum tipo real tem: o rótulo só aparece se vier do catálogo. */
-const TIPOS: DeviationTypeRow[] = [
-  {
-    code: "zz_late",
-    description: "Atraso Zz",
-    direction: "missing",
-    category: "zz",
-  },
-];
-
 const TEMPLATES: TemplateRow[] = [
   {
     code: "zz_template",
@@ -120,7 +110,7 @@ function regra(overrides: Partial<AlertRuleRow> = {}): AlertRuleRow {
   return {
     id: RULE_ID,
     name: "Regra Zz",
-    deviation_type: "zz_late",
+    deviation_type: null,
     scope_unit_id: UNIT_A,
     scope_unit_name: "Unidade Zz Alfa",
     content: "aggregate",
@@ -150,7 +140,6 @@ const RAZAO = "Zz motivo inventado pelo backend, com «aspas» e tudo.";
 function abrir(
   rules: AlertRuleRow[],
   contacts: ContactRow[] | null = CONTATOS,
-  deviationTypes: DeviationTypeRow[] | null = TIPOS,
   templates: TemplateRow[] | null = TEMPLATES,
 ) {
   return render(
@@ -158,7 +147,6 @@ function abrir(
       rules={rules}
       contacts={contacts}
       units={UNITS}
-      deviationTypes={deviationTypes}
       templates={templates}
       now={Date.now()}
     />,
@@ -219,10 +207,11 @@ describe("a doutrina do S6 e a lista", () => {
     const lista = within(
       screen.getByRole("list", { name: "Regras de alerta" }),
     );
-    // O rótulo é o do catálogo, pelo `code`; o código cru não aparece.
-    expect(lista.getByText(/Atraso Zz/)).toBeVisible();
+    // Nem o rótulo nem o código do tipo aparecem: o outbox não filtra por ele,
+    // e mostrá-lo ao lado da regra afirmaria um recorte que a entrega não faz.
+    expect(lista.queryByText(/Atraso Zz/)).toBeNull();
     expect(lista.queryByText(/zz_late/)).toBeNull();
-    expect(lista.getByText(/Todo tipo de desvio/)).toBeVisible();
+    expect(lista.queryByText(/Todo tipo de desvio/)).toBeNull();
     expect(lista.getByText(/todas as unidades/)).toBeVisible();
     expect(lista.getByText(/Mensageria e e-mail/)).toBeVisible();
     expect(lista.getByText("Desligada")).toBeVisible();
@@ -568,26 +557,17 @@ describe("gate 2 — o modo de teste do S6 como botão", () => {
 });
 
 describe("o formulário de regra — `AlertRuleWrite`", () => {
-  it("⛔ criar manda o corpo do contrato e NUNCA `active`; o seletor de tipo mostra o rótulo e envia o código", async () => {
+  it("⛔ criar manda o corpo do contrato, NUNCA `active`, e os quatro inertes nulos", async () => {
     const user = userEvent.setup();
     request.mockResolvedValue(regra({ name: "Regra Zz Nova" }));
     abrir([]);
 
     await user.click(screen.getByRole("button", { name: "Nova regra" }));
     await user.type(screen.getByLabelText("Nome"), "Regra Zz Nova");
-    await user.selectOptions(
-      screen.getByLabelText("Tipo de desvio"),
-      "zz_late",
-    );
     await user.selectOptions(screen.getByLabelText("Unidade"), UNIT_A);
     await user.selectOptions(screen.getByLabelText("Conteúdo"), "aggregate");
     await user.selectOptions(screen.getByLabelText("Canal"), "both");
     await user.selectOptions(screen.getByLabelText("Template"), "zz_template");
-    await user.type(screen.getByLabelText("Janela (opcional)"), "0 7 * * 1-5");
-    await user.type(
-      screen.getByLabelText("Limiar em minutos (opcional)"),
-      "15",
-    );
     await user.click(screen.getByRole("button", { name: "Gravar regra" }));
 
     await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
@@ -599,12 +579,14 @@ describe("o formulário de regra — `AlertRuleWrite`", () => {
     expect(options.method).toBe("POST");
     expect(options.body).toEqual({
       name: "Regra Zz Nova",
-      deviation_type: "zz_late",
+      // ⛔ Os quatro que o outbox não lê vão NULOS, sempre: saíram da tela
+      // porque nada os honra, e o contrato continua os aceitando.
+      deviation_type: null,
       scope_unit_id: UNIT_A,
       content: "aggregate",
       channel: "both",
-      cron_window: "0 7 * * 1-5",
-      threshold_minutes: 15,
+      cron_window: null,
+      threshold_minutes: null,
       threshold_occurrences: null,
       template_code: "zz_template",
     });
@@ -614,17 +596,28 @@ describe("o formulário de regra — `AlertRuleWrite`", () => {
     );
   });
 
-  it("o seletor de tipo mostra a descrição do catálogo, e o de template só os ativos", async () => {
+  it("⛔ o formulário NÃO oferece os quatro campos que ninguém lê", async () => {
+    // `deviation_type`, `cron_window`, `threshold_minutes` e
+    // `threshold_occurrences` são gravados pela API e ignorados pelo
+    // `outbox._TARGETS_SQL` — o `where` dele não cita nenhum deles. Oferecê-los
+    // era prometer um recorte que a entrega não faz, e o gestor só descobriria
+    // pelo alerta que não devia ter chegado. Voltam com quem os leia.
     const user = userEvent.setup();
     abrir([]);
 
     await user.click(screen.getByRole("button", { name: "Nova regra" }));
 
-    expect(
-      within(screen.getByLabelText("Tipo de desvio"))
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).toEqual(["Todo tipo de desvio", "Atraso Zz"]);
+    for (const rotulo of [
+      "Tipo de desvio",
+      "Janela (opcional)",
+      "Limiar em minutos (opcional)",
+      "Limiar de ocorrências (opcional)",
+    ]) {
+      expect(screen.queryByLabelText(rotulo)).toBeNull();
+    }
+    // O que sobrou continua lá, e é o que de fato decide a entrega.
+    expect(screen.getByLabelText("Unidade")).toBeVisible();
+    expect(screen.getByLabelText("Canal")).toBeVisible();
     expect(
       within(screen.getByLabelText("Template"))
         .getAllByRole("option")
@@ -654,19 +647,16 @@ describe("o formulário de regra — `AlertRuleWrite`", () => {
     });
   });
 
-  it("limiar que não é inteiro é recusado na tela", async () => {
+  it("nome vazio é recusado na tela, antes de qualquer chamada", async () => {
+    // Era o teste do limiar, que deixou de ter campo na tela. A validação do
+    // formulário segue prendida pelo único obrigatório que sobrou.
     const user = userEvent.setup();
     abrir([]);
 
     await user.click(screen.getByRole("button", { name: "Nova regra" }));
-    await user.type(screen.getByLabelText("Nome"), "Regra Zz");
-    await user.type(
-      screen.getByLabelText("Limiar em minutos (opcional)"),
-      "-5",
-    );
     await user.click(screen.getByRole("button", { name: "Gravar regra" }));
 
-    expect(await screen.findByText("número inteiro, sem sinal")).toBeVisible();
+    expect(await screen.findByText("Informe o nome.")).toBeVisible();
     expect(request).not.toHaveBeenCalled();
   });
 
@@ -683,7 +673,6 @@ describe("o formulário de regra — `AlertRuleWrite`", () => {
 
     await user.click(screen.getByRole("button", { name: "Editar Regra Zz" }));
     expect(screen.getByLabelText("Nome")).toHaveValue("Regra Zz");
-    expect(screen.getByLabelText("Tipo de desvio")).toHaveValue("zz_late");
     await user.click(screen.getByRole("button", { name: "Gravar regra" }));
 
     await waitFor(() => expect(request).toHaveBeenCalledTimes(1));
@@ -693,17 +682,12 @@ describe("o formulário de regra — `AlertRuleWrite`", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(detail);
   });
 
-  it("catálogo de tipos nulo: a tela fica em pé e o seletor diz que não pôde ler", async () => {
+  it("catálogo de templates nulo: a tela fica em pé e o seletor diz que não pôde ler", async () => {
     const user = userEvent.setup();
-    abrir([], CONTATOS, null, null);
+    abrir([], CONTATOS, null);
 
     await user.click(screen.getByRole("button", { name: "Nova regra" }));
 
-    expect(
-      screen.getByText(
-        "O catálogo de tipos de desvio não pôde ser lido agora.",
-      ),
-    ).toBeVisible();
     expect(
       screen.getByText("O catálogo de templates não pôde ser lido agora."),
     ).toBeVisible();

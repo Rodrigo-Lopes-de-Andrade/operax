@@ -6,7 +6,6 @@ import {
   loadContacts,
   loadCredential,
   loadDeliveryByChannel,
-  loadDeviationTypes,
   loadProviderForms,
   loadRules,
   loadTelegramAdhesion,
@@ -683,31 +682,13 @@ describe("C6 — destinatários, regras e o catálogo de tipos de desvio (caminh
     expect(rows).toEqual(regras);
   });
 
-  it("✅ o catálogo vem de `/canais/regras/tipos-de-desvio` — `app.deviation_type` não chega ao navegador", async () => {
-    const tipos = [
-      {
-        code: "zz_late",
-        description: "Atraso Zz",
-        direction: "missing",
-        category: "zz",
-      },
-    ];
-    fetchMock.mockResolvedValue(answer(200, tipos));
-
-    expect(await loadDeviationTypes()).toEqual(tipos);
-    expect(fetchMock.mock.calls[0][0]).toMatch(
-      /\/canais\/regras\/tipos-de-desvio$/,
-    );
-  });
-
-  it("403 vira null nas três — `GET /regras` é do administrador, e a página já fechou antes", async () => {
+  it("403 vira null nas duas — `GET /regras` é do administrador, e a página já fechou antes", async () => {
     fetchMock.mockResolvedValue(
       answer(403, { detail: "Ler regras e destinos é do administrador." }),
     );
 
     expect(await loadContacts()).toBeNull();
     expect(await loadRules()).toBeNull();
-    expect(await loadDeviationTypes()).toBeNull();
   });
 
   it("⛔ 500 relança — a API fora do ar não é 'nenhuma regra'", async () => {

@@ -4,11 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import RegrasPage from "@/app/dashboard/administracao/regras/page";
 import { DOCTRINE } from "@/components/canais/rules";
 import type { TemplateRow } from "@/lib/canais/queries";
-import type {
-  AlertRuleRow,
-  ContactRow,
-  DeviationTypeRow,
-} from "@/lib/canais/regras";
+import type { AlertRuleRow, ContactRow } from "@/lib/canais/regras";
 import type { Identity } from "@/lib/identity";
 import type { UnitOption } from "@/lib/ponto/queries";
 
@@ -25,7 +21,6 @@ vi.mock("next/navigation", () => ({
 
 const loadIdentity = vi.fn();
 const loadRules = vi.fn();
-const loadDeviationTypes = vi.fn();
 const loadTemplates = vi.fn();
 const loadContacts = vi.fn();
 const loadUnits = vi.fn();
@@ -39,7 +34,6 @@ vi.mock("@/lib/identity", async () => {
 
 vi.mock("@/lib/canais/queries", () => ({
   loadRules: () => loadRules(),
-  loadDeviationTypes: () => loadDeviationTypes(),
   loadTemplates: () => loadTemplates(),
   loadContacts: () => loadContacts(),
 }));
@@ -73,15 +67,6 @@ const UNIDADE: UnitOption = {
   companySlug: "zz-ltda",
 };
 
-const TIPOS: DeviationTypeRow[] = [
-  {
-    code: "zz_late",
-    description: "Atraso Zz",
-    direction: "missing",
-    category: "zz",
-  },
-];
-
 const TEMPLATES: TemplateRow[] = [];
 const CONTATOS: ContactRow[] = [];
 
@@ -89,7 +74,7 @@ const CONTATOS: ContactRow[] = [];
 const REGRA: AlertRuleRow = {
   id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
   name: "Regra Zz",
-  deviation_type: "zz_late",
+  deviation_type: null,
   scope_unit_id: null,
   scope_unit_name: null,
   content: "aggregate",
@@ -107,7 +92,6 @@ const REGRA: AlertRuleRow = {
 async function abrir(role: string, rules: AlertRuleRow[] | null) {
   loadIdentity.mockResolvedValue(identidade(role));
   loadRules.mockResolvedValue(rules);
-  loadDeviationTypes.mockResolvedValue(TIPOS);
   loadTemplates.mockResolvedValue(TEMPLATES);
   loadContacts.mockResolvedValue(CONTATOS);
   loadUnits.mockResolvedValue([UNIDADE]);
@@ -120,7 +104,6 @@ beforeEach(() => {
   for (const mock of [
     loadIdentity,
     loadRules,
-    loadDeviationTypes,
     loadTemplates,
     loadContacts,
     loadUnits,
@@ -136,7 +119,6 @@ describe("a porta da página é `isAdmin` — e aqui coincide com a rota", () =>
     await expect(RegrasPage()).rejects.toThrow("NEXT_NOT_FOUND");
     expect(notFound).toHaveBeenCalled();
     expect(loadRules).not.toHaveBeenCalled();
-    expect(loadDeviationTypes).not.toHaveBeenCalled();
     expect(loadTemplates).not.toHaveBeenCalled();
     expect(loadContacts).not.toHaveBeenCalled();
     expect(loadUnits).not.toHaveBeenCalled();
@@ -164,13 +146,12 @@ describe("a porta da página é `isAdmin` — e aqui coincide com a rota", () =>
       screen.getByRole("heading", { level: 1, name: "Regras" }),
     ).toBeVisible();
     expect(screen.getByText(DOCTRINE)).toBeVisible();
-    expect(screen.getByText(/Atraso Zz/)).toBeVisible();
+    expect(screen.queryByText(/Atraso Zz/)).toBeNull();
     expect(
       screen.getByText("Zz razão que só o backend escreve."),
     ).toBeVisible();
     // As cinco leituras, uma vez cada; as unidades pelo cliente do Caminho 1.
     expect(loadRules).toHaveBeenCalledTimes(1);
-    expect(loadDeviationTypes).toHaveBeenCalledTimes(1);
     expect(loadTemplates).toHaveBeenCalledTimes(1);
     expect(loadContacts).toHaveBeenCalledTimes(1);
     expect(loadUnits).toHaveBeenCalledWith(SUPABASE);

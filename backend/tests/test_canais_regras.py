@@ -298,14 +298,6 @@ def db(monkeypatch: pytest.MonkeyPatch) -> Callable[..., Stubs]:
                 canais_regras._RULES_SQL: rules if rules is not None else [rule_row()],
                 canais_regras._VISIBLE_RULE_SQL: rule,
                 canais_regras._DEVIATION_TYPE_SQL: deviation_type,
-                canais_regras._DEVIATION_TYPES_SQL: [
-                    {
-                        "code": "late_entry",
-                        "description": "Atraso na entrada",
-                        "direction": "shortfall",
-                        "category": "entry",
-                    }
-                ],
                 outbox._TEMPLATE_SQL: template,
                 canais._READINESS_SQL: readiness_rows
                 if readiness_rows is not None
@@ -505,28 +497,6 @@ def test_a_lista_de_contatos_e_de_qualquer_membro_e_roda_como_o_usuario(
     assert stubs.user.statements == [canais_regras._CONTACTS_SQL]
     assert stubs.user.params[0]["tenant_id"] == str(TENANT_ID)
     assert stubs.user.params[0]["contact_id"] is None
-
-
-def test_o_catalogo_de_tipos_de_desvio_e_de_qualquer_membro_e_roda_como_o_usuario(
-    client: TestClient, cabecalho: dict[str, str], db: Callable[..., Stubs]
-) -> None:
-    """`app.deviation_type` não chega ao navegador; a tela de regras lê o
-    rótulo por aqui. Global, como o usuário, sem `tenant_scope`."""
-    stubs = db(admin=False)
-
-    resposta = client.get("/canais/regras/tipos-de-desvio", headers=cabecalho)
-
-    assert resposta.status_code == 200, resposta.text
-    assert resposta.json() == [
-        {
-            "code": "late_entry",
-            "description": "Atraso na entrada",
-            "direction": "shortfall",
-            "category": "entry",
-        }
-    ]
-    assert canais_regras._DEVIATION_TYPES_SQL in stubs.user.statements
-    assert stubs.bound_ctx.opened == 0
 
 
 def test_a_lista_de_regras_e_do_admin_e_roda_como_o_usuario(
@@ -1714,12 +1684,11 @@ def test_blocked_reason_chega_na_lista_a_partir_das_duas_consultas(
 # ---------------------------------------------------------------------------
 def test_toda_instrucao_do_modulo_liga_o_tenant_menos_o_catalogo_global() -> None:
     """`tenant_scope` recusaria o que não liga `%(tenant_id)s`; o catálogo de
-    tipos de desvio (o código e a lista) é global e roda como o usuário — é a
-    única exceção."""
+    tipos de desvio é global e roda como o usuário — é a única exceção."""
     for name, sql in vars(canais_regras).items():
         if not name.endswith("_SQL"):
             continue
-        if name in ("_DEVIATION_TYPE_SQL", "_DEVIATION_TYPES_SQL"):
+        if name == "_DEVIATION_TYPE_SQL":
             assert "tenant_id" not in sql
             continue
         assert "%(tenant_id)s" in sql, name

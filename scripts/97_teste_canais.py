@@ -173,7 +173,7 @@ outbox, executadas como o sender as executa — e o gatilho de verdade no meio:
   o owner do outro tenant vê zero.
 
 OITAVA PARTE — DESTINATÁRIOS E REGRAS (C6), DE PONTA A PONTA, CONTRA O BANCO
-As trinta instruções de `server/routers/canais_regras.py`, executadas
+As vinte e nove instruções de `server/routers/canais_regras.py`, executadas
 como as rotas as executam, mais `ciclo.py`, `outbox._TARGETS_SQL`/`_ENQUEUE_SQL`
 e `sender._GATE_SQL`/`_WAITING_SQL` — o cenário que o C6 vende:
 
@@ -2505,7 +2505,7 @@ end $$;
 -- 2. A regra nasce desligada; o supervisor vê a regra e não vê os destinos
 -- ---------------------------------------------------------------------------
 do $$
-declare rec record; lista json; n int; ok boolean;
+declare rec record; lista json; n int;
 begin
   execute $q${INSERT_RULE}$q$ into rec;
   update app.alert_rule set id = '{D_RULE}' where id = rec.id;
@@ -2525,12 +2525,6 @@ begin
   perform pg_temp.assert_eq('_DEVIATION_TYPE_SQL: late_entry existe', n::text, '1');
   select count(*) into n from ({DEVIATION_TYPE_NAO}) x;
   perform pg_temp.assert_eq('_DEVIATION_TYPE_SQL: o inventado não', n::text, '0');
-  -- A lista para a tela: o catálogo inteiro, com rótulo, mesmo como o supervisor.
-  set local request.jwt.claim.sub = '{D_SUPERVISOR}';
-  select count(*), bool_and(description <> '') into n, ok from ({DEVIATION_TYPES}) x;
-  perform pg_temp.assert_eq('_DEVIATION_TYPES_SQL: o catálogo inteiro, com rótulo, como o supervisor',
-    (n = (select count(*) from app.deviation_type))::text || ' ' || ok::text, 'true true');
-  set local request.jwt.claim.sub = '{D_OWNER}';
   select count(*) into n from ({VISIBLE_RULE_OUTRO}) x;
   perform pg_temp.assert_eq('_VISIBLE_RULE_SQL: a regra ligada ao outro tenant é zero', n::text, '0');
   reset role;
@@ -3599,7 +3593,6 @@ def regras(
         "{INSERT_RULE}": rule("Resumo por unidade", "aggregate", "deviation_summary"),
         "{DEVIATION_TYPE_OK}": ligar(regras_sql["_DEVIATION_TYPE_SQL"], code="late_entry"),
         "{DEVIATION_TYPE_NAO}": ligar(regras_sql["_DEVIATION_TYPE_SQL"], code="inventado"),
-        "{DEVIATION_TYPES}": regras_sql["_DEVIATION_TYPES_SQL"],
         "{VISIBLE_RULE_OUTRO}": ligar(regras_sql["_VISIBLE_RULE_SQL"], tenant_id=D_OUTRO, rule_id=D_RULE),
         "{SET_ACTIVE_TRUE}": set_active(D_RULE, "true"),
         "{SET_ACTIVE_FALSE}": set_active(D_RULE, "false"),
@@ -3929,7 +3922,6 @@ def main() -> None:
         "_RULES_SQL",
         "_VISIBLE_RULE_SQL",
         "_DEVIATION_TYPE_SQL",
-        "_DEVIATION_TYPES_SQL",
         "_INSERT_RULE_SQL",
         "_UPDATE_RULE_SQL",
         "_REVALIDATE_RULE_TARGETS_SQL",

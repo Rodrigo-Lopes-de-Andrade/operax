@@ -125,14 +125,6 @@ export type AlertRuleTargetRow = {
   responsibility: Responsibility | null;
 };
 
-/** Um tipo de desvio do catálogo global (`DeviationTypeRow`); `description` já é pt-BR. */
-export type DeviationTypeRow = {
-  code: string;
-  description: string;
-  direction: string;
-  category: string;
-};
-
 /**
  * Uma regra de alerta (`AlertRuleRow`), com destinos e o que a impede de
  * entregar hoje.
@@ -244,18 +236,6 @@ export const ROUTED_CHANNEL_LABEL: Record<string, string> = {
   ...CHANNEL_LABEL,
   email: "E-mail",
 };
-
-/** O rótulo do catálogo para um código; nulo é "todo tipo"; código desconhecido aparece cru. */
-export function deviationTypeLabel(
-  catalog: DeviationTypeRow[],
-  code: string | null,
-): string {
-  if (code === null) {
-    return "Todo tipo de desvio";
-  }
-
-  return catalog.find((row) => row.code === code)?.description ?? code;
-}
 
 // ---------------------------------------------------------------------------
 // A regra 7 antes do clique

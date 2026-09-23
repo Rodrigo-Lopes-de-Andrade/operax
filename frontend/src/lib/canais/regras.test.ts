@@ -7,7 +7,6 @@ import {
   createRule,
   deactivateContact,
   deactivateRule,
-  deviationTypeLabel,
   eligibleContacts,
   eligibleResponsibilities,
   failureMessage,
@@ -304,22 +303,5 @@ describe("o que se lê de uma recusa", () => {
         }),
       ),
     ).toEqual([]);
-  });
-});
-
-describe("o rótulo do tipo de desvio vem do catálogo", () => {
-  const catalog = [
-    {
-      code: "zz_late",
-      description: "Atraso Zz",
-      direction: "missing",
-      category: "zz",
-    },
-  ];
-
-  it("nulo é todo tipo; código conhecido é a descrição; desconhecido aparece cru", () => {
-    expect(deviationTypeLabel(catalog, null)).toBe("Todo tipo de desvio");
-    expect(deviationTypeLabel(catalog, "zz_late")).toBe("Atraso Zz");
-    expect(deviationTypeLabel(catalog, "zz_other")).toBe("zz_other");
   });
 });

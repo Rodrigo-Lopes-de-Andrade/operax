@@ -7,7 +7,6 @@ import {
   RULES_API_PATH,
   type AlertRuleRow,
   type ContactRow,
-  type DeviationTypeRow,
 } from "@/lib/canais/regras";
 import { getServerSupabase } from "@/lib/supabase-server";
 
@@ -362,14 +361,6 @@ export function loadContacts(): Promise<ContactRow[] | null> {
  */
 export function loadRules(): Promise<AlertRuleRow[] | null> {
   return readOrNull<AlertRuleRow[]>(RULES_API_PATH);
-}
-
-/**
- * O catálogo global de tipos de desvio, pela API: `app.deviation_type` não
- * chega ao navegador, e a tela de regras precisa do rótulo.
- */
-export function loadDeviationTypes(): Promise<DeviationTypeRow[] | null> {
-  return readOrNull<DeviationTypeRow[]>(`${RULES_API_PATH}/tipos-de-desvio`);
 }
 
 /**

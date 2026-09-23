@@ -21,7 +21,6 @@ import {
   activateRule,
   createRule,
   deactivateRule,
-  deviationTypeLabel,
   eligibleContacts,
   eligibleResponsibilities,
   failureMessage,
@@ -41,7 +40,6 @@ import {
   type AlertRuleTargetWrite,
   type AlertRuleWrite,
   type ContactRow,
-  type DeviationTypeRow,
   type Responsibility,
   type RuleTestResult,
 } from "@/lib/canais/regras";
@@ -67,8 +65,6 @@ export const TEST_NOTE =
 const ACTIVE_NOTE =
   "Ligada não quer dizer entregando: com a entrega ainda não liberada, a fila espera — Conexões mostra o que está preso, e o que pode ser apontado desde já aparece ao lado da regra.";
 
-const INTEGER_HINT = "número inteiro, sem sinal";
-
 /**
  * A forma de cada campo de `AlertRuleWrite`, e só a forma. **Sem `active`**:
  * a regra nasce desligada e o backend recusa 422 um `active` no corpo — a
@@ -82,51 +78,29 @@ const ruleSchema = z.object({
     .trim()
     .min(1, "Informe o nome.")
     .max(120, "No máximo 120 caracteres."),
-  deviation_type: z.string(),
   scope_unit_id: z.string(),
   content: z.enum(RULE_CONTENTS),
   channel: z.enum(RULE_CHANNELS),
   template_code: z.string(),
-  cron_window: z.string().trim().max(64, "No máximo 64 caracteres."),
-  threshold_minutes: z
-    .string()
-    .trim()
-    .refine((value) => value === "" || /^\d+$/.test(value), INTEGER_HINT),
-  threshold_occurrences: z
-    .string()
-    .trim()
-    .refine((value) => value === "" || /^\d+$/.test(value), INTEGER_HINT),
 });
 
 type RuleValues = z.infer<typeof ruleSchema>;
 
 const EMPTY_RULE: RuleValues = {
   name: "",
-  deviation_type: "",
   scope_unit_id: "",
   content: "aggregate",
   channel: "whatsapp",
   template_code: "",
-  cron_window: "",
-  threshold_minutes: "",
-  threshold_occurrences: "",
 };
 
 function ruleValues(row: AlertRuleRow): RuleValues {
   return {
     name: row.name,
-    deviation_type: row.deviation_type ?? "",
     scope_unit_id: row.scope_unit_id ?? "",
     content: row.content,
     channel: row.channel,
     template_code: row.template_code ?? "",
-    cron_window: row.cron_window ?? "",
-    threshold_minutes:
-      row.threshold_minutes === null ? "" : String(row.threshold_minutes),
-    threshold_occurrences:
-      row.threshold_occurrences === null
-        ? ""
-        : String(row.threshold_occurrences),
   };
 }
 
@@ -200,14 +174,12 @@ function coverage(
 function RuleForm({
   editing,
   units,
-  deviationTypes,
   templates,
   onOutcome,
   onCancel,
 }: {
   editing: AlertRuleRow | null;
   units: UnitChoice[];
-  deviationTypes: DeviationTypeRow[] | null;
   templates: TemplateRow[] | null;
   onOutcome: (outcome: Outcome | null, saved: boolean) => void;
   onCancel: () => void;
@@ -230,19 +202,18 @@ function RuleForm({
 
     const write: AlertRuleWrite = {
       name: values.name,
-      deviation_type: values.deviation_type || null,
+      // ⛔ Os quatro campos que o outbox não lê vão NULOS e não têm campo na
+      // tela: `deviation_type`, `cron_window`, `threshold_minutes` e
+      // `threshold_occurrences` são gravados por `AlertRuleWrite` e ignorados
+      // por `outbox._TARGETS_SQL`. Oferecê-los era prometer um filtro que não
+      // existe. Voltam junto com quem os leia.
+      deviation_type: null,
       scope_unit_id: values.scope_unit_id || null,
       content: values.content,
       channel: values.channel,
-      cron_window: values.cron_window || null,
-      threshold_minutes:
-        values.threshold_minutes === ""
-          ? null
-          : Number(values.threshold_minutes),
-      threshold_occurrences:
-        values.threshold_occurrences === ""
-          ? null
-          : Number(values.threshold_occurrences),
+      cron_window: null,
+      threshold_minutes: null,
+      threshold_occurrences: null,
       template_code: values.template_code || null,
     };
 
@@ -280,28 +251,6 @@ function RuleForm({
           error={formState.errors.name?.message}
           {...register("name")}
         />
-        <div className="flex flex-col gap-1.5">
-          <label htmlFor="rule-deviation-type" className={LABEL_CLASS}>
-            Tipo de desvio
-          </label>
-          <select
-            id="rule-deviation-type"
-            className={`${FIELD_CLASS} h-10 text-sm`}
-            {...register("deviation_type")}
-          >
-            <option value="">Todo tipo de desvio</option>
-            {(deviationTypes ?? []).map((row) => (
-              <option key={row.code} value={row.code}>
-                {row.description}
-              </option>
-            ))}
-          </select>
-          {deviationTypes === null ? (
-            <p className="text-bad text-xs font-medium">
-              O catálogo de tipos de desvio não pôde ser lido agora.
-            </p>
-          ) : null}
-        </div>
         <div className="flex flex-col gap-1.5">
           <label htmlFor="rule-unit" className={LABEL_CLASS}>
             Unidade
@@ -387,48 +336,6 @@ function RuleForm({
               O catálogo de templates não pôde ser lido agora.
             </p>
           ) : null}
-        </div>
-      </div>
-
-      <div className="grid gap-4 sm:grid-cols-3">
-        <div className="flex flex-col gap-1.5">
-          <TextField
-            id="rule-cron-window"
-            label="Janela (opcional)"
-            autoComplete="off"
-            placeholder="0 7 * * 1-5"
-            error={formState.errors.cron_window?.message}
-            {...register("cron_window")}
-          />
-          <p className="text-ink-faint text-xs text-pretty">
-            expressão cron de quando a regra dispara; vazio dispara na detecção
-          </p>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <TextField
-            id="rule-threshold-minutes"
-            label="Limiar em minutos (opcional)"
-            inputMode="numeric"
-            autoComplete="off"
-            error={formState.errors.threshold_minutes?.message}
-            {...register("threshold_minutes")}
-          />
-          <p className="text-ink-faint text-xs text-pretty">
-            só desvio com pelo menos estes minutos conta
-          </p>
-        </div>
-        <div className="flex flex-col gap-1.5">
-          <TextField
-            id="rule-threshold-occurrences"
-            label="Limiar de ocorrências (opcional)"
-            inputMode="numeric"
-            autoComplete="off"
-            error={formState.errors.threshold_occurrences?.message}
-            {...register("threshold_occurrences")}
-          />
-          <p className="text-ink-faint text-xs text-pretty">
-            só a partir desta quantidade de indícios no período
-          </p>
         </div>
       </div>
 
@@ -788,7 +695,6 @@ function RuleItem({
   contacts,
   units,
   now,
-  deviationTypes,
   outcome,
   busy,
   onOpen,
@@ -800,7 +706,6 @@ function RuleItem({
   contacts: ContactRow[] | null;
   units: UnitChoice[];
   now: number;
-  deviationTypes: DeviationTypeRow[] | null;
   outcome: RuleOutcome | null;
   busy: boolean;
   onOpen: (panel: Panel) => void;
@@ -828,8 +733,10 @@ function RuleItem({
           {RULE_CONTENT_LABEL[rule.content]}
         </Badge>
       </div>
+      {/* Nem o tipo de desvio nem a janela aparecem: o outbox não filtra por
+          eles, e mostrá-los ao lado da regra afirma um recorte que a entrega
+          não faz. Voltam quando houver quem os leia. */}
       <p className="text-ink-muted text-xs">
-        {deviationTypeLabel(deviationTypes ?? [], rule.deviation_type)} ·{" "}
         {rule.scope_unit_name ?? "todas as unidades"} ·{" "}
         {RULE_CHANNEL_LABEL[rule.channel]} ·{" "}
         {rule.template_code ? (
@@ -840,13 +747,6 @@ function RuleItem({
         ) : (
           "sem template"
         )}
-        {rule.cron_window ? (
-          <>
-            {" "}
-            · janela{" "}
-            <code className="text-ink font-mono">{rule.cron_window}</code>
-          </>
-        ) : null}
       </p>
       {rule.blocked_reason ? (
         <p className="bg-alert-bg text-alert rounded-[10px] px-3 py-2 text-xs font-medium text-pretty">
@@ -970,14 +870,12 @@ export function Rules({
   rules,
   contacts,
   units,
-  deviationTypes,
   templates,
   now,
 }: {
   rules: AlertRuleRow[];
   contacts: ContactRow[] | null;
   units: UnitChoice[];
-  deviationTypes: DeviationTypeRow[] | null;
   templates: TemplateRow[] | null;
   /** O instante do render do servidor — ver `regras/page.tsx`. */
   now: number;
@@ -1112,7 +1010,6 @@ export function Rules({
                 contacts={contacts}
                 units={units}
                 now={now}
-                deviationTypes={deviationTypes}
                 outcome={
                   ruleOutcome?.ruleId === rule.id ? ruleOutcome.outcome : null
                 }
@@ -1144,7 +1041,6 @@ export function Rules({
                 key={selected?.id ?? "new"}
                 editing={selected}
                 units={units}
-                deviationTypes={deviationTypes}
                 templates={templates}
                 onOutcome={settle}
                 onCancel={close}

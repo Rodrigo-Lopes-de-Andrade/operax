@@ -97,7 +97,6 @@ from server.models import (
     ContactRow,
     ContactUnits,
     ContactWrite,
-    DeviationTypeRow,
     MuteRequest,
     QueuedTestMessage,
     RuleTestResult,
@@ -385,13 +384,6 @@ select r.id, r.name, r.content, r.channel, r.template_code, r.active, r.scope_un
 #: usuário, porque `tenant_scope` recusaria a instrução — e deve.
 _DEVIATION_TYPE_SQL = """
 select code from app.deviation_type where code = %(code)s
-"""
-#: O catálogo inteiro, para a tela escolher por rótulo. Global e lido como o
-#: usuário (`deviation_type_read` é `true`): não há o que recortar.
-_DEVIATION_TYPES_SQL = """
-select code, description, direction, category
-  from app.deviation_type
- order by category, code
 """
 
 #: `active` é o literal `false`: a regra nasce desligada, e não há parâmetro
@@ -1017,16 +1009,6 @@ async def _visible_rule(tenant: TenantContext, rule_id: UUID) -> DictRow:
     if row is None:
         raise _not_found(_REGRA_NAO_ENCONTRADA)
     return row
-
-
-@router.get("/regras/tipos-de-desvio")
-async def deviation_types(tenant: CurrentTenant) -> list[DeviationTypeRow]:
-    """O catálogo global de tipos de desvio, como o usuário — `app.deviation_type`
-    não é exposto ao navegador, e a tela de regras precisa do rótulo."""
-    async with user_scope(tenant) as scope:
-        await scope.execute(_DEVIATION_TYPES_SQL)
-        rows = await scope.fetchall()
-    return [DeviationTypeRow(**row) for row in rows]
 
 
 @router.get("/regras")

@@ -2084,16 +2084,6 @@ class AlertRuleTargetRow(BaseModel):
     responsibility: Responsibility | None
 
 
-class DeviationTypeRow(BaseModel):
-    """Um tipo de desvio do catálogo global (`app.deviation_type`), para a tela
-    de regras escolher por rótulo. `description` já é pt-BR."""
-
-    code: str
-    description: str
-    direction: str
-    category: str
-
-
 class AlertRuleRow(BaseModel):
     """Uma regra de alerta, como está em `app.alert_rule`, com destinos e o que
     a impede de entregar hoje.
