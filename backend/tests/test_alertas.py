@@ -212,3 +212,47 @@ def test_o_gate_pergunta_ao_banco_em_vez_de_ler_uma_flag():
     # fechou". A liberação é uma linha, e uma linha revogada não conta.
     assert "from app.alert_release" in sender._GATE_SQL
     assert "revoked_at is null" in sender._GATE_SQL
+
+
+# ---------------------------------------------------------------------------
+# O turno de um tenant não leva o turno dos outros (C7)
+# ---------------------------------------------------------------------------
+@pytest.mark.anyio
+async def test_um_tenant_que_morre_no_turno_nao_leva_os_outros(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A mesma dívida que o `run()` do sender fechou em `a8f589c`.
+
+    Aqui ela é mais difícil de evitar: um gatilho do banco pode recusar de
+    dentro do `insert` — `util.validate_alert_template` tem motivos que o
+    Python pergunta antes, e o desenho é que ele os pergunte todos, mas um
+    gatilho novo amanhã não estaria na lista. Sem o try por tenant, um cliente
+    com regra doente apaga o turno de todos os outros, a cada quinze minutos.
+    """
+    from operax.alertas import __main__ as entrada
+
+    doente = SystemContext(tenant_id=uuid4(), task="teste")
+    saudavel = SystemContext(tenant_id=uuid4(), task="teste")
+    visitados: list[UUID] = []
+
+    async def fake_active_tenants(_task: str) -> list[SystemContext]:
+        return [doente, saudavel]
+
+    async def fake_por_tenant(context, _ate, _base_url):
+        visitados.append(context.tenant_id)
+        if context is doente:
+            raise RuntimeError("o gatilho recusou")
+        return [f"tenant {context.tenant_id}: 1 ciclo(s)"]
+
+    monkeypatch.setattr(entrada, "active_tenants", fake_active_tenants)
+    monkeypatch.setattr(entrada, "_por_tenant", fake_por_tenant)
+
+    texto = await entrada._montar_e_enfileirar("http://x", date(2026, 9, 23))
+
+    # O doente foi visitado, falhou, e o seguinte rodou assim mesmo.
+    assert visitados == [doente.tenant_id, saudavel.tenant_id]
+    assert "o turno morreu (RuntimeError)" in texto
+    assert str(doente.tenant_id) in texto
+    assert f"tenant {saudavel.tenant_id}: 1 ciclo(s)" in texto
+    # E o relatório diz o que fica: nada commitado, desvios livres.
+    assert "continuam livres para o próximo turno" in texto

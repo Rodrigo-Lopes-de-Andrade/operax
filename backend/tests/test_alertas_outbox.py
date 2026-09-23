@@ -1,7 +1,7 @@
 """O roteamento por pessoa (SPEC-CANAIS §8): Telegram se houver identidade
 vigente E bot ativo; WhatsApp caso contrário; e-mail intocado.
 
-Quatro coisas, e o falso verde previsto para cada uma:
+Cinco coisas, e o falso verde previsto para cada uma:
 
 1. **`route` é puro e tem tabela** — e a tabela tem o par (identidade sim, bot
    não). Um roteamento que olhasse só a identidade passaria com fixtures que
@@ -15,6 +15,9 @@ Quatro coisas, e o falso verde previsto para cada uma:
    por instrução.
 4. **A chave de idempotência não muda com a rota**, e **nenhuma linha de
    relatório carrega destino** — o de uma linha `telegram` é o chat_id.
+5. **A regra doente é pulada e nomeada, nunca fatal** (C7) — uma por regra,
+   não uma por destino. O estado commitado que o `raise` deixava para trás só
+   se vê pelo banco, e está em `scripts/85_teste_ciclo_mudo.py`.
 """
 
 from __future__ import annotations
@@ -196,21 +199,25 @@ class FakeCursor:
         return self.linhas
 
 
-class FakeScope:
-    def __init__(self, cursor: FakeCursor) -> None:
-        self.cursor = cursor
-
-    async def __aenter__(self) -> FakeCursor:
-        return self.cursor
-
-    async def __aexit__(self, *exc: object) -> None:
-        return None
-
-
 class FakeDB:
-    def __init__(self, *, alvos: list[dict[str, Any]], provider: str | None) -> None:
+    def __init__(
+        self,
+        *,
+        alvos: list[dict[str, Any]],
+        provider: str | None,
+        sem_template: tuple[str, ...] = (),
+        meta_status: str = "approved",
+    ) -> None:
         self.alvos = alvos
         self.provider = provider
+        #: Os códigos que `_TEMPLATE_FOR_CYCLE_SQL` não acha — apagado,
+        #: desativado, ou nunca criado neste cliente. É como uma regra adoece
+        #: depois de ligada.
+        self.sem_template = sem_template
+        #: O estado do template na Meta. `meta_cloud` só entrega `approved`, e
+        #: quem recusa o resto é `util.validate_alert_template`, de dentro do
+        #: insert — a C7 pergunta antes para poder PULAR em vez de estourar.
+        self.meta_status = meta_status
         self.targets_params: list[dict[str, Any]] = []
         self.enqueued: list[dict[str, Any]] = []
 
@@ -221,41 +228,44 @@ class FakeDB:
             self.targets_params.append(params)
             return list(self.alvos)
         if "from app.message_template" in sql:
-            return [{"code": params["code"], "variables": ["unit", "link"]}]
+            if params["code"] in self.sem_template:
+                return []
+            return [
+                {
+                    "code": params["code"],
+                    "variables": ["unit", "link"],
+                    "meta_status": self.meta_status,
+                }
+            ]
         if "insert into app.alert_queue" in sql:
             self.enqueued.append(dict(params))
             return [{"id": uuid4()}]
         raise AssertionError(f"instrução inesperada: {sql[:60]}")
 
 
-def _db(monkeypatch: pytest.MonkeyPatch, estado: FakeDB) -> FakeDB:
-    monkeypatch.setattr(
-        outbox, "tenant_scope", lambda context, schema="app": FakeScope(FakeCursor(estado, context))
-    )
-    return estado
+def _escopo(estado: FakeDB) -> FakeCursor:
+    """O escopo entra por parâmetro desde o C7 — quem abre a transação é quem chama.
+
+    Não há mais `tenant_scope` a estubar aqui: `enqueue` não abre transação
+    nenhuma, e é isso que a torna a MESMA de `ciclo.assemble`.
+    """
+    return FakeCursor(estado, SystemContext(tenant_id=TENANT, task="teste"))
 
 
-async def _enqueue(estado: FakeDB) -> list[outbox.Queued]:
-    return await outbox.enqueue(
-        SystemContext(tenant_id=TENANT, task="teste"), [_ciclo()], base_url="https://app.x"
-    )
+async def _enqueue(estado: FakeDB) -> outbox.Outbox:
+    return await outbox.enqueue(_escopo(estado), [_ciclo()], base_url="https://app.x")
 
 
 @pytest.mark.anyio
-async def test_both_vira_telegram_e_email_quando_ha_identidade_e_bot(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    estado = _db(
-        monkeypatch,
-        FakeDB(
-            alvos=[_alvo(channel="both", telegram_external_id=CHAT_ID, telegram_ready=True)],
-            provider=WHATSAPP_PROVIDER,
-        ),
+async def test_both_vira_telegram_e_email_quando_ha_identidade_e_bot() -> None:
+    estado = FakeDB(
+        alvos=[_alvo(channel="both", telegram_external_id=CHAT_ID, telegram_ready=True)],
+        provider=WHATSAPP_PROVIDER,
     )
 
-    enfileiradas = await _enqueue(estado)
+    resultado = await _enqueue(estado)
 
-    assert [q.channel for q in enfileiradas] == [TELEGRAM_CHANNEL, "email"]
+    assert [q.channel for q in resultado.queued] == [TELEGRAM_CHANNEL, "email"]
     telegram, email = estado.enqueued
     assert (telegram["channel"], telegram["provider"], telegram["destination"]) == (
         TELEGRAM_CHANNEL,
@@ -266,45 +276,35 @@ async def test_both_vira_telegram_e_email_quando_ha_identidade_e_bot(
 
 
 @pytest.mark.anyio
-async def test_sem_bot_pronto_a_identidade_nao_roteia(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_sem_bot_pronto_a_identidade_nao_roteia() -> None:
     """O par do falso verde, pela `enqueue` inteira: identidade vigente, bot não
     pronto (inativo, ou ativo e `disconnected`, ou sem medição — a SQL não
     distingue, e é o que se quer)."""
-    estado = _db(
-        monkeypatch,
-        FakeDB(
-            alvos=[_alvo(channel="both", telegram_external_id=CHAT_ID, telegram_ready=False)],
-            provider=WHATSAPP_PROVIDER,
-        ),
+    estado = FakeDB(
+        alvos=[_alvo(channel="both", telegram_external_id=CHAT_ID, telegram_ready=False)],
+        provider=WHATSAPP_PROVIDER,
     )
 
-    enfileiradas = await _enqueue(estado)
+    resultado = await _enqueue(estado)
 
-    assert [q.channel for q in enfileiradas] == [WHATSAPP_CHANNEL, "email"]
+    assert [q.channel for q in resultado.queued] == [WHATSAPP_CHANNEL, "email"]
     whatsapp = estado.enqueued[0]
     assert (whatsapp["provider"], whatsapp["destination"]) == (WHATSAPP_PROVIDER, PHONE)
     assert CHAT_ID not in str(estado.enqueued)
 
 
 @pytest.mark.anyio
-async def test_a_chave_de_idempotencia_e_a_mesma_por_telegram_e_por_whatsapp(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_a_chave_de_idempotencia_e_a_mesma_por_telegram_e_por_whatsapp() -> None:
     """A mesma regra, o mesmo ciclo, o mesmo contato: quem aderiu entre duas
     execuções recebe UMA mensagem, não uma por canal."""
-    por_whatsapp = _db(
-        monkeypatch, FakeDB(alvos=[_alvo(telegram_ready=True)], provider=WHATSAPP_PROVIDER)
-    )
+    por_whatsapp = FakeDB(alvos=[_alvo(telegram_ready=True)], provider=WHATSAPP_PROVIDER)
     c = _ciclo()
-    await outbox.enqueue(SystemContext(tenant_id=TENANT, task="teste"), [c], base_url="https://x")
-    por_telegram = _db(
-        monkeypatch,
-        FakeDB(
-            alvos=[_alvo(telegram_external_id=CHAT_ID, telegram_ready=True)],
-            provider=WHATSAPP_PROVIDER,
-        ),
+    await outbox.enqueue(_escopo(por_whatsapp), [c], base_url="https://x")
+    por_telegram = FakeDB(
+        alvos=[_alvo(telegram_external_id=CHAT_ID, telegram_ready=True)],
+        provider=WHATSAPP_PROVIDER,
     )
-    await outbox.enqueue(SystemContext(tenant_id=TENANT, task="teste"), [c], base_url="https://x")
+    await outbox.enqueue(_escopo(por_telegram), [c], base_url="https://x")
 
     (a,) = por_whatsapp.enqueued
     (b,) = por_telegram.enqueued
@@ -315,10 +315,8 @@ async def test_a_chave_de_idempotencia_e_a_mesma_por_telegram_e_por_whatsapp(
 
 
 @pytest.mark.anyio
-async def test_enqueue_pergunta_a_identidade_pelo_canal_e_o_bot_pela_matriz(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    estado = _db(monkeypatch, FakeDB(alvos=[], provider=None))
+async def test_enqueue_pergunta_a_identidade_pelo_canal_e_o_bot_pela_matriz() -> None:
+    estado = FakeDB(alvos=[], provider=None)
 
     await _enqueue(estado)
 
@@ -330,28 +328,196 @@ async def test_enqueue_pergunta_a_identidade_pelo_canal_e_o_bot_pela_matriz(
 
 
 @pytest.mark.anyio
-async def test_nenhuma_linha_de_relatorio_carrega_o_destino(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    estado = _db(
-        monkeypatch,
-        FakeDB(
-            alvos=[
-                _alvo(channel="both", telegram_external_id=CHAT_ID, telegram_ready=True),
-                _alvo(rule_id=uuid4(), contact_id=uuid4(), whatsapp="+5511888888888"),
-            ],
-            provider=WHATSAPP_PROVIDER,
-        ),
+async def test_nenhuma_linha_de_relatorio_carrega_o_destino() -> None:
+    estado = FakeDB(
+        alvos=[
+            _alvo(channel="both", telegram_external_id=CHAT_ID, telegram_ready=True),
+            _alvo(rule_id=uuid4(), contact_id=uuid4(), whatsapp="+5511888888888"),
+        ],
+        provider=WHATSAPP_PROVIDER,
     )
 
-    enfileiradas = await _enqueue(estado)
-    texto = outbox.relatorio(enfileiradas)
+    resultado = await _enqueue(estado)
+    texto = outbox.relatorio(resultado)
 
-    assert not hasattr(enfileiradas[0], "destination")
+    assert not hasattr(resultado.queued[0], "destination")
     assert texto == "3 mensagem(ns) na fila · email 1 · telegram 1 · whatsapp 1"
     for segredo in (CHAT_ID, PHONE, "+5511888888888", EMAIL):
         assert segredo not in texto
-    assert outbox.relatorio([]) == "0 mensagem(ns) na fila"
+    assert outbox.relatorio(outbox.Outbox(queued=[], skipped=[])) == "0 mensagem(ns) na fila"
     # E o `__main__` que imprime a fila não conhece a palavra.
     fonte = (Path(outbox.__file__).parent / "__main__.py").read_text(encoding="utf-8")
     assert "destination" not in fonte and "outbox.relatorio(" in fonte
+
+
+# ---------------------------------------------------------------------------
+# 5. A regra doente é pulada e nomeada, nunca fatal (C7)
+# ---------------------------------------------------------------------------
+@pytest.mark.anyio
+async def test_a_regra_doente_e_pulada_e_nomeada_sem_calar_a_saudavel() -> None:
+    """Uma regra que não consegue montar a mensagem cala a própria audiência.
+
+    Antes do C7 ela levantava, e o `raise` derrubava a transação inteira: a
+    regra de e-mail ao lado perdia a mensagem dela, e — porque a reserva já
+    tinha commitado noutra transação — os desvios daquele dia ficavam presos
+    num ciclo sem mensagem nenhuma, para sempre. O estado commitado está
+    preso em `scripts/85_teste_ciclo_mudo.py`, contra o banco; aqui fica o que
+    não precisa de banco: enfileirar não levanta, e quem ficou de fora tem
+    nome, template e motivo.
+    """
+    saudavel = uuid4()
+    estado = FakeDB(
+        alvos=[
+            _alvo(rule_name="Doente", template_code="nao_existe"),
+            _alvo(
+                rule_id=saudavel,
+                contact_id=uuid4(),
+                rule_name="Saudável",
+                channel="email",
+                template_code=None,
+            ),
+        ],
+        provider=WHATSAPP_PROVIDER,
+        sem_template=("nao_existe",),
+    )
+
+    resultado = await _enqueue(estado)
+
+    assert [q.rule_name for q in resultado.queued] == ["Saudável"]
+    assert [(s.rule_name, s.template_code) for s in resultado.skipped] == [("Doente", "nao_existe")]
+    assert "não existe ou está inativo" in resultado.skipped[0].reason
+    # E o relatório diz as duas coisas, sem nenhum destino no meio.
+    texto = outbox.relatorio(resultado)
+    assert texto.splitlines()[0] == "1 mensagem(ns) na fila · email 1"
+    assert "regra 'Doente' ficou de fora" in texto
+    for segredo in (PHONE, EMAIL, CHAT_ID):
+        assert segredo not in texto
+
+
+@pytest.mark.anyio
+async def test_a_regra_doente_aparece_uma_vez_mesmo_com_varios_destinos() -> None:
+    """Uma linha por REGRA: o template é atributo dela, e todo destino adoece junto.
+
+    Repetir a mesma regra por contato faria o relatório dizer "três regras
+    fora" onde há uma, e o número é o que decide se alguém vai consertar.
+    """
+    estado = FakeDB(
+        alvos=[
+            _alvo(rule_name="Doente", template_code="nao_existe", contact_id=uuid4()),
+            _alvo(rule_name="Doente", template_code="nao_existe", contact_id=uuid4()),
+        ],
+        provider=WHATSAPP_PROVIDER,
+        sem_template=("nao_existe",),
+    )
+
+    resultado = await _enqueue(estado)
+
+    assert resultado.queued == []
+    assert [s.rule_name for s in resultado.skipped] == ["Doente"]
+
+
+@pytest.mark.anyio
+async def test_o_template_reprovado_na_meta_e_pulado_como_os_outros_dois_motivos() -> None:
+    """O terceiro motivo do gatilho — e o que faltava.
+
+    `util.validate_alert_template` recusa o insert quando o provedor é o
+    oficial e o template não está `approved`. Esse motivo é o único dos três
+    que o Python não perguntava: a recusa vinha de dentro do `insert`, estourava
+    a transação e derrubava o turno do cliente inteiro — que é exatamente o que
+    a C7 existe para impedir. Agora ele é uma frase, como os outros dois.
+    """
+    doente, saudavel = uuid4(), uuid4()
+    estado = FakeDB(
+        alvos=[
+            _alvo(rule_id=doente, rule_name="Doente", template_code="reprovado"),
+            _alvo(
+                rule_id=saudavel,
+                contact_id=uuid4(),
+                rule_name="Saudável",
+                channel="email",
+                template_code=None,
+            ),
+        ],
+        provider=WHATSAPP_PROVIDER,
+        meta_status="rejected",
+    )
+
+    resultado = await _enqueue(estado)
+
+    assert [q.rule_name for q in resultado.queued] == ["Saudável"]
+    assert [s.rule_name for s in resultado.skipped] == ["Doente"]
+    assert "'rejected' na Meta" in resultado.skipped[0].reason
+    for segredo in (PHONE, EMAIL, CHAT_ID):
+        assert segredo not in outbox.relatorio(resultado)
+
+
+@pytest.mark.anyio
+async def test_o_provedor_nao_oficial_entrega_template_que_a_meta_nao_aprovou() -> None:
+    """A pergunta é a do gatilho, e o gatilho só recusa o oficial.
+
+    Pular aqui o que o banco aceitaria seria a tela mentir ao contrário:
+    a regra pararia de entregar por uma regra que não existe. Quem decide é a
+    matriz de capacidades (`requires_templates`), nunca o nome do provedor.
+    """
+    nao_oficial = next(
+        p
+        for p in capacidades.WHATSAPP_PROVIDERS
+        if not capacidades.capabilities_for(p).requires_templates
+    )
+    estado = FakeDB(
+        alvos=[_alvo(rule_name="Pendente na Meta")],
+        provider=nao_oficial,
+        meta_status="pending",
+    )
+
+    resultado = await _enqueue(estado)
+
+    assert [q.rule_name for q in resultado.queued] == ["Pendente na Meta"]
+    assert resultado.skipped == []
+
+
+@pytest.mark.anyio
+async def test_a_regra_sem_destino_no_canal_e_pulada_e_nomeada_em_vez_de_sumir() -> None:
+    """Era um `continue` mudo: nem fila, nem `Skipped`, nem log.
+
+    O ciclo era desfeito "sem culpado" e o turno seguinte repetia, para sempre,
+    sem ninguém saber que a regra existia. `ligar` não exige que o contato tenha
+    o canal da regra, então o estado é alcançável pela tela.
+    """
+    estado = FakeDB(
+        alvos=[_alvo(rule_name="Sem número", whatsapp=None, template_code=None)],
+        provider=WHATSAPP_PROVIDER,
+    )
+
+    resultado = await _enqueue(estado)
+
+    assert resultado.queued == []
+    assert [s.rule_name for s in resultado.skipped] == ["Sem número"]
+    assert "não tem por onde receber" in resultado.skipped[0].reason
+    # O motivo não nomeia o contato: o relatório e o log não carregam destino.
+    for segredo in (PHONE, EMAIL, CHAT_ID):
+        assert segredo not in resultado.skipped[0].reason
+
+
+@pytest.mark.anyio
+async def test_o_aviso_da_regra_pulada_sai_uma_vez_por_regra(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Dois destinos, um aviso. Num cliente com trinta unidades e cadência de
+    quinze minutos, repetir por destino e por ciclo é ruído que esconde o resto."""
+    estado = FakeDB(
+        alvos=[
+            _alvo(rule_name="Doente", template_code="nao_existe", contact_id=uuid4()),
+            _alvo(rule_name="Doente", template_code="nao_existe", contact_id=uuid4()),
+        ],
+        provider=WHATSAPP_PROVIDER,
+        sem_template=("nao_existe",),
+    )
+
+    with caplog.at_level("WARNING", logger="operax.alertas.outbox"):
+        await _enqueue(estado)
+
+    avisos = [r for r in caplog.records if "ficou de fora" in r.getMessage()]
+    assert len(avisos) == 1
+    for segredo in (PHONE, EMAIL, CHAT_ID):
+        assert segredo not in avisos[0].getMessage()

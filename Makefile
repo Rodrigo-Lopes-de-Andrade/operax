@@ -32,7 +32,11 @@ lint:           ## Ruff + Prettier + tsc --noEmit
 # Banco — obrigatório em qualquer PR que toque policy, view, grant ou migration
 # ---------------------------------------------------------------------------
 db-test:        ## migrations + isolamento + dicionário + refs da documentação
-	./scripts/testar_migrations.sh
+	# O DSN vai daqui porque dois passos da suíte precisam falar com o banco
+	# de fora do psql (o ensaio Deno e a prova de transação do C7), e a porta
+	# não se deriva de PGPORT quando o psql está atrás de um wrapper. Quem
+	# roda noutro lugar sobrescreve: `make db-test ENSAIO_DATABASE_URL=...`.
+	ENSAIO_DATABASE_URL="$(or $(ENSAIO_DATABASE_URL),postgresql://postgres:postgres@127.0.0.1:55322/$(or $(DB),operax_test))" 	./scripts/testar_migrations.sh
 
 dicionario:     ## regenera docs/DICIONARIO-DE-DADOS.md a partir do banco
 	python3 scripts/gerar_dicionario.py

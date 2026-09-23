@@ -19,6 +19,19 @@ with the value missing — means the official provider rejects it and the unoffi
 ones deliver a text with `{{2}}` in the middle of it. Adding a variable to a
 template is a visible action, and this is where it becomes visible.
 
+The refusal is of ONE RULE, and it is never fatal (C7). It used to raise, and
+the raise killed the whole tenant's batch: a template deactivated in the
+afternoon silenced every other rule of that customer, and — because the cycle
+had already committed its reservation in a transaction of its own — took that
+day's deviations with it, permanently. Now the rule is skipped, named in
+`Outbox.skipped` and logged, and the healthy rules beside it still deliver.
+
+THE TRANSACTION IS THE CALLER'S, AND IT IS THE SAME ONE THAT RESERVED
+`enqueue` takes a `TenantScope` instead of opening its own, so `ciclo.assemble`
+and this module commit together or not at all. Two transactions is what made
+"reserved with no message" reachable, and nothing else in this module could
+have repaired it: `_RESERVE_SQL` only ever sees `report_cycle_id is null`.
+
 IDEMPOTENCY IS THE KEY, LITERALLY
 `idempotency_key` is unique on the table and composed of rule, period, contact,
 the half of the rule (messaging or e-mail) and a hash of the content. Re-running
@@ -54,6 +67,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from collections import Counter
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -64,11 +78,14 @@ from operax.alertas.capacidades import (
     TELEGRAM_CHANNEL,
     WHATSAPP_CHANNEL,
     WHATSAPP_PROVIDERS,
+    capabilities_for,
     providers_of,
 )
 from operax.alertas.ciclo import Cycle
 from operax.alertas.saude import HEALTH_CONNECTED
-from operax.core.tenant import SystemContext, tenant_scope
+from operax.core.tenant import TenantScope
+
+logger = logging.getLogger(__name__)
 
 #: The one provider that carries Telegram, asked of the matrix. The unpacking
 #: is the assertion: a second bot provider would need its own routing decision.
@@ -141,6 +158,15 @@ from app.message_template
 where tenant_id = %(tenant_id)s and code = %(code)s and active
 """
 
+#: O template como ESTE módulo precisa vê-lo: as variáveis que ele exige e o
+#: estado dele na Meta. Separada de `_TEMPLATE_SQL` de propósito — aquela é
+#: lida por três rotas, e acrescentar coluna lá mexeria nelas sem motivo.
+_TEMPLATE_FOR_CYCLE_SQL = """
+select variables, meta_status
+from app.message_template
+where tenant_id = %(tenant_id)s and code = %(code)s and active
+"""
+
 _ENQUEUE_SQL = """
 insert into app.alert_queue
   (tenant_id, rule_id, report_cycle_id, channel, destination, payload,
@@ -174,10 +200,6 @@ limit 1
 """.replace("{whatsapp_providers}", _WHATSAPP_PROVIDER_LIST)
 
 
-class TemplateMismatchError(RuntimeError):
-    """O template pede uma variável que o ciclo não sabe responder."""
-
-
 @dataclass(frozen=True, slots=True)
 class Queued:
     """Uma linha enfileirada. Sem destino: o de uma linha `telegram` é o chat_id."""
@@ -186,6 +208,34 @@ class Queued:
     rule_name: str
     #: O canal ROTEADO — `telegram`, `whatsapp` ou `email` —, não o da regra.
     channel: str
+
+
+@dataclass(frozen=True, slots=True)
+class Skipped:
+    """Uma regra que não consegue montar a mensagem — nomeada, nunca fatal.
+
+    Uma por REGRA, não por alvo: o template é atributo da regra, então todo
+    destino dela adoece junto, e repetir a mesma linha por contato só esconde
+    quantas regras ficaram de fora.
+    """
+
+    rule_id: UUID
+    rule_name: str
+    template_code: str | None
+    reason: str
+
+
+@dataclass(frozen=True, slots=True)
+class Outbox:
+    """O que entrou na fila e o que ficou de fora — as duas metades da verdade.
+
+    Ficar de fora sem aparecer no retorno é o que transformava uma regra doente
+    em silêncio: quem lê o log do Railway tem de saber qual regra e por quê sem
+    abrir o banco.
+    """
+
+    queued: list[Queued]
+    skipped: list[Skipped]
 
 
 def facts(cycle: Cycle, *, base_url: str) -> dict[str, Any]:
@@ -242,84 +292,173 @@ def route(
     return WHATSAPP_CHANNEL, whatsapp_provider, target["whatsapp"]
 
 
-async def enqueue(context: SystemContext, cycles: list[Cycle], *, base_url: str) -> list[Queued]:
-    """Uma mensagem por (regra, destino, ciclo) — e nenhuma duas vezes."""
+def _pular(
+    pulados: dict[UUID, Skipped], alvo: Mapping[str, Any], cycle: Cycle, motivo: str
+) -> None:
+    """Registra a regra que ficou de fora — uma vez, por regra.
+
+    O log avisa só na primeira: o motivo é atributo da regra, e repeti-lo por
+    destino e por ciclo enche o log de linhas idênticas num cliente com trinta
+    unidades, a cada quinze minutos.
+    """
+    if alvo["rule_id"] in pulados:
+        return
+    pulados[alvo["rule_id"]] = Skipped(
+        rule_id=alvo["rule_id"],
+        rule_name=alvo["rule_name"],
+        template_code=alvo["template_code"],
+        reason=motivo,
+    )
+    logger.warning(
+        "outbox: regra %r ficou de fora do ciclo %s — %s",
+        alvo["rule_name"],
+        cycle.cycle_id,
+        motivo,
+    )
+
+
+async def _template_reason(
+    scope: TenantScope, code: str, dados: dict[str, Any], *, exige_aprovado: bool
+) -> str | None:
+    """Por que este template não serve para este ciclo — ou `None` quando serve.
+
+    Uma frase, não uma exceção. A recusa continua sendo a mesma de sempre — o
+    módulo não enfileira mensagem que o provedor oficial recusa nem que os não
+    oficiais entregam com `{{2}}` no meio —, mas ela agora cabe numa linha de
+    log e num relatório, em vez de derrubar o lote do cliente inteiro.
+
+    ⛔ Os três motivos são os três do gatilho `util.validate_alert_template`,
+    na mesma ordem. Perguntar aqui o que o gatilho perguntaria é o que mantém a
+    recusa PULÁVEL: o que ele recusa de dentro do `insert` estoura a transação
+    inteira, e aí não há o que pular — cai o turno do cliente. Um motivo que
+    exista lá e falte aqui é um buraco, não uma folga.
+    """
+    await scope.execute(_TEMPLATE_FOR_CYCLE_SQL, {"code": code})
+    template = await scope.fetchone()
+    if template is None:
+        return f"o template {code!r} não existe ou está inativo neste cliente"
+    faltando = [v for v in template["variables"] if v not in dados]
+    if faltando:
+        return (
+            f"o template {code!r} declara {', '.join(faltando)}, e o ciclo não sabe "
+            f"responder. O conhecido é: {', '.join(sorted(dados))}"
+        )
+    if exige_aprovado and template["meta_status"] != "approved":
+        return (
+            f"o template {code!r} está {template['meta_status']!r} na Meta, e o "
+            f"provedor oficial só entrega o que ela aprovou"
+        )
+    return None
+
+
+async def enqueue(scope: TenantScope, cycles: list[Cycle], *, base_url: str) -> Outbox:
+    """Uma mensagem por (regra, destino, ciclo) — e nenhuma duas vezes.
+
+    O escopo é de quem chamou: esta é a MESMA transação que reservou os desvios
+    em `ciclo.assemble`, e as duas commitam juntas ou nenhuma commita. Com
+    transações separadas, a reserva ficava de pé e o enfileiramento voltava —
+    desvio preso num ciclo sem mensagem, que a reserva do turno seguinte não
+    alcança.
+
+    Uma regra que não consegue montar a mensagem é PULADA e nomeada, nunca
+    fatal: ela cala a própria audiência, jamais a das outras regras do mesmo
+    cliente. O resíduo está declarado na C7 — a audiência da regra doente perde
+    aquela janela, porque o ciclo é da unidade e a regra saudável o consome.
+    """
     enfileiradas: list[Queued] = []
-    async with tenant_scope(context) as scope:
-        await scope.execute(_PROVIDER_SQL, {})
-        linha = await scope.fetchone()
-        provider = linha["provider"] if linha else None
+    #: Por regra, e por isso um dicionário: o template é atributo dela.
+    pulados: dict[UUID, Skipped] = {}
+    await scope.execute(_PROVIDER_SQL, {})
+    linha = await scope.fetchone()
+    provider = linha["provider"] if linha else None
 
-        for cycle in cycles:
-            dados = facts(cycle, base_url=base_url)
-            await scope.execute(
-                _TARGETS_SQL,
-                {
-                    "unit_id": cycle.unit_id,
-                    "telegram_channel": TELEGRAM_CHANNEL,
-                    "telegram_providers": list(providers_of(TELEGRAM_CHANNEL)),
-                    "telegram_health": HEALTH_CONNECTED,
-                },
+    for cycle in cycles:
+        dados = facts(cycle, base_url=base_url)
+        await scope.execute(
+            _TARGETS_SQL,
+            {
+                "unit_id": cycle.unit_id,
+                "telegram_channel": TELEGRAM_CHANNEL,
+                "telegram_providers": list(providers_of(TELEGRAM_CHANNEL)),
+                "telegram_health": HEALTH_CONNECTED,
+            },
+        )
+        alvos = await scope.fetchall()
+
+        for alvo in alvos:
+            metades = (
+                (WHATSAPP_CHANNEL, EMAIL_CHANNEL)
+                if alvo["channel"] == "both"
+                else (alvo["channel"],)
             )
-            alvos = await scope.fetchall()
+            for metade in metades:
+                canal, provedor, destino = route(alvo, metade, whatsapp_provider=provider)
+                if not destino:
+                    # Contato sem o endereço deste canal. Era um `continue` mudo:
+                    # a regra sumia do turno sem aparecer em lugar nenhum, e o
+                    # ciclo era desfeito "sem culpado". O motivo não nomeia o
+                    # contato — o relatório e o log não carregam destino.
+                    _pular(
+                        pulados,
+                        alvo,
+                        cycle,
+                        f"o contato desta regra não tem por onde receber {canal}",
+                    )
+                    continue
 
-            for alvo in alvos:
-                metades = (
-                    (WHATSAPP_CHANNEL, EMAIL_CHANNEL)
-                    if alvo["channel"] == "both"
-                    else (alvo["channel"],)
-                )
-                for metade in metades:
-                    canal, provedor, destino = route(alvo, metade, whatsapp_provider=provider)
-                    if not destino:
+                if alvo["template_code"]:
+                    # Quem exige template APROVADO é o provedor oficial, e quem
+                    # diz isso é a matriz de capacidades — nunca o nome escrito
+                    # aqui (SPEC-CANAIS §1). O `canal` na frente mantém a
+                    # pergunta dentro de quem a matriz conhece: `smtp` não é
+                    # provedor dela, e `capabilities_for` recusa adivinhar.
+                    exige_aprovado = (
+                        canal == WHATSAPP_CHANNEL
+                        and provedor is not None
+                        and capabilities_for(provedor).requires_templates
+                    )
+                    motivo = await _template_reason(
+                        scope, alvo["template_code"], dados, exige_aprovado=exige_aprovado
+                    )
+                    if motivo is not None:
+                        _pular(pulados, alvo, cycle, motivo)
                         continue
 
-                    if alvo["template_code"]:
-                        await scope.execute(_TEMPLATE_SQL, {"code": alvo["template_code"]})
-                        template = await scope.fetchone()
-                        if template is None:
-                            raise TemplateMismatchError(
-                                f"regra {alvo['rule_name']!r} aponta para o template "
-                                f"{alvo['template_code']!r}, que não existe ou está inativo "
-                                f"neste cliente"
-                            )
-                        faltando = [v for v in template["variables"] if v not in dados]
-                        if faltando:
-                            raise TemplateMismatchError(
-                                f"o template {alvo['template_code']!r} declara "
-                                f"{', '.join(faltando)}, e o ciclo não sabe responder. "
-                                f"O conhecido é: {', '.join(sorted(dados))}"
-                            )
-
-                    await scope.execute(
-                        _ENQUEUE_SQL,
-                        {
-                            "rule_id": alvo["rule_id"],
-                            "cycle_id": cycle.cycle_id,
-                            "channel": canal,
-                            "destination": destino,
-                            "payload": json.dumps(dados, ensure_ascii=False),
-                            "idempotency_key": _key(
-                                alvo["rule_id"], cycle, alvo["contact_id"], metade, dados
-                            ),
-                            "template_code": alvo["template_code"],
-                            "provider": provedor,
-                        },
-                    )
-                    criada = await scope.fetchone()
-                    if criada is not None:
-                        enfileiradas.append(
-                            Queued(
-                                queue_id=criada["id"],
-                                rule_name=alvo["rule_name"],
-                                channel=canal,
-                            )
+                await scope.execute(
+                    _ENQUEUE_SQL,
+                    {
+                        "rule_id": alvo["rule_id"],
+                        "cycle_id": cycle.cycle_id,
+                        "channel": canal,
+                        "destination": destino,
+                        "payload": json.dumps(dados, ensure_ascii=False),
+                        "idempotency_key": _key(
+                            alvo["rule_id"], cycle, alvo["contact_id"], metade, dados
+                        ),
+                        "template_code": alvo["template_code"],
+                        "provider": provedor,
+                    },
+                )
+                criada = await scope.fetchone()
+                if criada is not None:
+                    enfileiradas.append(
+                        Queued(
+                            queue_id=criada["id"],
+                            rule_name=alvo["rule_name"],
+                            channel=canal,
                         )
-    return enfileiradas
+                    )
+    return Outbox(queued=enfileiradas, skipped=list(pulados.values()))
 
 
-def relatorio(enfileiradas: list[Queued]) -> str:
-    """Quantas entraram, por canal roteado. Nunca um destino."""
-    por_canal = Counter(q.channel for q in enfileiradas)
+def relatorio(resultado: Outbox) -> str:
+    """Quantas entraram, por canal roteado, e quem ficou de fora. Nunca um destino."""
+    por_canal = Counter(q.channel for q in resultado.queued)
     detalhe = " · ".join(f"{canal} {n}" for canal, n in sorted(por_canal.items()))
-    return f"{len(enfileiradas)} mensagem(ns) na fila" + (f" · {detalhe}" if detalhe else "")
+    linhas = [
+        f"{len(resultado.queued)} mensagem(ns) na fila" + (f" · {detalhe}" if detalhe else "")
+    ]
+    # Nome da regra e motivo, nunca o destino: quem lê o log do Railway precisa
+    # saber quem ficou de fora sem abrir o banco.
+    linhas += [f"regra {s.rule_name!r} ficou de fora: {s.reason}" for s in resultado.skipped]
+    return "\n".join(linhas)

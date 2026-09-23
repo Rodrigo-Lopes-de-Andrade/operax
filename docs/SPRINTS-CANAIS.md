@@ -1532,6 +1532,93 @@ que se apaga é o ciclo mudo, e o FK devolve o desvio.
 relatório nomeia a doente, e — quando a doente é a única — o ciclo não existe
 e os desvios continuam livres para o turno seguinte.
 
+**Guardião de superfície da C7 — APROVADO, 7/7, em 23/09/2026.** Chamado por
+julgamento meu e não pela lista automática, porque a sprint cria um DELETE
+novo em `app.report_cycle` e `alert_queue_report_cycle_id_fkey` é
+`on delete cascade`. Ele começou provando que o perigo é real — apagando um
+ciclo **sem** a guarda, e a mensagem sumiu junto (`fila antes 1 → depois 0`)
+— e só então mediu os seis casos com dois tenants: ciclo mudo some e os
+desvios voltam; ciclo com mensagem `pending` e com `sent` ficam de pé; um
+ciclo antigo com mensagem **na mesma unidade** sobrevive ao DELETE do mudo;
+o tenant B não perde nada. Em todos, `deviation_event` global constante
+(regra 6). Mais: catálogo idêntico antes e depois (389 linhas, mesmo sha256),
+as 10 instruções dos dois módulos ligando o tenant e recusando o id do
+vizinho nas quatro escritas, PII ausente do relatório e do log com a
+varredura provada não-vácua, quatro mutantes dele mortos em cópia (inclusive
+o `not exists` removido), e o sender seguindo inerte com o gate fechado.
+
+Três observações dele, que eu registro:
+- **O1 — `make db-test` não arma o teste novo.** O passo do `85` é opt-in em
+  `ENSAIO_DATABASE_URL` e o ramo sem a variável **não falha**; o `Makefile`
+  chama o script sem ela. Ou seja: um `make db-test` verde não prova a
+  garantia da C7. É a mesma convenção do ensaio Deno (que já era assim), mas
+  aqui o que fica sem medir é a fronteira da transação. **Vou consertar.**
+- **O2 — o comentário promete mais do que o predicado entrega.** O
+  `not exists` foi descrito como proteção contra o `on conflict do nothing`;
+  na prática um ciclo recém-criado nunca tem linha antiga apontando para ele,
+  e o que o predicado de fato garante é o recorte **por ciclo** (um critério
+  sobre a lista achatada do lote teria derrubado o ciclo com mensagem junto).
+  O resíduo do caso de conflito é transitório e se cura sozinho — medido.
+  **Vou corrigir o comentário.**
+- **O3 — o `85` é o primeiro script de `scripts/` que commita e depois
+  apaga.** Os outros rodam dentro de `rollback;`; este não pode, porque o que
+  ele testa é a fronteira da transação. Alcance medido e correto (toda
+  cláusula por `tenant_id` próprio), mas fica nomeado: apontado para um banco
+  não descartável, o `delete` não tem rede.
+
+**Revisão independente da C7 — REPROVADA em 23/09/2026, e os consertos que
+eu fiz antes do commit.** Ele confirmou que o conserto aguenta — atacou o
+predicado por sete lados — e reprovou pela régua: **seis das oito mutações
+dele sobreviviam à suíte**, entre elas apagar o filtro de tenant de um
+`delete` que tem `on delete cascade` atrás. Três gaps ALTOS:
+
+- **O critério 2 da própria sprint não se cumpria no caso que ela nomeia.**
+  `_template_reason` cobria dois dos três motivos de
+  `util.validate_alert_template`; faltava `meta_status <> 'approved'` no
+  provedor oficial — o "reprovado na Meta depois de ligada" que o texto da
+  C7 cita com todas as letras. Medido: a regra doente calava a saudável.
+  Consertado perguntando os **três** motivos antes do insert, com uma
+  consulta própria (`_TEMPLATE_FOR_CYCLE_SQL`) para não mexer no
+  `_TEMPLATE_SQL` que três rotas leem. Quem decide se o provedor exige
+  template aprovado é a **matriz de capacidades**, nunca o nome escrito no
+  código — há um teste no projeto que proíbe a literal, e ele me pegou.
+- **Um tenant doente derrubava o turno de todos os outros.** O laço de
+  `_montar_e_enfileirar` não tinha `try` por tenant — a mesma dívida que o
+  `run()` do sender fechou em `a8f589c`, na função que esta sprint
+  reescreveu. Consertado na mesma forma, com o tenant que falhou nomeado no
+  relatório. É também a contenção estrutural do que o Python **não** pode
+  prever: gatilho novo, constraint nova, banco caindo no meio.
+- **O `delete` mais perigoso da sprint estava sem teste nos dois eixos que
+  importam.** Os cinco cenários eram um tenant, uma unidade, e a fila
+  esvaziada à mão — e em produção a fila nunca está vazia, porque o sender
+  só faz `update`. O `85` ganhou quatro cenários: duas unidades no mesmo
+  turno (só a muda cai), fila cheia, segundo tenant, e o filtro de tenant
+  exercitado de frente (entregando ao `drop_silent` o id do ciclo do
+  vizinho). O cenário 5 deixou de recopiar o predicado à mão e passou a
+  chamar `ciclo.drop_silent` — era o falso verde contra o qual o próprio
+  arquivo argumenta.
+
+Os MÉDIOs e BAIXOs também fechados: a guarda do `not exists` era **mais
+estreita** que o cascade que ela protege (filtrava `q.tenant_id`, e a FK não
+amarra tenant — uma linha de fila alheia apontando para o ciclo era aceita
+pelo banco e invisível à guarda); a regra sem destino no canal sumia sem
+culpado (agora é `Skipped` nomeado); o aviso repetia por destino e por ciclo
+(agora um por regra); o relatório contava ciclos que ele mesmo desfazia. E
+as duas do guardião: o comentário que prometia mais do que o predicado
+entrega, e o **`make db-test` que não armava o teste novo** — o passo era
+opt-in e o ramo sem a variável passava verde. Agora ele **falha alto**, e
+ainda recusa um DSN que não seja o do banco recém-migrado; o `Makefile`
+passa o DSN. Sete mutantes meus, sete mortos em cópia, incluindo os quatro
+que sobreviveram ao revisor.
+
+⚠️ **O cenário 4 teve de mudar de causa, e isso é consequência boa:** ele
+usava `meta_cloud` + template em rascunho para forçar a recusa do banco, e
+esse motivo agora é **pulado** em vez de estourar. A prova da transação
+única passou a usar um gatilho de teste que o código não conhece — a classe
+"recusa imprevista", que é o que sempre vai sobrar e o que o `try` por
+tenant contém. Prender o cenário a um motivo específico o faria apodrecer no
+dia em que alguém o passasse a prever.
+
 ⚠️ **E um achado que não é da sprint, medido em 23/09/2026 enquanto eu
 conferia o entrypoint: NINGUÉM monta o ciclo em produção.** O projeto do
 Railway tem cinco serviços — `operax-api`, `operax-motor`

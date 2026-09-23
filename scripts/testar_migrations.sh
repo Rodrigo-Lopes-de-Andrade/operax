@@ -42,6 +42,36 @@ python3 scripts/89_teste_marcacao.py || exit 1
 
 echo "--- ciclo de relatório e fila de alertas"
 python3 scripts/93_teste_ciclo.py || exit 1
+
+# O ciclo MUDO (C7). Este não é um roteiro de SQL como os de cima: o que está
+# sob teste é a fronteira da transação e o laço que pula a regra doente, os dois
+# em Python. Um roteiro que executasse `_RESERVE_SQL` e `_ENQUEUE_SQL` na ordem
+# certa passaria com o defeito de pé. Então ele roda o código de verdade, o que
+# exige o venv do backend — e, como o ensaio Deno, um DSN alcançável do HOST:
+# o psql daqui pode estar atrás de um wrapper, e a porta não se deriva de PGPORT.
+echo "--- o ciclo mudo (C7): uma transação só, regra doente pulada, ciclo desfeito"
+# ⛔ Este passo é OBRIGATÓRIO, ao contrário do ensaio Deno: o que ele mede é a
+# fronteira da transação do C7, e nenhum roteiro de `psql` a alcança — um
+# `delete` sem filtro de tenant passa em todo o resto da suíte. Sem o DSN, a
+# suíte FALHA em vez de seguir verde dizendo que mediu.
+if [ -z "${ENSAIO_DATABASE_URL:-}" ]; then
+  echo "!!! ciclo mudo NÃO RODOU — defina ENSAIO_DATABASE_URL, ex.:"
+  echo "    ENSAIO_DATABASE_URL=postgresql://postgres:postgres@127.0.0.1:55322/$DB"
+  echo "    (é o mesmo DSN do ensaio Deno, alcançável do HOST)"
+  exit 1
+elif ! printf '%s' "$ENSAIO_DATABASE_URL" | grep -q "/$DB\$"; then
+  # Rodar a prova do C7 no banco errado é pior que não rodar: ela diria OK
+  # sobre um schema que não é o que acabou de ser migrado.
+  echo "!!! ENSAIO_DATABASE_URL não termina em /$DB — a prova do C7 rodaria em outro banco"
+  exit 1
+elif [ -x backend/.venv/bin/python ]; then
+  backend/.venv/bin/python scripts/85_teste_ciclo_mudo.py || exit 1
+elif command -v uv >/dev/null 2>&1; then
+  uv run --no-sync --project backend python scripts/85_teste_ciclo_mudo.py || exit 1
+else
+  echo "!!! PULADO: sem venv do backend e sem uv, e ENSAIO_DATABASE_URL foi definida"
+  exit 1
+fi
 echo "--- painel de DP (contadores de alerta, janela e escopo)"
 psql -q -v ON_ERROR_STOP=1 -f scripts/87_teste_painel_dp.sql 2>&1 | grep -Ev "^(INSERT|UPDATE|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- teste de regras de alerta e cadência"
