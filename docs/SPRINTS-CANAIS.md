@@ -1456,6 +1456,13 @@ conteúdo individual nunca vai para grupo", e `dp@cliente.com.br` é uma
 caixa que várias pessoas leem. Fechar isso é migration + rota no mesmo PR,
 e muda o que o produto permite — por isso está aqui e não no código.
 
+**Em produção desde 23/09/2026.** Push `e16e85d` (o Railway reconstruiu o
+`operax-api` sozinho) e `vercel promote` do `dpl_Bu9JagxHYB1rJWxTNxcPyGzkgBAd`,
+que reconstrói com o ambiente de produção. Conferido contra
+`app.fastparks.com.br`: `/dashboard/administracao/destinatarios` e
+`/regras` respondem 307 para `/login?next=…`, igual à tela de Conexões que
+já existia — as rotas existem e a sessão é exigida antes delas.
+
 **Sem guardião de superfície nesta onda, por julgamento meu:** ela não toca
 `supabase/**`, `deps.py`, `core/**` nem cria objeto em `public`, e não abre
 superfície de escrita de PII — as leituras passam por rotas que o guardião
