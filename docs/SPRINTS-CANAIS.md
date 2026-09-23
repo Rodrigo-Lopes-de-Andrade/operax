@@ -1476,14 +1476,19 @@ Canais.
 
 ## C7 — O ciclo reservado sem mensagem: a perda silenciosa que espera o G4
 
-**Por que existe:** `ciclo.assemble` e `outbox.enqueue` rodam em **transações
-separadas**. `assemble` commita a reserva (`report_cycle_id` preenchido);
-`enqueue`, depois, levanta `TemplateMismatchError` no primeiro alvo doente e
-**o lote inteiro do tenant volta** — os desvios ficam reservados num ciclo sem
-nenhuma mensagem, e `_RESERVE_SQL` exige `report_cycle_id is null`, então eles
-**nunca mais entram em ciclo nenhum**. Nomeado pelo revisor do C6 nas duas
-ondas; **reproduzido por mim contra o banco em 23/09/2026**, com uma regra de
-WhatsApp apontando para template inexistente e uma de e-mail saudável ao lado:
+✅ **Fechada em 23/09/2026** (`d2753cf`). O que segue descreve o defeito
+**como ele era** — o texto no presente é a fotografia de antes, não o estado
+de hoje; a `TemplateMismatchError` que ele cita deixou de existir.
+
+**Por que existia:** `ciclo.assemble` e `outbox.enqueue` rodavam em
+**transações separadas**. `assemble` commitava a reserva (`report_cycle_id`
+preenchido); `enqueue`, depois, levantava `TemplateMismatchError` no primeiro
+alvo doente e **o lote inteiro do tenant voltava** — os desvios ficavam
+reservados num ciclo sem nenhuma mensagem, e `_RESERVE_SQL` exige
+`report_cycle_id is null`, então eles **nunca mais entravam em ciclo nenhum**.
+Nomeado pelo revisor do C6 nas duas ondas; **reproduzido por mim contra o
+banco em 23/09/2026**, com uma regra de WhatsApp apontando para template
+inexistente e uma de e-mail saudável ao lado:
 
 ```
 antes de tudo:       ciclos 0 · reservados 0 · livres 2 · fila 0
@@ -1495,7 +1500,7 @@ segundo turno:       assemble devolveu 0 ciclo(s)
   preso: late_exit  em ciclo open com total_events=2 e ZERO mensagem
 ```
 
-**Por que ainda não doeu, e por que dói em breve:** com o G4 fechado nada é
+**Por que não tinha doído ainda, e por que doeria:** com o G4 fechado nada é
 entregue mesmo, e em produção há zero regras. O `ligar` do C6 exige template
 presente, ativo e aprovado — então a regra só adoece **depois** de ligada
 (template desativado ou reprovado na Meta em seguida), que é exatamente o
