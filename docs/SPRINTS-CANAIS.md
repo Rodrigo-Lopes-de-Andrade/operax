@@ -1532,6 +1532,20 @@ que se apaga é o ciclo mudo, e o FK devolve o desvio.
 relatório nomeia a doente, e — quando a doente é a única — o ciclo não existe
 e os desvios continuam livres para o turno seguinte.
 
+⚠️ **E um achado que não é da sprint, medido em 23/09/2026 enquanto eu
+conferia o entrypoint: NINGUÉM monta o ciclo em produção.** O projeto do
+Railway tem cinco serviços — `operax-api`, `operax-motor`
+(`python -m operax.motor`, `*/15`), `operax-motor-retro`, `operax-vigia` e
+`operax-sender` (`python -m operax.alertas.sender`, `*/15`). **Nenhum roda
+`python -m operax.alertas`**, que é quem monta o ciclo e enfileira. Ou seja:
+o motor detecta, o sender consome, e no meio não há quem encha a fila. O
+"0 mensagem(ns) esperando" que o sender loga desde 21/09 não é só o gate
+fechado — é também a fila vazia por falta de produtor. **No dia em que o G4
+abrir, nada seria entregue mesmo com regra cadastrada e credencial ativa.**
+Agendar esse serviço é o passo seguinte, e é justamente a C7 que o torna
+seguro: hoje um template desativado deixaria rastro permanente a cada
+quinze minutos.
+
 ## Ordem
 
 ```
