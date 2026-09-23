@@ -94,6 +94,30 @@ revisão do resto.
 teste que varre o JSON, não revisão de código. Nenhum grant para
 `authenticated`.
 
+⚠️ **Medido em 23/09/2026: o domínio está completo e INALCANÇÁVEL, e
+produção tem 0 contas para 178 colaboradores.** Varri as dez rotas de
+`/dp` contra o frontend inteiro: nove têm tela, e
+`PATCH /dp/colaboradores/{employee_id}/conta` **não é chamada por nenhum
+arquivo**. E ela é a única porta: o único `insert into
+app.employee_bank_account` do produto está em `operax/dp/banking.py:171`,
+alcançado só por essa rota. O importador de RH não carrega coluna de conta
+(`ownership.py` e `templates.py` não a conhecem), e nenhum consumidor a lê
+— o export do ciclo não toca a tabela.
+
+**Não é um esquecimento de tela, e é por isso que precisa de decisão e não
+de correção.** O cabeçalho da própria migration diz *"A CONTA, QUE É INSUMO
+DE REMESSA E NÃO DE TELA"*: o desenho recusa **exibir** a conta, e está
+certo. O que ficou sem resposta é por onde ela **entra**. Hoje: só por HTTP
+à mão. O efeito é que uma sprint inteira de desenho de segurança — quarto
+eixo da matriz de sensibilidade, tabela apartada, três eixos para escrever,
+máscara no serializer — guarda um dado que ninguém consegue cadastrar.
+
+**A pergunta para o dono, em uma linha:** a remessa bancária está no
+roteiro? Se está, a conta precisa de porta de entrada (tela de escrita-só
+na ficha do colaborador, sob `banking` + `is_admin`, ou coluna no
+importador de RH) e isso é sprint. Se não está, a rota é código morto e o
+honesto é dizer isso no doc em vez de deixá-la parecendo ligada.
+
 ## S3 — Ciclo mensal: cesta e vale transporte
 
 O sprint que aposenta o legado. Os dois `kind` no mesmo modelo, cesta primeiro
