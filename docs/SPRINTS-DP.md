@@ -184,6 +184,71 @@ alerta usam `app.document_type.expiry_alert_days`, não constante; supervisor
 continua sem ver outra unidade; o card de sinistro devolve **contagem**, e o
 nome só sai pelo caminho 2 com `compensation`.
 
+## S6 — A porta da curadoria de justificativas
+
+**Por que existe:** o S3 declarou que nasce inerte por dois bloqueios. **Um
+deles dissolveu sozinho e o outro não** — medido em produção em 23/09/2026:
+
+| o que o S3 declarou | o que produção diz hoje |
+|---|---|
+| `app.expected_workday` cobre ~6 dias, e a apuração recusa | **7.812 linhas, 109 dias, 07/06 a 23/09** — agosto inteiro (31 dias, 2.258 linhas), para 95 dos 178 colaboradores |
+| `app.leave_justification_map` nasce vazia e **não há rota para curá-la** | **0 linhas**, e continua sem rota — `curadoria.py` cobre unidades, rotações e fora-do-motor, e nenhuma delas toca esta tabela |
+
+O apurador recusa a competência inteira nomeando a string
+(`ciclo.py:219`): *"a justificativa «X» não está classificada em
+`app.leave_justification_map`; classifique-a antes de apurar"*. É a mensagem
+certa apontando para uma porta que não existe.
+
+**E o trabalho é pequeno, o que torna a ausência mais cara:** o espelho tem
+**64 afastamentos e cinco justificativas distintas**, de 07/2024 a 09/2026:
+
+| justificativa | ocorrências |
+|---|---|
+| `Férias` | 43 |
+| `Atested` | 13 |
+| `ATEST M` | 5 |
+| `AFASTAD` | 2 |
+| `FALTA` | 1 |
+
+⚠️ **Quatro das cinco são strings truncadas pela origem** (`Atested`,
+`ATEST M`, `AFASTAD`), e duas delas são o mesmo atestado escrito de dois
+jeitos. Isso não é defeito a consertar na tela: a chave é o que a origem
+oferece, o banco a canonicaliza em `upper(btrim(...))` e **preserva acento
+de propósito** (o comentário da coluna diz por quê — `FÉRIAS` e `FERIAS`
+são duas strings e cada uma se cura sozinha; normalizar seria adivinhar).
+A tela mostra a string crua, com contagem e período, e quem cura decide.
+**Uma em 64 é `FALTA`** — o resto não é falta, e é exatamente isso que
+ninguém consegue declarar hoje.
+
+**O que já está pronto e não muda:** a tabela, com chave canônica, as cinco
+categorias no `check`, `validated_by`/`validated_at`, `notes`, **sem
+`delete`** (mapeamento errado se corrige trocando a categoria — a trilha é
+o que torna a curadoria auditável), policy única de admin
+(`util.is_admin`), e `revoke` de `anon`/`authenticated`.
+
+**O que fazer — backend:** uma superfície de curadoria em `/dp`, do
+administrador:
+- **Ler**: as justificativas **do espelho** (distintas, canonicalizadas, com
+  ocorrências e primeira/última data) em `left join` com o mapa — cada uma
+  com sua categoria e se foi validada. Quem cura precisa ver o que falta,
+  não só o que já existe.
+- **Classificar**: grava categoria e `notes`, e deixa `validated_at` **nulo**.
+- **Validar**: ato separado, que carimba `validated_at` e `validated_by`.
+  São dois atos porque o comentário da coluna é explícito — *"nulo =
+  provisório, e provisório NÃO é usado"* —, e juntá-los faria a classificação
+  entrar em cálculo de dinheiro no mesmo clique em que foi escrita.
+- Reclassificar é `update` da categoria, nunca `delete`.
+
+**O que fazer — frontend:** uma tela sob `/dashboard/dp/`, porta `isAdmin`,
+listando as justificativas do espelho com estado (sem classificar /
+classificada provisória / validada), a contagem e o período de cada uma. O
+texto tem de dizer o que está em jogo: classificar errado muda quem recebe
+cesta e quantos dias de VT — e validar é o que libera a apuração.
+
+**Gate:** com as cinco classificadas e validadas, a apuração de um mês
+fechado **deixa de recusar**. Sem validar, ela continua recusando e a tela
+mostra por quê. E nenhuma rota apaga linha do mapa.
+
 ## S5 — Laudos e curadoria de rubrica
 
 Os dois menores, juntos porque nenhum bloqueia nada.
