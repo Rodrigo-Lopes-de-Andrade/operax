@@ -3,9 +3,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiError } from "@/lib/api";
 import {
   loadConnections,
+  loadContacts,
   loadCredential,
   loadDeliveryByChannel,
+  loadDeviationTypes,
   loadProviderForms,
+  loadRules,
   loadTelegramAdhesion,
   loadTelegramLink,
   loadTemplates,
@@ -616,5 +619,107 @@ describe("as entregas por canal (caminho 1)", () => {
     rpc.mockResolvedValue({ data: null, error: null });
 
     expect(await loadDeliveryByChannel()).toBeNull();
+  });
+});
+
+describe("C6 — destinatários, regras e o catálogo de tipos de desvio (caminho 2)", () => {
+  it("✅ os contatos vêm de `/canais/destinatarios/contatos`, como vieram, com o token e sem tenant", async () => {
+    // Um contato inativo e a matriz dele: a leitura não filtra nada — quem
+    // marca é a tela.
+    const contatos = [
+      {
+        id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+        name: "Zz Pessoa",
+        whatsapp: "5511999990000",
+        email: "zz@fastpark.dev",
+        type: "person",
+        active: false,
+        units: [
+          {
+            unit_id: "11111111-1111-4111-8111-111111111111",
+            unit_name: "Unidade Zz",
+            responsibility: "unit_manager",
+            is_primary: true,
+          },
+        ],
+      },
+    ];
+    fetchMock.mockResolvedValue(answer(200, contatos));
+
+    const rows = await loadContacts();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/canais\/destinatarios\/contatos$/);
+    expect(url).not.toMatch(/tenant/i);
+    expect(init.headers.Authorization).toBe("Bearer token-de-teste");
+    expect(rows).toEqual(contatos);
+  });
+
+  it("✅ as regras vêm de `/canais/regras`, com `blocked_reason` como veio — nulo inclusive", async () => {
+    const regras = [
+      {
+        id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+        name: "Regra Zz",
+        deviation_type: null,
+        scope_unit_id: null,
+        scope_unit_name: null,
+        content: "aggregate",
+        channel: "whatsapp",
+        cron_window: null,
+        threshold_minutes: null,
+        threshold_occurrences: null,
+        muted_until: null,
+        template_code: "zz_template",
+        active: true,
+        targets: [],
+        blocked_reason: "Nenhum destino ativo: zz frase do backend.",
+      },
+    ];
+    fetchMock.mockResolvedValue(answer(200, regras));
+
+    const rows = await loadRules();
+
+    expect(fetchMock.mock.calls[0][0]).toMatch(/\/canais\/regras$/);
+    expect(rows).toEqual(regras);
+  });
+
+  it("✅ o catálogo vem de `/canais/regras/tipos-de-desvio` — `app.deviation_type` não chega ao navegador", async () => {
+    const tipos = [
+      {
+        code: "zz_late",
+        description: "Atraso Zz",
+        direction: "missing",
+        category: "zz",
+      },
+    ];
+    fetchMock.mockResolvedValue(answer(200, tipos));
+
+    expect(await loadDeviationTypes()).toEqual(tipos);
+    expect(fetchMock.mock.calls[0][0]).toMatch(
+      /\/canais\/regras\/tipos-de-desvio$/,
+    );
+  });
+
+  it("403 vira null nas três — `GET /regras` é do administrador, e a página já fechou antes", async () => {
+    fetchMock.mockResolvedValue(
+      answer(403, { detail: "Ler regras e destinos é do administrador." }),
+    );
+
+    expect(await loadContacts()).toBeNull();
+    expect(await loadRules()).toBeNull();
+    expect(await loadDeviationTypes()).toBeNull();
+  });
+
+  it("⛔ 500 relança — a API fora do ar não é 'nenhuma regra'", async () => {
+    fetchMock.mockResolvedValue(answer(500, { detail: "boom" }));
+
+    await expect(loadRules()).rejects.toBeInstanceOf(ApiError);
+  });
+
+  it("sem sessão não chega a chamar a API", async () => {
+    getSession.mockResolvedValueOnce({ data: { session: null } });
+
+    expect(await loadContacts()).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });

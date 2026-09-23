@@ -11,7 +11,12 @@ import {
   ASSISTENTE_CONFIG_PATH,
   ASSISTENTE_PATH,
 } from "@/lib/assistente/url";
-import { CONEXOES_PATH, TEMPLATES_PATH } from "@/lib/canais/url";
+import {
+  CONEXOES_PATH,
+  DESTINATARIOS_PATH,
+  REGRAS_PATH,
+  TEMPLATES_PATH,
+} from "@/lib/canais/url";
 import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
@@ -161,6 +166,8 @@ export function AppShell({
                 <NavLink href={ROTACOES_PATH} label="Escalas" />
                 <NavLink href={CONEXOES_PATH} label="Conexões" />
                 <NavLink href={TEMPLATES_PATH} label="Templates" />
+                <NavLink href={DESTINATARIOS_PATH} label="Destinatários" />
+                <NavLink href={REGRAS_PATH} label="Regras" />
                 <NavLink
                   href={ASSISTENTE_CONFIG_PATH}
                   label={ASSISTENTE_CONFIG_LABEL}

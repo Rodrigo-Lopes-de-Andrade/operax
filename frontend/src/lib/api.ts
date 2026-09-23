@@ -9,12 +9,31 @@ import { createBrowserSupabaseClient } from "@/lib/supabase";
 export class ApiError extends Error {
   readonly status: number;
   readonly detail: string | null;
+  /**
+   * The stable `code` FastAPI puts beside `detail` on a named refusal
+   * (`{"detail": …, "code": …}`); null when the answer has none. The caller
+   * branches on it — the user only ever reads `detail`.
+   */
+  readonly code: string | null;
+  /**
+   * The parsed JSON body of the answer, for the caller that needs what sits
+   * beside `detail` — a 409 listing the rules that hold a contact. Null when
+   * the body was not JSON.
+   */
+  readonly payload: unknown;
 
-  constructor(status: number, detail: string | null) {
+  constructor(
+    status: number,
+    detail: string | null,
+    code: string | null = null,
+    payload: unknown = null,
+  ) {
     super(`FastAPI responded with ${status}`);
     this.name = "ApiError";
     this.status = status;
     this.detail = detail;
+    this.code = code;
+    this.payload = payload;
   }
 }
 
@@ -55,7 +74,8 @@ export async function requestApi<T>(
   // standard FastAPI JSON, and reading a body that was never a payload hides
   // the real failure.
   if (!response.ok) {
-    throw new ApiError(response.status, await readDetail(response));
+    const { detail, code, payload } = await readRefusal(response);
+    throw new ApiError(response.status, detail, code, payload);
   }
 
   return (await response.json()) as T;
@@ -80,22 +100,38 @@ export async function requestApiAsUser<T>(
   return requestApi<T>(path, { ...options, accessToken });
 }
 
-export async function readDetail(response: Response): Promise<string | null> {
+type Refusal = {
+  detail: string | null;
+  code: string | null;
+  payload: unknown;
+};
+
+/**
+ * What a non-2xx answer says: the standard `detail`, the `code` a named
+ * refusal puts beside it, and the body itself for what else it carries.
+ */
+export async function readRefusal(response: Response): Promise<Refusal> {
   try {
     const payload: unknown = await response.json();
 
-    if (payload && typeof payload === "object" && "detail" in payload) {
-      const detail = (payload as { detail: unknown }).detail;
+    if (payload && typeof payload === "object") {
+      const { detail, code } = payload as { detail?: unknown; code?: unknown };
 
-      if (typeof detail === "string") {
-        return detail;
-      }
+      return {
+        detail: typeof detail === "string" ? detail : null,
+        code: typeof code === "string" ? code : null,
+        payload,
+      };
     }
   } catch {
     // Not every error answer is JSON — a proxy timeout is plain text.
   }
 
-  return null;
+  return { detail: null, code: null, payload: null };
+}
+
+export async function readDetail(response: Response): Promise<string | null> {
+  return (await readRefusal(response)).detail;
 }
 
 /**

@@ -2,6 +2,13 @@ import "server-only";
 
 import { ApiError, requestApi } from "@/lib/api";
 import type { Channel } from "@/lib/canais/labels";
+import {
+  CONTACTS_API_PATH,
+  RULES_API_PATH,
+  type AlertRuleRow,
+  type ContactRow,
+  type DeviationTypeRow,
+} from "@/lib/canais/regras";
 import { getServerSupabase } from "@/lib/supabase-server";
 
 /**
@@ -337,6 +344,32 @@ export function loadProviderForms(): Promise<ProviderForm[] | null> {
 /** O catálogo do cliente, ordenado por `code` como a API o entrega. */
 export function loadTemplates(): Promise<TemplateRow[] | null> {
   return readOrNull<TemplateRow[]>("/canais/templates");
+}
+
+/**
+ * Os destinatários do cliente, com a matriz de unidades que quem lê enxerga
+ * — inativos inclusive, porque `active` é coluna e a tela os marca. Os tipos
+ * moram em `lib/canais/regras.ts`, que é o que o navegador importa.
+ */
+export function loadContacts(): Promise<ContactRow[] | null> {
+  return readOrNull<ContactRow[]>(CONTACTS_API_PATH);
+}
+
+/**
+ * As regras do cliente, com destinos e `blocked_reason`. A rota é do
+ * administrador (`GET /canais/regras` responde 403 a quem não é): o 403 vira
+ * `null`, e a página já fechou por `isAdmin` antes de chegar aqui.
+ */
+export function loadRules(): Promise<AlertRuleRow[] | null> {
+  return readOrNull<AlertRuleRow[]>(RULES_API_PATH);
+}
+
+/**
+ * O catálogo global de tipos de desvio, pela API: `app.deviation_type` não
+ * chega ao navegador, e a tela de regras precisa do rótulo.
+ */
+export function loadDeviationTypes(): Promise<DeviationTypeRow[] | null> {
+  return readOrNull<DeviationTypeRow[]>(`${RULES_API_PATH}/tipos-de-desvio`);
 }
 
 /**

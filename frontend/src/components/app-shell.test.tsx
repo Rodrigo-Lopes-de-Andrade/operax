@@ -48,7 +48,7 @@ function administracao() {
 }
 
 describe("a sidebar não oferece porta que não abre", () => {
-  it("`owner` recebe as doze: cinco de leitura e sete de escrita", () => {
+  it("`owner` recebe as catorze: cinco de leitura e nove de escrita", () => {
     comPapel("owner");
 
     const admin = administracao();
@@ -64,6 +64,8 @@ describe("a sidebar não oferece porta que não abre", () => {
       "Escalas",
       "Conexões",
       "Templates",
+      "Destinatários",
+      "Regras",
       // O rótulo carrega o parêntese: o "Assistente" da Operação é a
       // conversa, e este é a configuração dela.
       "Assistente (configuração)",
@@ -99,6 +101,13 @@ describe("a sidebar não oferece porta que não abre", () => {
     expect(within(admin).queryByRole("link", { name: "Conexões" })).toBeNull();
     // Templates é a ação ligada a Conexões, e fecha pela mesma guarda.
     expect(within(admin).queryByRole("link", { name: "Templates" })).toBeNull();
+    // Destinatários e Regras (C6) são escrita de configuração de canal, e as
+    // páginas fecham por `isAdmin`: o item fora de `showAdminWrites` seria um
+    // link que leva a 404 para ele.
+    expect(
+      within(admin).queryByRole("link", { name: "Destinatários" }),
+    ).toBeNull();
+    expect(within(admin).queryByRole("link", { name: "Regras" })).toBeNull();
     // A configuração do assistente também: publicar prompt, restaurar versão e
     // ligar métrica são escrita, e a página fecha por `isAdmin`.
     expect(
@@ -141,6 +150,7 @@ describe("a sidebar não oferece porta que não abre", () => {
     ).toBeVisible();
     expect(within(admin).getByRole("link", { name: "Escalas" })).toBeVisible();
     expect(within(admin).getByRole("link", { name: "Conexões" })).toBeVisible();
+    expect(within(admin).getByRole("link", { name: "Regras" })).toBeVisible();
   });
 
   it("✅ `unit_supervisor` tem Laudos, e só Laudos", () => {
@@ -165,6 +175,8 @@ describe("a sidebar não oferece porta que não abre", () => {
       "Escalas",
       "Conexões",
       "Templates",
+      "Destinatários",
+      "Regras",
       "Assistente (configuração)",
     ]) {
       expect(within(admin).queryByRole("link", { name: item })).toBeNull();
