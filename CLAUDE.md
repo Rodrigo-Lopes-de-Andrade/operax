@@ -352,6 +352,21 @@ make sender                 # consome a fila de alertas
 - **Backend — obrigatórias:** `DATABASE_URL`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_JWT_JWKS_URL`, e **pelo menos uma** chave de provider (`OPENAI_API_KEY` | `ANTHROPIC_API_KEY` | `GOOGLE_API_KEY`).
 - **Backend — opcionais:** demais chaves de provider, `SENTRY_DSN`, `LANGSMITH_TRACING=true` + `LANGSMITH_API_KEY` (+ `LANGSMITH_PROJECT`), `CORS_ORIGINS` (origens exatas do painel, separadas por vírgula; default `http://localhost:3000`; `*` é rejeitado no startup porque a API responde com credenciais).
 - **Credencial do Secullum:** hoje são secrets da Edge Function, no escopo do **projeto** — não por tenant. Funciona com um cliente e quebra no segundo, que é o desenho que `app.integration_secret` + Vault previa. Decisão pendente antes do segundo tenant.
+- ⛔ **E a credencial não é o único bloqueio do segundo tenant — o espelho também é. Medido em produção em 23/09/2026:** sete `unique` de `secullum` são **globais**, sem `tenant_id` na chave, e quatro deles são identificador de sequência da origem — cada conta do Secullum começa a numerar do zero, então a colisão é quase certa e não hipotética:
+
+  | tabela | regra |
+  |---|---|
+  | `secullum."Funcionario"` | `UNIQUE ("FuncionarioId")` |
+  | `secullum."Horario"` | `UNIQUE ("HorarioId")` |
+  | `secullum."Departamento"` | `UNIQUE ("DepartamentoId")` |
+  | `secullum."Estrutura"` | `UNIQUE ("EstruturaId")` |
+  | `secullum."Empresa"` | `UNIQUE ("Documento")` |
+  | `secullum."Cidade"` | `UNIQUE ("Descricao")` |
+  | `secullum."Funcao"` | `UNIQUE ("Descricao")` |
+
+  Efeito prático: o segundo cliente **não sincroniza**. Basta que ele tenha um colaborador de mesmo `FuncionarioId`, uma cidade chamada "SAO PAULO" ou um cargo chamado "PORTEIRO" — e o `insert` falha. As outras cinco uniques do espelho são chaveadas por uuid de linha já recortada por tenant (`horario_id`, `batida_marcacao_id`) e **estão certas**.
+
+  ⚠️ **As 22 tabelas do espelho são desenho da outra equipe** e nenhuma migration daqui as cria: consertar isso é migration em produção sobre schema alheio, e é **parada obrigatória**. Fica escrito porque descobrir no dia da implantação do segundo cliente é caro demais.
 - **Não são env:** token do provedor de WhatsApp — seja ele `meta_cloud` (token da WABA), `z_api` ou `uazapi` (token da instância). São **por tenant** e vivem no Supabase Vault, referenciadas em `app.integration_secret`. Um tenant tem no máximo um provedor de WhatsApp ativo, garantido por índice único.
 - **Frontend:** `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `NEXT_PUBLIC_API_URL` e, se usado, `NEXT_PUBLIC_SENTRY_DSN`.
 
