@@ -1411,6 +1411,51 @@ entrega zero), a saúde do provedor na hora do envio, `content = 'individual'`
 por responsabilidade que não resolve. A tela não traduz nulo para nada:
 a insígnia diz só "Ligada", e uma linha fixa nomeia a diferença.
 
+**Revisão independente da onda 2 — APROVADA em 23/09/2026, com três MÉDIOs
+que eu consertei antes do commit.** Ele mediu os treze critérios com render
+de verdade: contrato campo a campo (14 modelos, mesma ordem, nenhum campo
+opcional), `isAdmin` da tela = `util.is_admin` da rota, regra 7 medida na
+lista de destinos, as sete recusas nomeadas virando a frase do backend, PII
+sem ir para log, URL ou storage, e onze mutantes em cópia — oito mortos,
+**três sobreviventes**, que viraram os achados:
+
+- **O "sinal a mais" era cego para a unidade.** A tela contava "existe
+  alguém ativo com esta responsabilidade em alguma unidade", mas o
+  `outbox._TARGETS_SQL` resolve **por unidade do ciclo**. Cenário medido por
+  ele: duas unidades, um gestor ativo só na Alfa, regra de **todas** as
+  unidades — a tela calava e a Beta entregava a ninguém (em produção seriam
+  26 de 27), e "todas" é o default do formulário. Consertado: `coverage()`
+  conta por unidade e a tela diz "resolve em 1 de 27 unidades"; teste com
+  duas unidades e um resolvedor só.
+- **Nada prendia que o eixo da ramificação é o `code`.** Trocar
+  `refusalCode(...) === "caller_has_no_contact"` por um `includes` da frase
+  passava na suíte inteira, porque o `detail` do fixture citava
+  "Destinatários" — e o link sumiria no dia em que o backend reescrevesse a
+  frase. Consertado com um teste nos dois sentidos: código certo com frase
+  que não cita, e outro código com frase que cita.
+- **O `detail` não-string não estava pinado.** O 422 de validação do FastAPI
+  manda `detail` como lista; transformá-la em JSON despejaria isso na tela
+  sem teste vermelho. Pinado.
+
+Dois BAIXOs dele que também consertei por serem texto errado: a frase do
+destino descartado afirmava "por estar desativado" em caso que não é
+desativação, e **silêncio vencido continuava como insígnia de silêncio** —
+o outbox já entrega quando `muted_until <= now()`. O relógio passou a ser
+lido no servidor (ler a hora no render do cliente é chamada impura, e o
+lint do React barra), como a página de Colaboradores já faz. Quatro
+mutantes meus na cópia, quatro mortos. Gates depois das correções: vitest
+**1173** (+4), tsc, prettier e build limpos, lint com os 3 warnings
+pré-existentes.
+
+⚠️ **Uma pergunta para o dono, que o revisor levantou e eu não consertei
+porque é do modelo, não da tela:** uma regra `individual` pode ter uma
+**lista de e-mail** como destino. A tela oferece, e o banco aceita — o
+gatilho `util.validate_alert_target` só conhece `whatsapp_group` e
+`responsibility = 'group'`. Mas a regra 7 do `CLAUDE.md` diz "alerta de
+conteúdo individual nunca vai para grupo", e `dp@cliente.com.br` é uma
+caixa que várias pessoas leem. Fechar isso é migration + rota no mesmo PR,
+e muda o que o produto permite — por isso está aqui e não no código.
+
 **Sem guardião de superfície nesta onda, por julgamento meu:** ela não toca
 `supabase/**`, `deps.py`, `core/**` nem cria objeto em `public`, e não abre
 superfície de escrita de PII — as leituras passam por rotas que o guardião
