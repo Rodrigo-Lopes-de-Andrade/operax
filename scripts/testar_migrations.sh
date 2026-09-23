@@ -65,13 +65,20 @@ elif ! printf '%s' "$ENSAIO_DATABASE_URL" | grep -q "/$DB\$"; then
   echo "!!! ENSAIO_DATABASE_URL não termina em /$DB — a prova do C7 rodaria em outro banco"
   exit 1
 elif [ -x backend/.venv/bin/python ]; then
-  backend/.venv/bin/python scripts/85_teste_ciclo_mudo.py || exit 1
+  PY_ENSAIO="backend/.venv/bin/python"
 elif command -v uv >/dev/null 2>&1; then
-  uv run --no-sync --project backend python scripts/85_teste_ciclo_mudo.py || exit 1
+  PY_ENSAIO="uv run --no-sync --project backend python"
 else
   echo "!!! PULADO: sem venv do backend e sem uv, e ENSAIO_DATABASE_URL foi definida"
   exit 1
 fi
+$PY_ENSAIO scripts/85_teste_ciclo_mudo.py || exit 1
+# A curadoria de justificativa (S6). Pelo mesmo motivo do C7: o que está sob
+# teste é o acordo entre a porta que grava a chave, o `check` que a canonicaliza
+# e o apurador que a procura — e um roteiro de `psql` que inserisse no mapa na
+# mão provaria o `check` e mentiria sobre o acordo.
+echo "--- a porta da curadoria de justificativa (S6): sem aval, a competência não apura"
+$PY_ENSAIO scripts/84_teste_curadoria_justificativa.py || exit 1
 echo "--- painel de DP (contadores de alerta, janela e escopo)"
 psql -q -v ON_ERROR_STOP=1 -f scripts/87_teste_painel_dp.sql 2>&1 | grep -Ev "^(INSERT|UPDATE|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- teste de regras de alerta e cadência"

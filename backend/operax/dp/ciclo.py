@@ -188,8 +188,16 @@ def canonical_justification(raw: str | None) -> str:
     Acento não é normalizado: 'FÉRIAS' e 'FERIAS' são duas strings, e cada uma se
     cura sozinha. Tirar acento seria adivinhar que são a mesma coisa, e adivinhar
     é o que a curadoria existe para não fazer.
+
+    ⛔ `strip(" ")`, e não `strip()`. O `str.strip()` do Python apara **toda**
+    categoria de espaço Unicode (tabulação, quebra de linha, NBSP); o `btrim(x)`
+    do Postgres apara **só** `' '`. Esta função tem três juízes que precisam
+    concordar — ela, o `group by upper(btrim(...))` da fila e o `check` da
+    tabela —, e o mais estreito dos três manda. Com `strip()`, uma
+    `JustificativaNome` com NBSP colado de outra tela era apurada sob a
+    curadoria de OUTRA chave, sem erro e sem aviso (medido na revisão do S6).
     """
-    return (raw or "").strip().upper()
+    return (raw or "").strip(" ").upper()
 
 
 def resolve_absence_days(

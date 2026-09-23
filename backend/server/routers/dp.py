@@ -45,7 +45,17 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Query, Response, status
 
 from operax.core.tenant import tenant_scope
-from operax.dp import banking, beneficios, ciclo, export, laudos, painel, postos, rubricas
+from operax.dp import (
+    banking,
+    beneficios,
+    ciclo,
+    export,
+    justificativas,
+    laudos,
+    painel,
+    postos,
+    rubricas,
+)
 from operax.rh.repository import audit, check_permissions
 from server.deps import CurrentTenant
 from server.models import (
@@ -67,6 +77,10 @@ from server.models import (
     CycleSummary,
     CycleView,
     DpPanel,
+    LeaveJustificationClassify,
+    LeaveJustificationList,
+    LeaveJustificationRow,
+    LeaveJustificationValidation,
     NewBandRow,
     PayrollCodeList,
     PayrollCodePatch,
@@ -906,3 +920,91 @@ async def curar_rubrica(
     except rubricas.UnknownPayrollCodeError as ausente:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ausente)) from ausente
     return _rubrica(curado)
+
+
+# ---------------------------------------------------------------------------
+# Curadoria de justificativa de afastamento
+# ---------------------------------------------------------------------------
+_SEM_ADMIN_JUSTIFICATIVA = (
+    "Classificar justificativa de afastamento é do administrador do cliente. "
+    "Quem classifica decide quem perde cesta e quantos dias de vale transporte."
+)
+
+
+def _justificativa(linha: justificativas.Justification) -> LeaveJustificationRow:
+    return LeaveJustificationRow(
+        justification=linha.justification,
+        occurrences=linha.occurrences,
+        first_leave=linha.first_leave,
+        last_leave=linha.last_leave,
+        category=linha.category,
+        validated=linha.validated,
+        validated_at=linha.validated_at,
+        notes=linha.notes,
+        in_mirror=linha.in_mirror,
+    )
+
+
+async def _pode_curar_justificativa(tenant: CurrentTenant) -> None:
+    """⛔ `util.is_admin`, e só — a mesma função que a policy chama.
+
+    Um eixo, e não dois como na curadoria de rubrica: `leave_justification_map_admin`
+    é `util.is_admin` sozinho, e exigir `compensation` aqui tornaria a rota mais
+    ESTREITA que a policy, deixando `hr` — que é admin e não tem `compensation` —
+    de fora de uma fila que é de afastamento, não de folha. Mais frouxa que a
+    policy é defeito; mais estreita sem que ninguém tenha decidido é a etapa DP
+    inteira parada esperando o papel certo.
+
+    Perguntado ao banco como o usuário, antes de qualquer transação de
+    `service_role`: a leitura da fila roda sob `tenant_scope` (o espelho não tem
+    `usage` para `authenticated`), então este é o único lugar em que a
+    autorização acontece.
+    """
+    permissoes = await check_permissions(tenant)
+    if not permissoes.admin:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=_SEM_ADMIN_JUSTIFICATIVA)
+
+
+@router.get("/justificativas")
+async def listar_justificativas(tenant: CurrentTenant) -> LeaveJustificationList:
+    """A fila: as justificativas do espelho, o que já foi curado, e o que trava a apuração."""
+    await _pode_curar_justificativa(tenant)
+    fila = await justificativas.read_queue(tenant)
+    return LeaveJustificationList(
+        rows=[_justificativa(linha) for linha in fila.rows],
+        pending=fila.pending,
+        without_justification=fila.without_justification,
+    )
+
+
+@router.post("/justificativas/classificar")
+async def classificar_justificativa(
+    payload: LeaveJustificationClassify, tenant: CurrentTenant
+) -> LeaveJustificationRow:
+    """Classifica a justificativa e a deixa provisória — validar é o outro pedido."""
+    await _pode_curar_justificativa(tenant)
+    try:
+        curada = await justificativas.classify(
+            tenant,
+            justification=payload.justification,
+            category=payload.category,
+            notes=payload.notes,
+        )
+    except justificativas.UnknownJustificationError as ausente:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(ausente)) from ausente
+    return _justificativa(curada)
+
+
+@router.post("/justificativas/validar")
+async def validar_justificativa(
+    payload: LeaveJustificationValidation, tenant: CurrentTenant
+) -> LeaveJustificationRow:
+    """Carimba quem conferiu. É este ato — e só ele — que libera a apuração."""
+    await _pode_curar_justificativa(tenant)
+    try:
+        validada = await justificativas.validate(tenant, justification=payload.justification)
+    except justificativas.UnclassifiedJustificationError as sem_classe:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(sem_classe)
+        ) from sem_classe
+    return _justificativa(validada)

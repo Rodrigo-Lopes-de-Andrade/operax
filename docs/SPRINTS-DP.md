@@ -249,6 +249,68 @@ cesta e quantos dias de VT — e validar é o que libera a apuração.
 fechado **deixa de recusar**. Sem validar, ela continua recusando e a tela
 mostra por quê. E nenhuma rota apaga linha do mapa.
 
+### Onda 1 (backend) — entregue em 23/09/2026
+
+Três rotas de admin em `/dp/justificativas`: ler a fila, classificar, validar.
+A chave viaja no **corpo**, não na URL — `JustificativaNome` é texto livre do
+Secullum do cliente, e uma barra na string faria a rota devolver 404 sobre uma
+justificativa visível na tela.
+
+**Guardião — APROVADO, 9/9.** Ele provou que o perigo era real antes de
+aprovar: plantou o nome de uma pessoa no espelho para conferir que a própria
+varredura de PII enxergava o corpo — e ela **não achou**, porque era
+case-sensitive e a chave sai do banco em maiúsculas. Foi o plantio que pegou o
+defeito do verificador. Depois: nenhuma PII em resposta, log ou trilha; a fila
+não atravessa tenant em nenhuma das duas pernas do `union`; `service_role` sem
+`delete`; e o gate medido pela rota — três pessoas mantêm a cesta, uma perde
+por falta em março, e o dinheiro volta a parar quando o aval cai.
+
+**Revisão — REPROVADA, e o achado é fino.** `canonical_justification` usava
+`str.strip()`, que apara **toda** categoria de espaço Unicode; o `check` da
+tabela e o `group by` da fila usam `btrim()`, que apara **só** `' '`. Três
+juízes, duas regras. Medido por ele: um afastamento com tabulação ou NBSP era
+apurado sob a curadoria de **outra chave**, sem erro e sem aviso — e no pior
+caso a pessoa ficava com a cesta sem que ninguém tivesse classificado nada.
+Consertado com `strip(" ")`, que é o mais estreito dos três juízes, e um
+cenário no `84` com `'FALTA' || chr(9)` que mede as três pontas vendo a mesma
+chave.
+
+Os outros que eu fechei antes do commit:
+- **Validar carimbava a categoria que o validador não leu.** Duas sessões —
+  uma validando, outra reclassificando — deixavam a linha validada com a
+  categoria nova. O clique único da sprint montado por dois administradores.
+  Agora o `update` leva `and category = %(category)s` com a categoria já lida,
+  e zero linha é "mudou debaixo de mim", com frase própria.
+- **O balde de "sem nome" seguia a régua do SQL e o filtro de curabilidade a
+  do Python**, então uma linha podia aparecer como trabalho curável que
+  nenhuma rota aceita. Agora a vazieza é decidida pela mesma função das outras
+  pontas.
+- **Três mutantes dele sobreviviam aos gates** — e um sobrevivia aos **dois**:
+  o `update` que perde o filtro de tenant e o recupera num `exists` decorativo,
+  passando pelo estrangulamento. Fechados com o dublê lendo o `set` literal, um
+  teste de canonicalização no `validar`, e um cenário de **dois clientes com a
+  mesma chave e a mesma categoria** no `84` — a mesma categoria importa: com
+  categorias diferentes o `and category` separa as linhas e o filtro de tenant
+  fica sem ser exercitado. (Descobri isso porque meu primeiro cenário não matou
+  o mutante.)
+- **"O banco não deixa apagar" descrevia um papel que o runtime não usa:**
+  `service_role` não tem `delete`, mas o backend conecta como `postgres`, que
+  tem. O grant é cinto; o suspensório é não existir rota. Corrigido no
+  docstring, e vale para a regra 6 inteira.
+
+⚠️ **Fica para a onda 2, e é obrigação da tela:** `notes` é texto livre, volta
+nas três respostas e é copiado para `app.audit_log`, que não tem rota corretiva
+nem `delete` — o que for escrito ali é **permanente** e legível por todo
+administrador do cliente. Nada liga a nota a uma pessoa hoje, mas é a porta
+pela qual um diagnóstico entraria, e a regra 10 diz que este produto não guarda
+diagnóstico. A tela precisa dizer isso ao lado do campo. E reclassificar sem
+reenviar `notes` **apaga** a nota anterior (a trilha guarda o `antes`) — a tela
+manda a linha inteira.
+
+Gates: pytest **1537**, ruff limpo, suíte de banco com nove cenários no `84`,
+exit 0. Quatro mutantes do revisor mortos em cópia, inclusive o que sobrevivia
+aos dois gates.
+
 ## S5 — Laudos e curadoria de rubrica
 
 Os dois menores, juntos porque nenhum bloqueia nada.

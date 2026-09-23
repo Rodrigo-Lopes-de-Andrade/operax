@@ -1424,6 +1424,99 @@ class PayrollCodePatch(BaseModel):
     validated: bool = True
 
 
+class LeaveJustificationRow(BaseModel):
+    """Uma justificativa de afastamento do Secullum e o que a curadoria disse dela.
+
+    A `justification` é a chave como o BANCO a guarda — `upper(btrim(...))`, com
+    acento preservado. A tela mostra a string truncada da origem (`ATEST M`,
+    `AFASTAD`) como ela é: consertá-la aqui seria inventar uma chave que o
+    apurador não procura.
+
+    `category` nulo = justificativa conhecida e **não classificada**; `validated`
+    é `validated_at is not null`, e não uma coluna. Só a validada entra em
+    cálculo — a provisória para a apuração exatamente como a não classificada.
+
+    `in_mirror` distingue a justificativa que o espelho traz daquela que alguém
+    curou e o espelho não traz mais. A segunda continua na lista: esconder
+    curadoria antiga é esconder uma decisão que alguém tomou.
+    """
+
+    justification: str
+    occurrences: int
+    first_leave: date | None = None
+    last_leave: date | None = None
+    category: str | None = None
+    validated: bool
+    validated_at: datetime | None = None
+    notes: str | None = None
+    in_mirror: bool
+
+
+class LeaveJustificationList(BaseModel):
+    """A fila de curadoria, com os dois números que dizem se a apuração vai recusar.
+
+    `pending` conta o que o espelho traz e ninguém validou — classificado ou não,
+    porque provisório trava do mesmo jeito. `without_justification` conta os
+    afastamentos que chegaram **sem nome nenhum**: eles travam a apuração e não
+    há o que classificar neles (a correção é na origem). Sem esse segundo número,
+    a tela diria "tudo curado" enquanto a competência continuasse recusando.
+    """
+
+    rows: list[LeaveJustificationRow]
+    pending: int
+    without_justification: int
+
+
+class LeaveJustificationClassify(BaseModel):
+    """Classificar uma justificativa — o primeiro dos dois atos.
+
+    A chave viaja no corpo, e não na URL: ela é texto livre digitado no Secullum
+    do cliente, e uma barra ou um `%` na string faria a rota devolver 404 sobre
+    uma justificativa que está na tela.
+
+    As cinco categorias são as do `check` da tabela, que são as mesmas de
+    `app.leave_period.category` — a curadoria traduz para o vocabulário do
+    domínio, e é lá que a promoção do espelho grava. Recusar aqui é cortesia;
+    quem recusa por último é o banco.
+
+    Não há campo `validated`: validar é outro pedido, de propósito.
+
+    ⛔ `notes` é a razão da curadoria, nunca o caso de alguém. Ela volta nas três
+    respostas e é copiada para `app.audit_log`, que não tem rota corretiva nem
+    `delete` — o que for escrito ali é permanente e lido por todo administrador
+    do cliente. Diagnóstico, CID e restrição não entram (regra 10), e a tela tem
+    de dizer isso ao lado do campo. Serve para "mesma coisa que ATESTED, truncado
+    pela origem", não para "atestado do fulano".
+
+    ⚠️ `min_length=1` é decorativo: `"   "` passa por aqui e é recusado depois,
+    nomeado, pela canonicalização. Não confie nele como guarda.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    justification: str = Field(min_length=1)
+    category: Literal[
+        "vacation",
+        "leave_period",
+        "leave_of_absence",
+        "suspension",
+        "unjustified_absence",
+    ]
+    notes: str | None = Field(default=None, max_length=500)
+
+
+class LeaveJustificationValidation(BaseModel):
+    """Validar uma justificativa já classificada — o segundo ato, e o que libera a soma.
+
+    Só a chave: validar não reabre a classificação. Quem quer trocar a categoria
+    classifica de novo, e a linha volta a provisória até alguém conferir.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    justification: str = Field(min_length=1)
+
+
 class AssistantQuestion(BaseModel):
     """A pergunta que entra no assistente.
 
