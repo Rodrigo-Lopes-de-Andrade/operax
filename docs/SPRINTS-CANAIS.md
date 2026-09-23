@@ -1374,7 +1374,43 @@ nova), suíte de banco 67 migrations exit 0.
 **Onda 2 (frontend):** aba **Destinatários** (contatos e a matriz
 unidade × responsabilidade) e aba **Regras** em `/dashboard/administracao/`,
 porta `isAdmin`, e o modo de teste do S6: *"rodar primeiro com destino no
-próprio owner"* como um botão, não como uma instrução.
+próprio owner"* como um botão, não como uma instrução. **Despachada em
+21/09/2026** sobre `0820662` — a onda 1 (`378eefa`) mais
+`GET /canais/regras/tipos-de-desvio`, porque `app.deviation_type` não chega
+ao navegador e a tela precisa do rótulo (uma leitura global como o usuário;
+a policy é `true`).
+
+**Onda 2 entregue em 23/09/2026, em revisão.** Duas páginas
+(`destinatarios/`, `regras/`) com porta `isAdmin` (404, não tela vazia),
+`components/canais/contacts.tsx` e `rules.tsx`, o cliente
+`lib/canais/regras.ts` com os tipos espelhando `models.py` campo a campo e
+as onze mutações, três leituras de servidor em `queries.ts`, e os dois
+`NavLink` dentro de `showAdminWrites`. Vitest 1169 (+83), tsc e prettier
+limpos, build exit 0, oito mutações mortas em cópia. Decisões dele que eu
+endosso: tipos de desvio pela API (`app.deviation_type` não está exposto e
+expor view nova é parada obrigatória), unidades por `vw_unit` com o
+`loadUnits` que já existe (uma segunda leitura seria definição concorrente),
+e `blocked_reason` renderizado **como veio** — o backend o calcula de três
+leituras, e uma segunda implementação no navegador divergiria em silêncio.
+Uma mudança fora de `canais/`: `ApiError` passou a carregar `code` e
+`payload` (com `readDetail` delegando ao novo `readRefusal`), porque sem
+isso a tela não ramifica em `caller_has_no_contact` nem lista as regras de
+um 409 — era a dívida já anotada em `telegram-link.tsx`.
+
+⚠️ **O falso verde desta tela, nomeado pelo implementador e que eu registro
+como do produto, não do código:** `blocked_reason` nulo numa regra ligada
+significa "as três leituras do backend não têm o que apontar", **não** "vai
+entregar". Ficam de fora dele o gate G4 (hoje fechado: a regra ligada
+entrega zero), a saúde do provedor na hora do envio, `content = 'individual'`
+(que nenhum produtor emite — `_TARGETS_SQL` filtra `aggregate`) e o destino
+por responsabilidade que não resolve. A tela não traduz nulo para nada:
+a insígnia diz só "Ligada", e uma linha fixa nomeia a diferença.
+
+**Sem guardião de superfície nesta onda, por julgamento meu:** ela não toca
+`supabase/**`, `deps.py`, `core/**` nem cria objeto em `public`, e não abre
+superfície de escrita de PII — as leituras passam por rotas que o guardião
+da onda 1 já mediu, e a página é fechada por `isAdmin`. O que ela **mostra**
+de PII (WhatsApp e e-mail em claro) é o item 9 do despacho da revisão.
 
 **Gate:** com o G4 fechado, cadastrar uma regra ligada com um destino faz o
 sender contar "1 esperando" no próximo turno — sem entregar. Com o G4 aberto,
