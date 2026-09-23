@@ -1273,8 +1273,13 @@ fato de identidade que `auth.users` e `app.contact` carregam sem migration.
 `allow_methods` do CORS** — o preflight respondia 400, então
 `PUT /canais/templates/{code}` (C1) e os `PUT` da configuração do assistente
 (A3) **eram inalcançáveis pelo navegador em produção** com a suíte verde;
-uma palavra em `main.py`, pinada por teste, e é o próximo deploy que
-conserta. (2) **A regra 7 tem portas que o gatilho não vigia**:
+uma palavra em `main.py`, pinada por teste. **Corrigido em produção em
+23/09/2026** (push `300aa46`): medido contra a API logo antes do deploy,
+preflight `PUT` = 400 e `POST` = 200 — o defeito estava no ar; logo depois,
+as **sete** rotas `PUT` respondem 200 ao preflight de
+`https://app.fastparks.com.br` (as três pré-existentes e as quatro do C6),
+origem de fora segue 400, `TRACE` segue 400, e as rotas novas pedem token
+(401 sem ele). (2) **A regra 7 tem portas que o gatilho não vigia**:
 `update content → individual` numa regra com grupo e `update type →
 whatsapp_group` num contato destino de regra individual passam no banco
 (medido); a API re-toca os destinos e faz o gatilho julgar. E a quarta porta
