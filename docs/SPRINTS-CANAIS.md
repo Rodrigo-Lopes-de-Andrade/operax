@@ -1624,7 +1624,28 @@ esse motivo agora é **pulado** em vez de estourar. A prova da transação
 tenant contém. Prender o cenário a um motivo específico o faria apodrecer no
 dia em que alguém o passasse a prever.
 
-⚠️ **E um achado que não é da sprint, medido em 23/09/2026 enquanto eu
+⚠️ **Segundo achado, medido em 23/09/2026 ao levantar a cadência: a regra
+tem QUATRO campos que ninguém lê.** `app.alert_rule` guarda
+`deviation_type`, `cron_window`, `threshold_minutes` e
+`threshold_occurrences` desde a migration 06; a API do C6 grava e relê os
+quatro, e a tela os oferece no formulário. **O `outbox._TARGETS_SQL` não
+filtra por nenhum deles** — as cláusulas dele são tenant, `r.active`,
+`content = 'aggregate'`, o recorte de unidade, `muted_until` e o contato
+ativo, e nada mais. Medido por leitura do `where` inteiro e por varredura:
+`cron_window` e os dois limiares não aparecem em nenhum `.py` ou `.sql` do
+produto fora das rotas que os gravam.
+
+Ou seja: quem escolher "só entre 8h e 18h", "só acima de 30 minutos" ou
+"só atraso na entrada" recebe tudo, sempre — e a tela não dá nenhum sinal.
+É pior que não oferecer: é promessa que o sistema não cumpre em silêncio,
+e o gestor só descobre pelo alerta que não devia ter chegado. A explicação
+provável é que os três últimos foram desenhados para o conteúdo
+**individual**, que nenhum produtor emite hoje (`_TARGETS_SQL` filtra
+`aggregate`) — mas o formulário os oferece na regra agregada também.
+**Decisão do dono, e é de produto:** implementar o filtro ou tirá-los da
+tela até que exista quem os leia.
+
+⚠️ **Primeiro achado, medido em 23/09/2026 enquanto eu
 conferia o entrypoint: NINGUÉM monta o ciclo em produção.** O projeto do
 Railway tem cinco serviços — `operax-api`, `operax-motor`
 (`python -m operax.motor`, `*/15`), `operax-motor-retro`, `operax-vigia` e
