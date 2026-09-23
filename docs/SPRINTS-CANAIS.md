@@ -1474,6 +1474,64 @@ sender contar "1 esperando" no próximo turno — sem entregar. Com o G4 aberto,
 um alerta real chega ao destino de teste (o owner) e é o que fecha a etapa
 Canais.
 
+## C7 — O ciclo reservado sem mensagem: a perda silenciosa que espera o G4
+
+**Por que existe:** `ciclo.assemble` e `outbox.enqueue` rodam em **transações
+separadas**. `assemble` commita a reserva (`report_cycle_id` preenchido);
+`enqueue`, depois, levanta `TemplateMismatchError` no primeiro alvo doente e
+**o lote inteiro do tenant volta** — os desvios ficam reservados num ciclo sem
+nenhuma mensagem, e `_RESERVE_SQL` exige `report_cycle_id is null`, então eles
+**nunca mais entram em ciclo nenhum**. Nomeado pelo revisor do C6 nas duas
+ondas; **reproduzido por mim contra o banco em 23/09/2026**, com uma regra de
+WhatsApp apontando para template inexistente e uma de e-mail saudável ao lado:
+
+```
+antes de tudo:       ciclos 0 · reservados 0 · livres 2 · fila 0
+depois do assemble:  ciclos 1 · reservados 2 · livres 0 · fila 0
+enqueue levantou TemplateMismatchError: regra 'Doente…' aponta para o template 'nao_existe'
+depois do enqueue:   ciclos 1 · reservados 2 · livres 0 · fila 0   ← a regra de e-mail perdeu a dela
+segundo turno:       assemble devolveu 0 ciclo(s)
+  preso: late_entry em ciclo open com total_events=2 e ZERO mensagem
+  preso: late_exit  em ciclo open com total_events=2 e ZERO mensagem
+```
+
+**Por que ainda não doeu, e por que dói em breve:** com o G4 fechado nada é
+entregue mesmo, e em produção há zero regras. O `ligar` do C6 exige template
+presente, ativo e aprovado — então a regra só adoece **depois** de ligada
+(template desativado ou reprovado na Meta em seguida), que é exatamente o
+caso que o C6 já mede em `blocked_reason`. No dia em que o gate abrir, um
+template desativado à tarde apaga em silêncio os indícios daquele dia, para
+todas as regras daquele cliente, para sempre.
+
+**O que fazer:**
+1. **Uma transação só.** É a intenção declarada no próprio
+   `backend/operax/alertas/__main__.py`: *"um ciclo montado e não enfileirado
+   é o pior estado possível"*. Montar e enfileirar têm de commitar juntos.
+2. **A regra doente é pulada e nomeada, não fatal.** Uma regra que não
+   consegue montar a mensagem não pode calar as outras do mesmo cliente. O
+   relatório diz qual foi e por quê.
+3. **Ciclo que terminou sem mensagem nenhuma é desfeito.** O FK é
+   `on delete set null`, então apagar o ciclo devolve os desvios ao próximo
+   turno sozinho — é o que `_DROP_EMPTY_SQL` já faz para o ciclo vazio, agora
+   também para o ciclo mudo. É o que torna o conserto auto-curável: template
+   arrumado, o turno seguinte entrega.
+
+⚠️ **Resíduo que eu declaro, e não escondo:** o ciclo é por **unidade**, e as
+regras também cobrem unidades. Se uma regra saudável e uma doente cobrem a
+mesma unidade, a saudável entrega e os desvios são consumidos — a audiência
+da regra doente perde aquela janela. A alternativa seria segurar todo mundo
+até alguém consertar o template, o que troca uma perda por um atraso. Fico
+com entregar a quem dá, consumir, e dizer alto qual regra ficou de fora;
+`blocked_reason` já mostra a regra travada na tela de Regras.
+
+**Não muda:** o grão de `app.deviation_event`, nenhuma policy, nenhuma coluna
+nova, nenhuma migration. Desvio continua sem nunca ser apagado (regra 6) — o
+que se apaga é o ciclo mudo, e o FK devolve o desvio.
+
+**Gate:** o cenário acima, virado. Com a regra doente: a de e-mail entrega, o
+relatório nomeia a doente, e — quando a doente é a única — o ciclo não existe
+e os desvios continuam livres para o turno seguinte.
+
 ## Ordem
 
 ```
