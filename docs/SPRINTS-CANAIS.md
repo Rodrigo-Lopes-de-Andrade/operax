@@ -1655,9 +1655,31 @@ o motor detecta, o sender consome, e no meio não há quem encha a fila. O
 "0 mensagem(ns) esperando" que o sender loga desde 21/09 não é só o gate
 fechado — é também a fila vazia por falta de produtor. **No dia em que o G4
 abrir, nada seria entregue mesmo com regra cadastrada e credencial ativa.**
-Agendar esse serviço é o passo seguinte, e é justamente a C7 que o torna
-seguro: hoje um template desativado deixaria rastro permanente a cada
-quinze minutos.
+✅ **Agendado em 23/09/2026, autorizado pelo dono**, e só depois da C7 —
+antes dela um template desativado deixaria rastro permanente a cada quinze
+minutos. Serviço `operax-ciclo` (`d6c5320e-c98d-4d7e-8bbf-2f2f7663e89f`),
+`python -m operax.alertas`, root `/backend`, restart NEVER, variáveis por
+referência ao `operax-api`, branch `feature/s5-gestao-de-ponto`.
+
+**Cadência `10,25,40,55`, deslocada de propósito:** o motor roda em `*/15`
+(0,15,30,45) e o sender também. Com o montador no mesmo minuto, a ordem
+dentro do minuto não é garantida e o que ele enfileirasse só sairia no turno
+seguinte do sender. Assim a esteira fica em ordem: motor às 16:00, montador
+às 16:10, sender às 16:15.
+
+Primeira execução medida às 16:40 UTC, e ela diz o que tem de dizer com
+produção sem regra nenhuma:
+
+```
+tenant 6fcb0cc4-…: nenhuma unidade com ocorrência a relatar
+```
+
+Nada montado, nada reservado, nada enfileirado. A esteira está completa e
+provada inerte **antes** de o G4 abrir — que era o ponto de agendá-la agora.
+⚠️ O deploy nasceu na branch certa desta vez (`95cc369`), ao contrário do que
+aconteceu com os dois serviços do motor em 10/09: ligar a fonte já com
+`branch` explícito, em vez de `create-deployment`, parece ser o que evita a
+armadilha do `main`.
 
 ## Ordem
 
