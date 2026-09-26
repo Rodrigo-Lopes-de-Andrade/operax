@@ -247,6 +247,57 @@ export type PayrollCodesResult =
   | { status: "ok"; list: PayrollCodeList }
   | { status: "forbidden"; detail: string | null };
 
+/**
+ * Uma justificativa de afastamento do Secullum e o que a curadoria disse dela.
+ *
+ * `justification` é a chave como o BANCO a guarda — `upper(btrim(...))`, acento
+ * preservado, truncada como a origem a mandou (`ATEST M`, `AFASTAD`).
+ * "Consertá-la" na tela inventaria uma chave que o apurador não procura.
+ *
+ * `category` nula = conhecida e não classificada; `validated` é
+ * `validated_at is not null`, e não uma coluna. `in_mirror` distingue a que o
+ * espelho traz daquela que alguém curou e o espelho não traz mais.
+ *
+ * ⚠️ NÃO HÁ `validated_by` — a coluna existe na tabela e o contrato não a
+ * devolve. A tela mostra QUANDO alguém avalizou, nunca QUEM. Reportado.
+ */
+export type LeaveJustificationRow = {
+  justification: string;
+  occurrences: number;
+  first_leave: string | null;
+  last_leave: string | null;
+  category: string | null;
+  validated: boolean;
+  validated_at: string | null;
+  notes: string | null;
+  in_mirror: boolean;
+};
+
+/**
+ * A fila de curadoria e os **dois** números que dizem se a apuração vai recusar.
+ *
+ * `pending` conta o que o espelho traz e ninguém validou — classificado ou não,
+ * porque provisório trava igual. `without_justification` conta os afastamentos
+ * que chegaram sem nome nenhum: eles travam a competência e **não há o que
+ * classificar neles**. Sem esse segundo número a tela diria "tudo curado"
+ * enquanto o dinheiro segue parado, que é o falso verde desta tela.
+ */
+export type LeaveJustificationList = {
+  rows: LeaveJustificationRow[];
+  pending: number;
+  without_justification: number;
+};
+
+/**
+ * `forbidden` carrega o `detail` porque a recusa é deliberada e escrita para o
+ * usuário: a rota exige `util.is_admin` e a frase nomeia o que está em jogo.
+ * A página já fecha por `isAdmin`, mas as duas listas de papéis podem divergir
+ * — quando divergirem, quem manda é a API, e ela explica.
+ */
+export type LeaveJustificationsResult =
+  | { status: "ok"; list: LeaveJustificationList }
+  | { status: "forbidden"; detail: string | null };
+
 async function accessToken(): Promise<string | null> {
   const supabase = await getServerSupabase();
   const { data } = await supabase.auth.getSession();
@@ -418,6 +469,45 @@ export async function loadPayrollCodes(): Promise<PayrollCodesResult | null> {
     const list = await requestApi<PayrollCodeList>("/dp/rubricas", {
       accessToken: token,
     });
+
+    return { status: "ok", list };
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 403) {
+      return { status: "forbidden", detail: error.detail };
+    }
+
+    return null;
+  }
+}
+
+/**
+ * A fila da curadoria de justificativa de afastamento — Caminho 2 inteiro.
+ *
+ * ⛔ NÃO HÁ CAMINHO 1 AQUI, E NÃO É ESCOLHA DESTA CAMADA
+ * A fila sai de `secullum."FuncionarioAfastamento"`, e `secullum` não tem
+ * `usage` para `authenticated` desde a migration 01; `app.leave_justification_map`
+ * tem `revoke all` dos dois papéis do PostgREST. Um `select` do navegador
+ * morreria com `permission denied` em vez de ser filtrado.
+ *
+ * ⚠️ E NÃO HÁ `can_write`, DE PROPÓSITO: as três rotas exigem o MESMO eixo
+ * (`util.is_admin`), então quem lê a fila é exatamente quem a escreve. Um
+ * `can_write` aqui seria sempre `true` — um campo que só pode mentir.
+ *
+ * 403 é recusa deliberada com frase própria; 401 e API fora do ar viram null:
+ * nada foi lido, e a tela diz isso em vez de dizer "sem pendência".
+ */
+export async function loadLeaveJustifications(): Promise<LeaveJustificationsResult | null> {
+  const token = await accessToken();
+
+  if (!token) {
+    return null;
+  }
+
+  try {
+    const list = await requestApi<LeaveJustificationList>(
+      "/dp/justificativas",
+      { accessToken: token },
+    );
 
     return { status: "ok", list };
   } catch (error) {

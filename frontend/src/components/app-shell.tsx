@@ -23,6 +23,7 @@ import { PONTO_PATH } from "@/lib/ponto/url";
 import { MAPEAMENTO_PATH, ROTACOES_PATH } from "@/lib/curadoria/url";
 import {
   BENEFICIOS_PATH,
+  CURADORIA_JUSTIFICATIVAS_PATH,
   LAUDOS_PATH,
   PAINEL_PATH,
   POSTOS_PATH,
@@ -164,6 +165,23 @@ export function AppShell({
                 <NavLink href={MAPEAMENTO_PATH} label="Mapeamento" />
                 <NavLink href={RUBRICAS_PATH} label="Rubricas" />
                 <NavLink href={ROTACOES_PATH} label="Escalas" />
+                {/*
+                  ⚠️ O RÓTULO CARREGA "DE AFASTAMENTO", E ISSO NÃO É VERBOSIDADE
+                  A Operação já tem "Justificativas": lá o gestor explica o
+                  indício de uma pessoa num dia, aqui a string do Secullum ganha
+                  categoria de domínio para todos os afastamentos que a carregam.
+                  Os dois nomes colidem no vocabulário do cliente, e dois itens
+                  de menu com o mesmo rótulo levariam a telas de papéis
+                  diferentes.
+
+                  O item vive na Administração e não no bloco de DP: o eixo dele
+                  é `util.is_admin` — exatamente `showAdminWrites` —, e o bloco de
+                  DP não tem condição de papel nenhuma, de propósito.
+                */}
+                <NavLink
+                  href={CURADORIA_JUSTIFICATIVAS_PATH}
+                  label="Justificativas de afastamento"
+                />
                 <NavLink href={CONEXOES_PATH} label="Conexões" />
                 <NavLink href={TEMPLATES_PATH} label="Templates" />
                 <NavLink href={DESTINATARIOS_PATH} label="Destinatários" />

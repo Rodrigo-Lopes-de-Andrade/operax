@@ -311,6 +311,53 @@ Gates: pytest **1537**, ruff limpo, suíte de banco com nove cenários no `84`,
 exit 0. Quatro mutantes do revisor mortos em cópia, inclusive o que sobrevivia
 aos dois gates.
 
+### Onda 2 (frontend) — entregue em 26/09/2026
+
+A tela em `/dashboard/dp/justificativas`, porta `isAdmin`. **Aqui a porta não é
+cópia de matriz nenhuma**, e é a diferença de Rubricas: as três rotas exigem
+`util.is_admin` sozinho, sem domínio sensível ao lado, então a página e a API
+concordam por construção — e `hr`, que é admin sem `compensation`, entra na fila
+que destrava a apuração em vez de receber 403 depois de passar.
+
+**Os dois números ficam lado a lado, e é o falso verde da sprint que isso
+fecha.** `pending` é a fila curável; `without_justification` são os afastamentos
+que chegaram sem nome nenhum, que travam a competência do mesmo jeito e não têm
+o que classificar. A fila vazia **não** diz "liberado": o segundo número
+continua na tela, e o texto manda corrigir na origem.
+
+**Três decisões da tela que nasceram do contrato da onda 1, e nenhuma é
+estética:**
+
+1. **"Salvar classificação" fica desabilitado quando nada mudou.** Todo
+   `on conflict do update` zera `validated_at`: um clique inócuo numa linha
+   validada faria a apuração voltar a recusar sem que ninguém tivesse mudado
+   nada. Quando há o que salvar numa linha avalizada, a tela diz o que o clique
+   custa **antes** — *"salvar derruba o aval"*.
+2. **Com edição não salva, "Validar" sai da tela.** `POST /validar` leva só a
+   chave: quem prende a categoria é o backend, com a que **ele** leu. O botão ao
+   lado de um `select` mexido ofereceria aval sobre categoria que ninguém gravou.
+3. **A nota nasce da linha e é reenviada inteira.** Reclassificar sem `notes`
+   apaga a nota anterior; o campo vem preenchido com o que está gravado, e o
+   aviso da regra 10 (permanente, copiada para a trilha, nunca diagnóstico, CID
+   ou restrição) está ligado a cada campo por `aria-describedby`.
+
+⚠️ **O que a tela NÃO fecha, porque o contrato não deixa:** numa fila lida há
+dez minutos, validar carimba a categoria que estiver no banco **agora**, não a
+que está na tela — `LeaveJustificationValidation` só carrega a chave. A tela
+recarrega a fila depois de cada gravação e depois de toda recusa de aval (o 422
+"a classificação mudou enquanto você conferia" faz o `refresh` que a própria
+frase pede), e é o máximo que ela alcança sem um `expected_category` no corpo.
+
+O item de navegação vive na **Administração**, não no bloco de DP: o eixo dele é
+`util.is_admin`, que é exatamente `showAdminWrites`, e o bloco de DP não tem
+condição de papel nenhuma. O rótulo é **"Justificativas de afastamento"** porque
+a Operação já tem "Justificativas" — lá o gestor explica o indício de uma pessoa
+num dia, e dois itens com o mesmo nome levariam a telas de papéis diferentes.
+
+Gates: vitest **1209** (38 novos), pytest 1537 intacto, `tsc --noEmit` e
+Prettier limpos. Sem `db-test`: nenhuma migration, policy, view ou grant foi
+tocada.
+
 ## S5 — Laudos e curadoria de rubrica
 
 Os dois menores, juntos porque nenhum bloqueia nada.
@@ -1974,6 +2021,13 @@ de algo fora da sua lista **reporta em vez de editar**.
 `supabase/migrations/<ts>_dp_payroll_code_map.sql`,
 `backend/operax/dp/laudos.py`, `backend/operax/dp/rubricas.py`,
 `frontend/src/app/dashboard/administracao/`
+
+**S6** — sem migration (a tabela existe desde 06/09): `backend/operax/dp/justificativas.py`,
+`backend/server/routers/dp.py`, `backend/server/models.py`,
+`backend/tests/test_dp_justificativas.py`,
+`frontend/src/components/dp/leave-justifications.tsx`,
+`frontend/src/app/dashboard/dp/justificativas/`, `frontend/src/lib/dp/`,
+`frontend/src/components/app-shell.tsx`
 
 ## Elenco
 

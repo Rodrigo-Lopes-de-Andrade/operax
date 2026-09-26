@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
 
+import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import {
   catalogHref,
   catalogQuery,
+  CURADORIA_JUSTIFICATIVAS_PATH,
   cycleHref,
   laudosHref,
   laudosQuery,
@@ -210,6 +212,20 @@ describe("recorte dos laudos", () => {
     );
     expect(laudosHref(filters, { unitId: null })).toBe(
       "/dashboard/administracao/laudos?situacao=em_dia",
+    );
+  });
+});
+
+describe("as duas justificativas do produto são duas telas", () => {
+  it("⛔ a curadoria não é a fila de operação, e os caminhos não colidem", () => {
+    // Lá o gestor explica o indício de uma pessoa num dia; aqui a string do
+    // Secullum ganha categoria de domínio para todos os afastamentos que a
+    // carregam. Mesmo nome no vocabulário do cliente, papéis e dados diferentes
+    // — e um link colado de uma na outra abriria a tela errada.
+    expect(CURADORIA_JUSTIFICATIVAS_PATH).toBe("/dashboard/dp/justificativas");
+    expect(CURADORIA_JUSTIFICATIVAS_PATH).not.toBe(JUSTIFICATIVAS_PATH);
+    expect(CURADORIA_JUSTIFICATIVAS_PATH.startsWith(JUSTIFICATIVAS_PATH)).toBe(
+      false,
     );
   });
 });

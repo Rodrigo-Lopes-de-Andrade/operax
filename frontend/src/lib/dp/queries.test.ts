@@ -6,6 +6,7 @@ import {
   loadCycles,
   loadDpAlerts,
   loadDpPanel,
+  loadLeaveJustifications,
   loadPayrollCodes,
   type CompanyChoice,
 } from "@/lib/dp/queries";
@@ -574,6 +575,77 @@ describe("a curadoria de rubrica — o 403 carrega a frase da API", () => {
     getSession.mockResolvedValueOnce({ data: { session: null } });
 
     expect(await loadPayrollCodes()).toBeNull();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("a curadoria de justificativa de afastamento — Caminho 2 inteiro", () => {
+  // ⛔ Não há Caminho 1 aqui, e não é escolha desta camada: a fila sai de
+  // `secullum."FuncionarioAfastamento"`, e `secullum` não tem `usage` para
+  // `authenticated`. Um `select` do navegador morreria com `permission denied`
+  // em vez de ser filtrado.
+  const FILA = {
+    rows: [
+      {
+        justification: "ATEST M",
+        occurrences: 5,
+        first_leave: "2025-11-03",
+        last_leave: "2026-02-14",
+        category: "leave_period",
+        validated: false,
+        validated_at: null,
+        notes: null,
+        in_mirror: true,
+      },
+    ],
+    pending: 1,
+    without_justification: 2,
+  };
+
+  it("200 devolve a lista com os DOIS números como vieram", async () => {
+    fetchMock.mockImplementation(async () => answer(200, FILA));
+
+    const result = await loadLeaveJustifications();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toMatch(/\/dp\/justificativas$/);
+    expect(init.headers.Authorization).toBe("Bearer token-de-teste");
+    // `without_justification` chega intacto: recalculá-lo aqui seria a tela
+    // decidindo se a apuração vai recusar.
+    expect(result).toEqual({ status: "ok", list: FILA });
+  });
+
+  it("⛔ 403 é `forbidden` COM o detail — a recusa é deliberada e tem frase própria", async () => {
+    fetchMock.mockResolvedValue(
+      answer(403, {
+        detail:
+          "Classificar justificativa de afastamento é do administrador do cliente. Quem classifica decide quem perde cesta e quantos dias de vale transporte.",
+      }),
+    );
+
+    expect(await loadLeaveJustifications()).toEqual({
+      status: "forbidden",
+      detail:
+        "Classificar justificativa de afastamento é do administrador do cliente. Quem classifica decide quem perde cesta e quantos dias de vale transporte.",
+    });
+  });
+
+  it("401 é null, e não `forbidden`: sessão vencida não tem frase para mostrar", async () => {
+    fetchMock.mockResolvedValue(answer(401, { detail: "Not authenticated" }));
+
+    expect(await loadLeaveJustifications()).toBeNull();
+  });
+
+  it("API fora do ar também é null — nada foi lido, e a tela não diz 'sem pendência'", async () => {
+    fetchMock.mockResolvedValue(answer(500, { detail: "boom" }));
+
+    expect(await loadLeaveJustifications()).toBeNull();
+  });
+
+  it("sem sessão não chega a chamar a API", async () => {
+    getSession.mockResolvedValueOnce({ data: { session: null } });
+
+    expect(await loadLeaveJustifications()).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

@@ -5,6 +5,8 @@ import {
   formatCurrency,
   formatDayInTenantZone,
   formatPercent,
+  LEAVE_CATEGORIES,
+  LEAVE_CATEGORY_LABEL,
   PAYROLL_CATEGORIES,
   PAYROLL_CATEGORY_LABEL,
   PAYROLL_NATURE_LABEL,
@@ -82,6 +84,38 @@ describe("rótulos da curadoria de rubrica", () => {
       ...Object.values(PAYROLL_NATURE_LABEL),
     ]) {
       expect(rotulo.toLowerCase()).not.toMatch(/hora\s*extra/);
+    }
+  });
+});
+
+describe("rótulos da curadoria de justificativa de afastamento", () => {
+  it("são as cinco do `check` da tabela, na ordem em que a curadoria escolhe", () => {
+    expect(LEAVE_CATEGORIES).toEqual([
+      "vacation",
+      "leave_period",
+      "leave_of_absence",
+      "suspension",
+      "unjustified_absence",
+    ]);
+  });
+
+  it("⛔ a quinta existe aqui, e é a que `lib/rh/labels` não tem", () => {
+    // `unjustified_absence` não aparece em nenhuma tela de RH, e é justamente a
+    // que separa "uma em 64 é falta" de "as outras 63 não são". Importar o mapa
+    // de lá deixaria a curadoria sem a categoria que decide perder a cesta.
+    expect(LEAVE_CATEGORY_LABEL.unjustified_absence).toBe(
+      "Falta injustificada",
+    );
+  });
+
+  it("⛔ nenhum rótulo diz o motivo — regra 10, e ela vale na tela também", () => {
+    // A categoria é do domínio, não do caso de alguém: este produto não guarda
+    // diagnóstico, CID nem restrição, e um rótulo como "licença médica" faria a
+    // tela nomear saúde onde o banco guarda só a classificação.
+    for (const rotulo of Object.values(LEAVE_CATEGORY_LABEL)) {
+      expect(rotulo.toLowerCase()).not.toMatch(
+        /m[eé]dic|atestado|doen|sa[uú]de|cid|gestante|acidente/,
+      );
     }
   });
 });

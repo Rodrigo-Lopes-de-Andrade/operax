@@ -48,7 +48,7 @@ function administracao() {
 }
 
 describe("a sidebar não oferece porta que não abre", () => {
-  it("`owner` recebe as catorze: cinco de leitura e nove de escrita", () => {
+  it("`owner` recebe as quinze: cinco de leitura e dez de escrita", () => {
     comPapel("owner");
 
     const admin = administracao();
@@ -62,6 +62,10 @@ describe("a sidebar não oferece porta que não abre", () => {
       "Mapeamento",
       "Rubricas",
       "Escalas",
+      // O rótulo carrega "de afastamento" pelo mesmo motivo do parêntese abaixo:
+      // o "Justificativas" da Operação é o gestor explicando o indício de uma
+      // pessoa num dia, e este é a curadoria da string do Secullum.
+      "Justificativas de afastamento",
       "Conexões",
       "Templates",
       "Destinatários",
@@ -96,6 +100,14 @@ describe("a sidebar não oferece porta que não abre", () => {
     ).toBeNull();
     expect(within(admin).queryByRole("link", { name: "Rubricas" })).toBeNull();
     expect(within(admin).queryByRole("link", { name: "Escalas" })).toBeNull();
+    // A curadoria de justificativa de afastamento é escrita de administrador, e
+    // a página fecha por `isAdmin`: o item fora de `showAdminWrites` levaria a
+    // 404 para ele.
+    expect(
+      within(admin).queryByRole("link", {
+        name: "Justificativas de afastamento",
+      }),
+    ).toBeNull();
     // Conexões é configuração de canal, e a página fecha por `isAdmin`: o
     // item fora de `showAdminWrites` seria um link que leva a 404 para ele.
     expect(within(admin).queryByRole("link", { name: "Conexões" })).toBeNull();
@@ -173,6 +185,7 @@ describe("a sidebar não oferece porta que não abre", () => {
       "Mapeamento",
       "Rubricas",
       "Escalas",
+      "Justificativas de afastamento",
       "Conexões",
       "Templates",
       "Destinatários",

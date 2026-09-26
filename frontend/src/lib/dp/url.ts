@@ -17,6 +17,17 @@ export const LAUDOS_PATH = `${ADMIN_PATH}/laudos`;
 export const RUBRICAS_PATH = `${ADMIN_PATH}/rubricas`;
 export const CICLO_PATH = "/dashboard/dp/ciclos";
 export const PAINEL_PATH = "/dashboard/dp/painel";
+/**
+ * A curadoria de justificativa de afastamento — e ela NÃO é a fila de
+ * `lib/justificativas/url.ts`, que fica em `/dashboard/justificativas`.
+ *
+ * Aquela é operação: o gestor explicando o indício de uma pessoa num dia. Esta
+ * é cadastro: o `JustificativaNome` do Secullum ganhando categoria de domínio,
+ * uma vez, para todos os afastamentos que carregam a mesma string. Os dois
+ * nomes colidem no vocabulário do cliente, e por isso o rótulo da navegação diz
+ * "de afastamento" — o caminho, o dado e o papel são outros.
+ */
+export const CURADORIA_JUSTIFICATIVAS_PATH = "/dashboard/dp/justificativas";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;

@@ -156,3 +156,31 @@ export const PAYROLL_NATURE_LABEL: Record<string, string> = {
   payroll_charge: "Encargo",
   informational: "Informativo",
 };
+
+/**
+ * As cinco categorias de `app.leave_justification_map.category` — o `check` da
+ * migration `dp_absence_map`, que são as mesmas de `app.leave_period.category`.
+ *
+ * ⛔ O RÓTULO É NEUTRO, E ISSO NÃO É ESTILO
+ * "Afastamento" e "Licença" não dizem o motivo, porque o motivo é dado de saúde
+ * e este produto não o guarda (regra 10). A curadoria escolhe a categoria da
+ * STRING, nunca o caso de alguém.
+ *
+ * ⚠️ `lib/rh/labels.ts` tem quatro destas cinco em `LEAVE_LABEL`, e não a
+ * quinta: `unjustified_absence` não aparece em nenhuma tela de RH. Importar de
+ * lá obrigaria a espalhar a quinta num mapa que não é desta etapa; a ordem aqui
+ * é a da escolha, e ela é própria da curadoria.
+ */
+export const LEAVE_CATEGORY_LABEL = {
+  vacation: "Férias",
+  leave_period: "Afastamento",
+  leave_of_absence: "Licença",
+  suspension: "Suspensão",
+  unjustified_absence: "Falta injustificada",
+} as const satisfies Record<string, string>;
+
+export type LeaveCategory = keyof typeof LEAVE_CATEGORY_LABEL;
+
+export const LEAVE_CATEGORIES = Object.keys(
+  LEAVE_CATEGORY_LABEL,
+) as LeaveCategory[];
