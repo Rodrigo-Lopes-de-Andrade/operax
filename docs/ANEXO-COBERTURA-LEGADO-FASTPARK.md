@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.unit_compliance_report app.transport_fare app.benefit_plan app.work_post app.work_schedule_day -->
+<!-- verificar-docs: inexistentes-de-proposito app.work_schedule_day -->
 <!-- `app.work_schedule_day` entra na lista porque a §6 a CITA para dizer que
      ela não existe. As outras quatro são entidades que esta etapa vai criar. -->
 

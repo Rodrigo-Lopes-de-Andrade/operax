@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.job_execucao app.sync_execucao app.integracao secullum.departamento_gestor secullum.departamento_gestor_transition -->
+<!-- verificar-docs: inexistentes-de-proposito app.job_execucao app.sync_execucao secullum.departamento_gestor secullum.departamento_gestor_transition -->
 
 # Runbook — janela de convergência
 

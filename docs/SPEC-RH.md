@@ -1,5 +1,3 @@
-<!-- verificar-docs: inexistentes-de-proposito app.employee.hr_code -->
-
 # OperaX — SPEC técnica da etapa RH
 
 Complementa `SPEC-TECNICA.md` com o **como** desta etapa. O quê e o porquê estão

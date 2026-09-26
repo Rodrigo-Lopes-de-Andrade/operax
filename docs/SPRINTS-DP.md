@@ -414,6 +414,7 @@ andaime que a orquestração exige e que o documento não tinha.
 | S3 — Ciclo mensal | ✅ **aprovada** (06/09) — **backend e banco; frontend não despachado; reconciliação com o legado ABERTA** | `dp_benefit_cycle`, `dp_leave_category`, `dp_absence_map` | guardião ✅ · revisor ✅ | 2 |
 | S4 — Painel e alertas | ✅ **aprovada** (07/09) — **backend e banco; frontend não despachado; reconciliação dos 9 KPIs ABERTA** | `dp_movement_period`, `dp_leave_extension`, `dp_cadastral_fields`, `dp_panel_views` | guardião ✅ · revisor ✅ | 2 |
 | S5 — Laudos e rubricas | ✅ **aprovada** — backend e banco (08/09), **frontend (12/09)** | `dp_unit_compliance`, `dp_payroll_code_map` | guardião ✅ (backend) · revisor ✅ (backend) · revisor ✅ (frontend) · **guardião ✅ (frontend, 12/09)** | 2 + 3 (frontend) |
+| S6 — Curadoria de justificativa | ✅ **entregue** — backend (23/09), **frontend (26/09)** | **nenhum** — `app.leave_justification_map` existe desde o slot `dp_absence_map` do S3 | guardião ✅ (backend, 9/9) · revisor ✅ (backend, ciclo 2) · **frontend sem revisão, por decisão do dono (26/09)** | 2 (backend) + 1 (frontend) |
 
 Onze slots, um arquivo por slot. ⛔ `dp_banking_domain` e `dp_banking_account`
 são **arquivos separados**: o Postgres proíbe usar o valor novo do enum na mesma
@@ -1976,18 +1977,54 @@ reinstalar a frase exata que esteve no ar seis dias reprova com
 lacuna venceu, e o texto dela vai para a ata da implantação"*; apontar um
 `destino` inexistente reprova nos seis benefícios.
 
-⏳ **O mesmo cego segue aberto em duas ferramentas:** `verificar_docs.py` (que já
-custou duas exceções vencidas neste arquivo, corrigidas em 06/09) e o check 4 do
-`99`. Suprimir sem reclamar de sobra é o padrão a caçar nas três.
+✅ **O mesmo cego estava aberto em duas ferramentas, e as duas foram fechadas em
+26/09/2026** — com uma correção de endereço: em `99_verificacao_rls.sql` ele não
+vivia no check 4 (que não suprime nada), e sim no **item 7**, que era
+`raise notice` com a expectativa escrita na prosa da mensagem. Notice não reprova:
+tabela nova de `app` sem policy passava verde, e nome que ganhasse policy ficava
+na frase para sempre. Agora a lista é `text[]` no próprio teste e as duas direções
+reprovam — provado por mutação: tabela plantada sem policy, nome removido da
+lista, e nome com policy acrescentado a ela, os três vermelhos, e o controle verde
+com o positivo *"3 tabelas, e são exatamente as deliberadas"*. `mv_*` saiu da
+frase: `pg_tables` não traz matview, então ela falava de algo que o laço nunca viu.
+
+Em `verificar_docs.py` a guarda passou a conferir **cada exceção declarada** nas
+duas direções — objeto que existe (*"a exceção venceu"*), nome que o documento não
+cita (*"exceção sobrando"*) e diretiva vazia, que era literalmente inerte. Ela
+apontou 25 declarações, e **18 eram de fato mortas**: `app.messaging_identity`,
+`app.messaging_invite`, `app.channel_health`, `public.fn_channel_readiness` e
+`public.fn_telegram_adhesion` (existem desde o C3), as quatro tabelas do S1 e do
+S5 em `ANEXO-COBERTURA-LEGADO-FASTPARK`, `app.employee.hr_code`, as seis do
+assistente, e duas que nenhum documento citava mais. Mais uma diretiva vazia.
+Todas apagadas: o objeto existe, então quem confere agora é o schema. A **lista
+global `IGNORAR` saiu inteira** — as duas entradas eram nomes de antes da passada
+pt→en, nenhum documento as citava, e o próprio arquivo já dizia preferir a
+declaração por documento à exceção global.
+
+⛔ **E as outras sete eram erro de medição de quem fechou o item — o gate pegou.**
+Os três objetos de `secullum` que a outra equipe mantém **só em produção** — duas
+tabelas e uma função — foram declarados "vencidos" porque a medição rodou à mão
+**depois** da suíte, e o passo
+do espelho (`scripts/verificar_espelho.py`) aplica a fixture de produção no
+ensaio. Apagadas as exceções, a suíte reprovou com 16 referências quebradas — no
+estado canônico, em que `verificar_docs.py` roda **antes** do espelho, essas
+tabelas não existem. As sete foram restauradas e a mensagem da guarda passa a
+dizer em que banco confiar quando o nome é de `secullum`. 📌 **A lição é a de
+sempre neste repositório:** o veredito de uma ferramenta é relativo ao estado que
+ela leu, e "rodei e deu isso" não é medição enquanto o estado não for nomeado.
 
 **B. `pg_default_acl` do schema `public` concede `authenticated=arwdDxtm` em
 tabelas.** Medido pelo guardião. O que separa isso de um vazamento total é **só o
 event trigger que bloqueia `CREATE TABLE` em `public`**. Anterior ao S1 e
 permanente — nada desta etapa o introduziu e nada desta etapa o remove.
 
-**C. A metade de frontend do S1 não existe.** `frontend/src/app/dashboard/administracao/`
-está na lista `Arquivos` do S1 e o despacho de 06/09 cobriu só o backend.
-Registrado para que "S1 fechado" não seja lido como "S1 inteiro".
+**C. ✅ A metade de frontend do S1 existe desde 06/09 — este item venceu.** Ele
+foi escrito quando o despacho de 06/09 cobria só o backend, e o commit `5a73637`
+do mesmo dia subiu as telas: `administracao/postos`, `administracao/beneficios` e
+`dp/ciclos`, com `work-posts.tsx`, `benefit-catalog.tsx` e `monthly-cycle.tsx`.
+A revisão delas está em *"O frontend do DP"*, acima. Fica registrado em vez de
+apagado: o texto ficou vinte dias afirmando uma ausência que já não existia, e é
+o mesmo cego do item A — exceção que sobra e ninguém reclama.
 
 ## Arquivos por sprint
 

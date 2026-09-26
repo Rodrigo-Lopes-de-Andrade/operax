@@ -88,20 +88,58 @@ begin
   if falhas <> '' then raise exception 'FALHA: tabela(s) de app sem RLS -> %', falhas; end if;
 end $$;
 
-\echo '--- 7. Toda tabela de app com RLS tem pelo menos uma policy OU é exclusiva de service_role'
+\echo '--- 7. Toda tabela de app tem policy — e a lista de exceções não tem sobra'
+-- ⛔ AQUI O AVISO ERA O DEFEITO, E ELE DUROU ATÉ 26/09/2026
+-- Este item era `raise notice` com a expectativa escrita na prosa da mensagem
+-- ("esperado apenas para integration_secret, messaging_identity, messaging_invite
+-- e mv_*"). Duas consequências, as duas silenciosas: tabela nova sem policy
+-- passava verde (a suíte nunca reprova por notice), e nome que ganhasse policy
+-- ficava na frase para sempre sem ninguém notar. É o mesmo cego que
+-- `scripts/95_teste_matriz_rh.py` fechou em 12/09 — **suprimir sem reclamar de
+-- sobra** —, nomeado como item aberto em `docs/SPRINTS-DP.md` (item A).
+-- Agora a lista é dado e as DUAS direções reprovam.
+--
+-- ⚠️ `mv_*` saiu: `pg_tables` não traz materialized view, então a frase falava de
+-- algo que este laço nunca viu. Matview é o item 11.
 do $$
-declare r record; aviso text := '';
+declare
+  -- Decisão do dono (15/09/2026), no item 14: a régua de `app.integration_secret`
+  -- vale para as duas tabelas do chat_id — nenhum papel do painel lê o chat_id,
+  -- nem owner. Zero policy aqui é a garantia, não o esquecimento. Acrescentar um
+  -- nome a esta lista é decisão de quem desenha o acesso, e é por isso que ela
+  -- fica no teste em vez de ser deduzida.
+  esperadas text[] := array['integration_secret', 'messaging_identity', 'messaging_invite'];
+  sem_policy text[];
+  faltando   text[];
+  sobrando   text[];
 begin
-  for r in
-    select t.tablename,
-           (select count(*) from pg_policies p where p.schemaname='app' and p.tablename=t.tablename) as n
-    from pg_tables t where t.schemaname = 'app'
-  loop
-    if r.n = 0 then aviso := aviso || r.tablename || ' '; end if;
-  end loop;
-  if aviso <> '' then
-    raise notice 'ATENÇÃO (esperado apenas para integration_secret, messaging_identity, messaging_invite e mv_*): sem policy -> %', aviso;
+  select coalesce(array_agg(t.tablename order by t.tablename), '{}')
+    into sem_policy
+    from pg_tables t
+   where t.schemaname = 'app'
+     and not exists (
+           select 1 from pg_policies p
+            where p.schemaname = 'app' and p.tablename = t.tablename);
+
+  select coalesce(array_agg(x order by x), '{}') into faltando
+    from unnest(sem_policy) x where x <> all (esperadas);
+
+  select coalesce(array_agg(x order by x), '{}') into sobrando
+    from unnest(esperadas) x where x <> all (sem_policy);
+
+  if array_length(faltando, 1) is not null then
+    raise exception 'FALHA: tabela(s) de app sem policy fora da lista deliberada -> %',
+      array_to_string(faltando, ' ');
   end if;
+
+  -- A direção que ninguém escreve: a exceção que deixou de ser exceção.
+  if array_length(sobrando, 1) is not null then
+    raise exception 'FALHA: a lista de exceções tem sobra — a tabela ganhou policy ou deixou de existir -> %',
+      array_to_string(sobrando, ' ');
+  end if;
+
+  raise notice 'OK: % tabela(s) de app sem policy, e são exatamente as deliberadas',
+    cardinality(esperadas);
 end $$;
 
 \echo '--- 8. Nenhuma coluna de PII vazou para a superfície pública'

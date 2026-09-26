@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito secullum.departamento_gestor secullum.estrutura_evento_titular app.job_execucao -->
+<!-- verificar-docs: inexistentes-de-proposito secullum.departamento_gestor secullum.estrutura_evento_titular -->
 
 # Handoff da equipe de plataforma — 28/08/2026
 

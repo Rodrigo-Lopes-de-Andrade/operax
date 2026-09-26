@@ -1,5 +1,3 @@
-<!-- verificar-docs: inexistentes-de-proposito app.messaging_identity app.messaging_invite app.channel_health public.fn_channel_readiness public.fn_telegram_adhesion -->
-
 # OperaX — sprints de canais
 
 Implementação de `SPEC-CANAIS.md`. Cinco sprints. Gate que não fecha = sprint

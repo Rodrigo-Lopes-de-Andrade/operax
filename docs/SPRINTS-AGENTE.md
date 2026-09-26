@@ -1,4 +1,4 @@
-<!-- verificar-docs: inexistentes-de-proposito app.assistant_metric_scope app.assistant_metric_scope.enabled app.ai_query.prompt_version_id app.ai_query.is_dry_run public.fn_assistant_catalog fn_assistant_catalog app.work_schedule_day -->
+<!-- verificar-docs: inexistentes-de-proposito app.work_schedule_day -->
 <!-- `app.work_schedule_day` entra na lista porque este documento a CITA para
      contar o erro que ela causou na etapa DP. Ela nunca existiu — ver
      `SPEC-DP.md` §0-bis, que registra as três camadas que existem de verdade. -->
