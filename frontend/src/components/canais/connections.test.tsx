@@ -355,6 +355,52 @@ describe("bloco 1 do WhatsApp — o canal", () => {
     const { container: oficial } = renderTela(tela({ telegram: null }));
     expect(oficial.textContent).toMatch(/\bMeta\b/);
   });
+
+  it("⛔ o critério 7 no estado que a API NÃO produz: não oficial bloqueado não exige Meta", () => {
+    // A dívida do C1, nomeada na revisão: para provedor não oficial
+    // `fn_channel_readiness` devolve `ready = true` e a rota nem consulta a lista,
+    // então o caso acima passa porque **o dado nunca chega** — não porque a tela
+    // decide. Aqui o dado chega: canal não oficial, bloqueado, zero template
+    // aprovado de três. Quem barra a frase da Meta tem de ser a flag.
+    renderTela(
+      tela({
+        whatsapp: unofficial({
+          ready: false,
+          rules_blocked: 0,
+          blocked: [],
+          templates_total: 3,
+          templates_approved: 0,
+        }),
+        telegram: null,
+      }),
+    );
+
+    expect(screen.getByText(/a lista de regras veio vazia/)).toBeVisible();
+    expect(screen.queryByText(/exige template aprovado pela Meta/)).toBeNull();
+  });
+
+  it("✅ e o par: a MESMA carga com as flags do oficial exige a Meta, com a contagem", () => {
+    // Sem este, o caso de cima ficaria verde numa tela que perdeu a frase inteira.
+    renderTela(
+      tela({
+        whatsapp: unofficial({
+          capabilities: OFFICIAL,
+          ready: false,
+          rules_blocked: 0,
+          blocked: [],
+          templates_total: 3,
+          templates_approved: 0,
+        }),
+        telegram: null,
+      }),
+    );
+
+    expect(
+      screen.getByText(
+        /exige template aprovado pela Meta, e nenhum está aprovado \(0 de 3\)/,
+      ),
+    ).toBeVisible();
+  });
 });
 
 describe("bloco 2 do WhatsApp — a saúde", () => {

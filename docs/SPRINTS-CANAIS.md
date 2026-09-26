@@ -185,17 +185,47 @@ docstring diz por que a tela confia; (3) o positivo da varredura só provava que
 ela lia `labels.ts` — agora exige o componente, o arquivo mais provável de
 ofender. **Os quatro restantes ficam nomeados:**
 - ⏳ A frase do estado `null` da página (*"a API não respondeu agora"*) afirma
-  uma causa que não é a real para 401; **copia `mapeamento/page.tsx`**, então
-  corrigir é nas duas, fora desta sprint.
-- ⏳ `<Requirements>` não tem frase para canal **sem nenhuma** das duas flags —
-  hoje impossível pela matriz, e é **exatamente o Telegram** (SPEC §1.1). É o
-  primeiro lugar que o C3 toca no frontend; silêncio ali seria a leitura "canal
-  sem regra" que a SPEC chama de perigosa.
-- ⏳ O critério 7 (não oficial sem "Meta") só cobre o estado real de hoje —
-  para não oficial a função devolve `ready = true` e a rota nem consulta a
-  lista.
-- ⏳ O teste "sem tenant na URL" checa só a URL; basta para GET, não cobriria
-  corpo de POST.
+  uma causa que não é a real para 401. ⚠️ **Medido em 26/09/2026: não são duas
+  páginas, são ONZE** — Conexões, Mapeamento, Templates, Escalas, Rubricas,
+  Destinatários, Postos, Laudos, Regras, Assistente e a curadoria de justificativa
+  de afastamento do S6, que nasceu com a mesma frase. Corrigir é varredura de
+  texto de tela em quatro etapas, e o conserto de fundo é outro: os `load*`
+  devolvem `null` para sessão ausente, 401 e API fora do ar sem distinguir — a
+  frase honesta ou nomeia as três possibilidades ou a camada de dados passa a
+  separá-las. **Decisão do dono, não de quem varre.**
+- ✅ `<Requirements>` **ganhou a frase do canal sem nenhuma flag no C3** (commit
+  `25a9d35`): *"Sem restrição declarada para este canal"*, com o teste que nomeia
+  a dívida — *"⛔ nenhuma das três → 'sem restrição declarada', e não silêncio"* —
+  e o negativo ao lado (com qualquer das três, a frase não aparece). O item foi
+  escrito quando o Telegram era hipótese; ele chegou e a frase estava lá.
+- ✅ **O critério 7 passou a cobrir o estado que a API não produz (26/09/2026).**
+  O caso que havia ficava verde porque o dado nunca chega: para provedor não
+  oficial `fn_channel_readiness` devolve `ready = true` e a rota nem consulta a
+  lista, então a frase da Meta era inalcançável por falta de carga, não por
+  decisão da tela. O par novo entrega a carga impossível — não oficial,
+  **bloqueado**, zero de três templates aprovados — e exige que quem barre a frase
+  seja a flag; o positivo ao lado manda a MESMA carga com as flags do oficial e
+  cobra a frase com a contagem. Provado por mutação: tirando
+  `capabilities.requires_templates` da condição do componente, reprova **só** o
+  caso novo — os antigos seguem verdes, que é a medida exata do buraco que havia.
+- ✅ **O teste "sem tenant na URL" ganhou a metade do corpo em 26/09/2026, e não
+  por tela.** São 42 pontos de escrita no frontend: um teste por ponto seria a
+  fronteira escrita 42 vezes. A guarda ficou onde o corpo é declarado —
+  `backend/tests/test_contrato_corpo.py` lê o OpenAPI e exige
+  `additionalProperties: false` (que é como `extra="forbid"` chega ao cliente) em
+  **todo** corpo `application/json`. Sem isso, um `tenant_id` no corpo é ignorado
+  em silêncio e a tela fica acreditando que filtra.
+
+  ⚠️ **A medição achou oito corpos frouxos, e fechá-los é decisão do dono:**
+  `POST /canais/credencial`, `POST /canais/telegram/convites`,
+  `PUT /canais/templates/{code}`, `POST /curadoria/unidades`,
+  `POST /curadoria/rotacoes`, `POST /curadoria/fora-do-motor`,
+  `POST /ocorrencias/{deviation_event_id}/justificativa` e
+  `POST /assistente/configuracao/publicar` — 8 frouxos contra 26 estritos. Passar
+  a recusar campo desconhecido é mudança de contrato de API (pedido hoje aceito
+  vira 422), e por isso o teste **prende** em vez de consertar: rota nova frouxa
+  reprova, e rota da lista que fechar **também** reprova, para a dívida não
+  envelhecer calada. Provado por mutação nas quatro direções.
 
 ## C2 — Escrita de credencial pelo Caminho 2
 

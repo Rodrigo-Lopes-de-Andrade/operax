@@ -2001,6 +2001,19 @@ global `IGNORAR` saiu inteira** — as duas entradas eram nomes de antes da pass
 pt→en, nenhum documento as citava, e o próprio arquivo já dizia preferir a
 declaração por documento à exceção global.
 
+⛔ **E a varredura achou um terceiro, pior que os dois: o item 10 do `99` não
+conseguia reprovar.** Ele é o *teste vivo* do produto — assumir `anon` e tentar ler
+`public.vw_employee` —, e a `raise exception 'FALHA: ...'` era levantada **dentro**
+do bloco que a captura: o `when others` a tratava como se fosse o bloqueio
+procurado, `v_ok` virava true, e o item terminava imprimindo *"OK: anon bloqueado"*.
+Medido em 26/09 com `grant select` para `anon` na view e em `app`: a consulta
+rodava, e a saída era `NOTICE: anon bloqueado com: FALHA: anon conseguiu consultar
+public.vw_employee` seguida de `NOTICE: OK`, **exit 0**. O único item da suíte
+incapaz de ficar vermelho era o que tenta ler de verdade. ⚠️ A porta seguia fechada
+pelo item 3 (`has_table_privilege` de `anon` em todo objeto dos quatro schemas, que
+o grant da medição deixa vermelho) — este era o cinto, não o suspensório. O veredito
+saiu do bloco: mesma medição agora reprova, e o caminho normal segue verde.
+
 ⛔ **E as outras sete eram erro de medição de quem fechou o item — o gate pegou.**
 Os três objetos de `secullum` que a outra equipe mantém **só em produção** — duas
 tabelas e uma função — foram declarados "vencidos" porque a medição rodou à mão

@@ -229,25 +229,46 @@ begin
 end $$;
 
 \echo '--- 10. Teste vivo: assumir o role anon e tentar ler'
+-- ⛔ ESTE ITEM NÃO CONSEGUIA REPROVAR, E DUROU ATÉ 26/09/2026
+-- A `raise exception 'FALHA: ...'` era levantada DENTRO do bloco que a captura, e
+-- o `when others` a tratava como se fosse o bloqueio que o teste procura: v_ok
+-- virava true, a mensagem de falha saía como **notice**, e o item terminava
+-- imprimindo *"OK: anon bloqueado"*. Medido com `grant select` para `anon` na view
+-- e no schema `app`: a consulta rodava, e a saída era
+-- `NOTICE: anon bloqueado com: FALHA: anon conseguiu consultar public.vw_employee`
+-- seguida de `NOTICE: OK`, com exit 0. O teste vivo do produto era o único item da
+-- suíte incapaz de ficar vermelho.
+--
+-- ⚠️ A porta seguia fechada por outro item: o 3 confere `has_table_privilege` de
+-- `anon` em todo objeto dos quatro schemas, e um grant como o da medição o deixa
+-- vermelho. Este item é o cinto vivo — ler de fato, sob RLS, em vez de perguntar
+-- ao catálogo —, e é por isso que ele precisa poder reprovar sozinho.
+--
+-- Agora o veredito sai FORA do bloco: o handler só registra como o banco barrou.
 do $$
-declare v_ok boolean := false;
+declare v_leu boolean := false;
 begin
   begin
     set local role anon;
     perform 1 from public.vw_employee limit 1;
-    reset role;
-    raise exception 'FALHA: anon conseguiu consultar public.vw_employee';
+    -- Rodou sem erro. Zero linha também conta: o que este item afirma é que anon
+    -- não ALCANÇA a superfície pública, e não que ela lhe devolve vazio.
+    v_leu := true;
   exception
     when insufficient_privilege then
-      v_ok := true;
+      null;  -- o esperado, e é o silêncio que vale
     when others then
-      -- qualquer error que não seja "consegui ler" também serve como bloqueio,
-      -- mas registramos para inspeção
-      v_ok := true;
+      -- Qualquer outro erro também é bloqueio, mas o sqlstate fica registrado:
+      -- barrar por acidente hoje é barrar por acidente amanhã.
       raise notice 'anon bloqueado com: % (%)', sqlerrm, sqlstate;
   end;
   reset role;
-  if v_ok then raise notice 'OK: anon bloqueado em public.vw_employee'; end if;
+
+  if v_leu then
+    raise exception 'FALHA: anon conseguiu consultar public.vw_employee';
+  end if;
+
+  raise notice 'OK: anon bloqueado em public.vw_employee';
 end $$;
 
 reset role;
