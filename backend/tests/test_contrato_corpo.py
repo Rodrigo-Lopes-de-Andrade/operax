@@ -40,7 +40,6 @@ CORPOS_FROUXOS = {
     "POST /curadoria/fora-do-motor",
     "POST /curadoria/rotacoes",
     "POST /curadoria/unidades",
-    "POST /ocorrencias/{deviation_event_id}/justificativa",
     "PUT /canais/templates/{code}",
 }
 

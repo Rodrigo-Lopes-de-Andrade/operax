@@ -8,24 +8,19 @@ import { Button } from "@/components/ui/button";
 import { ApiError, requestApiAsUser } from "@/lib/api";
 
 /**
- * O veredito sobre um indício — quem produz `rejected`.
+ * A justificativa do supervisor sobre um indício — que nasce `pending`.
  *
- * A migration 23 fechou `app.justification.status` em `accepted` e `rejected` e
- * registrou que `rejected` não tinha produtor: enquanto não houvesse, "aceita" e
- * "escrita" eram a mesma coisa. Esta é a porta.
+ * Desde a P1.2 o supervisor explica e o RH decide: `POST
+ * /ocorrencias/{id}/justificativa` recebe só `{ text }` e grava sempre
+ * `pending`. Aceitar ou reprovar é do RH, por `fn_revisar_justificativa`, numa
+ * tela própria — este componente não escolhe veredito, e mandar `status` no
+ * corpo passou a ser recusado pelo backend.
  *
- * O VEREDITO É ESCOLHIDO ANTES DE SER ESCRITO, E ISSO NÃO É ENFEITE
- * O banco só concede `insert` nesta tabela — não há update. Uma linha gravada
- * não volta atrás, e por isso a tela não tem um botão que grava direto: escolhe-
- * se aceitar ou rejeitar, o botão então diz qual dos dois vai acontecer, e só
- * depois grava. Dois botões lado a lado numa ação irreversível é um clique
- * errado a um pixel de distância.
- *
- * MUDAR DE IDEIA ESCREVE OUTRA LINHA, E É CORRETO QUE ESCREVA
- * `fn_pending_justification` pergunta se existe ALGUMA aceita. Uma rejeição
- * depois de uma aceitação não desaceita nada — o desvio já foi explicado uma
- * vez, por alguém, e apagar isso apagaria justamente o que a tabela existe para
- * guardar.
+ * A LINHA GRAVADA NÃO VOLTA ATRÁS
+ * O banco só concede `insert` em `app.justification` — não há update. Por isso a
+ * tela nomeia a pessoa afetada antes do envio e o botão diz o que vai
+ * acontecer. Mudar de ideia escreve outra linha, e é correto que escreva: a
+ * explicação dada uma vez é justamente o que a tabela existe para guardar.
  */
 export function JustificationVerdict({
   deviationEventId,
@@ -35,7 +30,6 @@ export function JustificationVerdict({
   employeeName: string;
 }) {
   const router = useRouter();
-  const [status, setStatus] = useState<"accepted" | "rejected">("accepted");
   const [text, setText] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -54,21 +48,17 @@ export function JustificationVerdict({
     try {
       await requestApiAsUser<{ justification_id: string }>(
         `/ocorrencias/${deviationEventId}/justificativa`,
-        { method: "POST", body: { text: text.trim(), status } },
+        { method: "POST", body: { text: text.trim() } },
       );
 
-      setApplied(
-        status === "accepted"
-          ? "Justificativa aceita e registrada."
-          : "Justificativa rejeitada e registrada.",
-      );
+      setApplied("Justificativa enviada para aprovação do RH.");
       setText("");
       router.refresh();
     } catch (cause) {
       setError(
         cause instanceof ApiError
           ? cause.message
-          : "Não foi possível registrar. Tente de novo.",
+          : "Não foi possível enviar. Tente de novo.",
       );
     } finally {
       setBusy(false);
@@ -81,48 +71,24 @@ export function JustificationVerdict({
         Justificativa
       </p>
 
-      <div
-        role="radiogroup"
-        aria-label="Veredito"
-        className="border-line-subtle flex gap-1 rounded-full border p-1"
-      >
-        <Choice
-          checked={status === "accepted"}
-          onSelect={() => setStatus("accepted")}
-          label="Aceitar"
-        />
-        <Choice
-          checked={status === "rejected"}
-          onSelect={() => setStatus("rejected")}
-          label="Rejeitar"
-        />
-      </div>
-
       <label className="flex flex-col gap-1.5">
-        <span className="text-ink-muted text-xs">
-          {status === "accepted"
-            ? "O que explica o indício"
-            : "Por que a explicação não foi aceita"}
-        </span>
+        <span className="text-ink-muted text-xs">O que explica o indício</span>
         <textarea
           value={text}
           onChange={(event) => setText(event.target.value)}
           rows={3}
           maxLength={2000}
           className="border-line-subtle text-ink focus:border-brand-strong w-full rounded-[12px] border px-3 py-2 text-sm outline-none"
-          placeholder={
-            status === "accepted"
-              ? "Atendimento externo autorizado pelo gestor."
-              : "Sem autorização registrada para o horário."
-          }
+          placeholder="Atendimento externo autorizado pelo gestor."
         />
       </label>
 
-      {/* ⚠️ A frase diz o nome de quem recebe o veredito. Uma ação que não volta
-          atrás sobre uma pessoa tem de nomeá-la antes, não depois. */}
+      {/* ⚠️ A frase diz o nome de quem é afetado pela justificativa. Uma ação
+          que não volta atrás sobre uma pessoa tem de nomeá-la antes, não depois. */}
       <p className="text-ink-faint text-xs text-pretty">
-        Fica registrado com o seu nome, na ocorrência de {employeeName}. Não é
-        possível editar depois — um veredito novo escreve outra linha.
+        Fica registrada com o seu nome, na ocorrência de {employeeName}, e segue
+        para aprovação do RH. Não é possível editar depois — uma justificativa
+        nova escreve outra linha.
       </p>
 
       <Button
@@ -130,11 +96,7 @@ export function JustificationVerdict({
         disabled={busy || tooShort}
         className="w-fit"
       >
-        {busy
-          ? "Registrando…"
-          : status === "accepted"
-            ? "Registrar aceite"
-            : "Registrar rejeição"}
+        {busy ? "Enviando…" : "Enviar justificativa"}
       </Button>
 
       {error ? <Alert>{error}</Alert> : null}
@@ -144,29 +106,5 @@ export function JustificationVerdict({
         </p>
       ) : null}
     </section>
-  );
-}
-
-function Choice({
-  checked,
-  onSelect,
-  label,
-}: {
-  checked: boolean;
-  onSelect: () => void;
-  label: string;
-}) {
-  return (
-    <button
-      type="button"
-      role="radio"
-      aria-checked={checked}
-      onClick={onSelect}
-      className={`flex-1 rounded-full px-4 py-1.5 text-sm font-bold transition ${
-        checked ? "bg-brand text-on-brand" : "text-ink-muted hover:bg-muted"
-      }`}
-    >
-      {label}
-    </button>
   );
 }

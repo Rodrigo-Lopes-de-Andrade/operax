@@ -21,6 +21,7 @@ from operax.core.db import get_pools
 from server.deps import CurrentTenant, CurrentUser
 from server.models import HealthResponse, Identity
 from server.routers import (
+    alcada,
     assistente,
     assistente_config,
     canais,
@@ -28,6 +29,7 @@ from server.routers import (
     curadoria,
     dp,
     employees,
+    feriados,
     folha,
     justificativas,
     monitor,
@@ -83,6 +85,7 @@ async def validation_error_without_echo(_: Request, exc: RequestValidationError)
     )
 
 
+app.include_router(alcada.router)
 app.include_router(assistente.router)
 app.include_router(assistente_config.router)
 app.include_router(canais.router)
@@ -90,6 +93,7 @@ app.include_router(canais_regras.router)
 app.include_router(curadoria.router)
 app.include_router(dp.router)
 app.include_router(employees.router)
+app.include_router(feriados.router)
 app.include_router(folha.router)
 app.include_router(justificativas.router)
 app.include_router(monitor.router)

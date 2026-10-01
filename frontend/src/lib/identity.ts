@@ -48,6 +48,20 @@ export function isAdmin(role: string | undefined): boolean {
 }
 
 /**
+ * Quem revisa justificativa: o RH e o owner — e só eles.
+ *
+ * É a cópia da checagem de `GET /alcada/fila` e de `fn_revisar_justificativa`
+ * (`util.roles_in_tenant(...) && {hr, owner}`), lista fixa nos dois lados.
+ * `personnel` é admin e NÃO revisa: a alçada é do RH por decisão do dono. A
+ * API decide por último; o 403 dela continua tratado na tela.
+ */
+export const REVIEWER_ROLES = ["owner", "hr"] as const;
+
+export function reviewsJustifications(role: string | undefined): boolean {
+  return (REVIEWER_ROLES as readonly string[]).includes(role ?? "");
+}
+
+/**
  * Os papéis a quem a tela de Laudos é oferecida — e ela NÃO é uma tela de RH.
  *
  * Laudo é documento da unidade: `public.vw_unit_compliance` recorta por

@@ -980,7 +980,6 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | Policy | Comando | USING | WITH CHECK |
 |---|---|---|---|
 | `deviation_read` | SELECT | `(((mode = 'production'::text) OR util.is_admin(tenant_id)) AND (util.is_admin(tenant_id) OR ((unit_id IS NOT N` | `-` |
-| `deviation_write` | UPDATE | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
 
 <details><summary>Índices</summary>
 
@@ -1220,6 +1219,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `hr_code` | text | sim |  |  | ID RH do cliente. Chave ALTERNATIVA — nunca composta com a matrícula: cada uma identifica sozinha, e divergência entre elas é erro de linha no import. Anulável de propósito: fica vazia até o template de vínculo voltar preenchido. |
 | `exception_tracking` | boolean | não | `false` |  | Fora do motor de detecção POR DECISÃO — "ponto por exceção", supervisão. Nasce false: quem aparece fora da medição sem alguém ter tirado é quem ninguém decidiu não medir. Quem está aqui não materializa jornada esperada e é contado à parte no monitor, separado de `unrostered`, que é falha de cobertura e tem a mesma aparência. |
 | `manager_id` | uuid | sim |  | `app.manager` | A quem esta pessoa responde, promovido de `Funcionario.EstruturaId`. NÃO confundir com `manager_employee_id`, que aponta para um `app.employee` e continua sem fonte: o espelho diz o NOME do gestor, não qual colaborador ele é. |
+| `approval_owner_only` | boolean | não | `false` |  | Justificativa desta pessoa só é revisada pelo owner — decisão do dono (29/09/2026) para quem é do RH: ninguém aprova o próprio desvio. Nasce false: ninguém sai da alçada do RH sem alguém ter tirado. Lida por public.fn_revisar_justificativa. |
 
 **Restrições**
 
@@ -1232,7 +1232,6 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | Policy | Comando | USING | WITH CHECK |
 |---|---|---|---|
 | `employee_read` | SELECT | `(util.is_admin(tenant_id) OR ((unit_id IS NOT NULL) AND util.can_see_unit(unit_id)) OR ((unit_id IS NULL) AND ` | `-` |
-| `employee_write` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
 
 <details><summary>Índices</summary>
 
@@ -1735,6 +1734,47 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 </details>
 
 
+## `app.holiday`
+
+> Calendário de feriados por tenant. Nacional = unit_id nulo; estadual e municipal = uma linha por unidade atingida. Lido por jornada.py: vira expected_workday.day_type = 'holiday' só para jornada de semana fixa do Secullum (afastamento > feriado > escala); revezamento segue a escala. Sem delete: desativar com active = false.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `reference_date` | date | não |  |  |  |
+| `jurisdiction` | text | não |  |  |  |
+| `unit_id` | uuid | sim |  | `app.unit` |  |
+| `name` | text | não |  |  |  |
+| `active` | boolean | não | `true` |  | false = cadastrado por engano. A linha fica: ela explica as revogações de indício que causou. |
+| `created_by` | uuid | sim |  | `auth.users` |  |
+| `created_at` | timestamp with time zone | não | `now()` |  |  |
+| `updated_at` | timestamp with time zone | não | `now()` |  |  |
+
+**Restrições**
+
+- `CHECK (((jurisdiction = 'national'::text) = (unit_id IS NULL)))`
+- `CHECK ((jurisdiction = ANY (ARRAY['national'::text, 'state'::text, 'municipal'::text])))`
+- `CHECK ((length(btrim(name)) > 0))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `holiday_owner_insert` | INSERT | `-` | `('owner'::app.user_role = ANY (util.roles_in_tenant(tenant_id)))` |
+| `holiday_owner_update` | UPDATE | `('owner'::app.user_role = ANY (util.roles_in_tenant(tenant_id)))` | `('owner'::app.user_role = ANY (util.roles_in_tenant(tenant_id)))` |
+| `holiday_read` | SELECT | `(util.has_tenant(tenant_id) AND ((unit_id IS NULL) OR util.can_see_unit(unit_id)))` | `-` |
+
+<details><summary>Índices</summary>
+
+- `UNIQUE holiday_national_uq` — `app.holiday USING btree (tenant_id, reference_date) WHERE (unit_id IS NULL)`
+- `UNIQUE holiday_unit_uq` — `app.holiday USING btree (tenant_id, reference_date, unit_id) WHERE (unit_id IS NOT NULL)`
+
+</details>
+
+
 ## `app.integration`
 
 *tabela — RLS ligada*
@@ -1800,19 +1840,19 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `author_user_id` | uuid | sim |  | `auth.users` |  |
 | `author_name` | text | sim |  |  |  |
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
-| `status` | text | não | `'accepted'::text` |  | Default accepted de propósito: até esta migration uma linha aqui ERA a resposta final, e nenhuma justificativa já escrita pode virar pendente retroativamente. Não existe tela que rejeite — enquanto não existir, "aceita" e "escrita" são a mesma coisa. |
+| `status` | text | não | `'pending'::text` |  | Default pending desde a alcada_justification_pending: justificativa nova espera a decisão de quem tem alçada. Nenhuma justificativa já escrita pode virar pendente retroativamente — a troca de default não tocou linha existente, e nenhuma migration pode fazê-lo. source = secullum nasce e fica accepted (justification_espelho_nao_pende): a origem já decidiu. |
 
 **Restrições**
 
+- `CHECK (((source <> 'secullum'::text) OR (status = 'accepted'::text)))`
 - `CHECK ((source = ANY (ARRAY['secullum'::text, 'operax'::text, 'whatsapp'::text])))`
-- `CHECK ((status = ANY (ARRAY['accepted'::text, 'rejected'::text])))`
+- `CHECK ((status = ANY (ARRAY['pending'::text, 'accepted'::text, 'rejected'::text])))`
 
 **Policies**
 
 | Policy | Comando | USING | WITH CHECK |
 |---|---|---|---|
 | `justification_read` | SELECT | `util.can_see_employee(employee_id)` | `-` |
-| `justification_write` | INSERT | `-` | `util.can_see_employee(employee_id)` |
 
 <details><summary>Índices</summary>
 
@@ -1821,6 +1861,42 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 - `justification_colab_idx` — `app.justification USING btree (employee_id, reference_date DESC)`
 - `justification_evento_idx` — `app.justification USING btree (deviation_event_id)`
 - `justification_tenant_id_fkidx` — `app.justification USING btree (tenant_id)`
+
+</details>
+
+
+## `app.justification_review`
+
+> A decisão da alçada sobre uma justificativa — fato novo, nunca edição da justificativa. Uma por justificativa (justification_review_uk). Entra só por public.fn_revisar_justificativa; nenhuma policy de escrita.
+
+*tabela — RLS ligada*
+
+| Coluna | Tipo | Nulo | Default | Referência | Nota |
+|---|---|---|---|---|---|
+| `id` 🔑 | uuid | não | `gen_random_uuid()` |  |  |
+| `tenant_id` | uuid | não |  | `app.tenant` |  |
+| `justification_id` | uuid | não |  | `app.justification` |  |
+| `payroll_period_id` | uuid | não |  | `app.payroll_period` | Competência em que a revisão foi FEITA (a não fechada mais antiga no momento), não a do fato: justificativa que chega depois do fechamento é revisada na seguinte, e nada reabre. |
+| `decision` | text | não |  |  |  |
+| `reason` | text | sim |  |  |  |
+| `reviewed_by` | uuid | não |  | `auth.users` |  |
+| `reviewed_at` | timestamp with time zone | não | `now()` |  |  |
+| `posted_to_source_at` | timestamp with time zone | sim |  |  | Quando o RH lançou a decisão no Secullum. Nulo = aprovado e ainda não lançado. |
+| `posted_by` | uuid | sim |  | `auth.users` |  |
+
+**Restrições**
+
+- `CHECK ((decision = ANY (ARRAY['approved'::text, 'rejected'::text])))`
+
+**Policies**
+
+| Policy | Comando | USING | WITH CHECK |
+|---|---|---|---|
+| `review_read` | SELECT | `(EXISTS ( SELECT 1` | `` |
+
+<details><summary>Índices</summary>
+
+- `UNIQUE justification_review_uk` — `app.justification_review USING btree (justification_id)`
 
 </details>
 
@@ -2447,7 +2523,6 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 | Policy | Comando | USING | WITH CHECK |
 |---|---|---|---|
-| `tenant_member_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
 | `tenant_member_read` | SELECT | `util.has_tenant(tenant_id)` | `-` |
 
 <details><summary>Índices</summary>
@@ -2649,7 +2724,6 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 
 | Policy | Comando | USING | WITH CHECK |
 |---|---|---|---|
-| `escopo_admin` | ALL | `util.is_admin(tenant_id)` | `util.is_admin(tenant_id)` |
 | `escopo_read` | SELECT | `((user_id = ( SELECT auth.uid() AS uid)) OR util.is_admin(tenant_id))` | `-` |
 
 <details><summary>Índices</summary>
@@ -3826,6 +3900,16 @@ public.fn_dp_alerts()
 Os oito contadores do painel de alertas do DP. Devolve CONTAGEM, nunca linha por pessoa — a lista é individual e sai pelo Caminho 2. security definer porque cinco dos oito leem domínio sensível e contar não é ler; o recorte de tenant e escopo continua sendo util.user_tenants() + util.can_see_employee. Janela de documento vem de app.document_type.expiry_alert_days, por tipo — o tenant que quiser os 90 dias do legado configura 90 no tipo. Os dois contadores de documento contam DOCUMENTO; os outros seis contam PESSOA (ver o cabeçalho da migration).
 
 
+### `fn_fila_aprovacao`
+
+```sql
+public.fn_fila_aprovacao(p_year integer, p_month integer, p_unit_id uuid DEFAULT NULL::uuid, p_employee_id uuid DEFAULT NULL::uuid, p_de date DEFAULT NULL::date, p_ate date DEFAULT NULL::date)
+  returns TABLE(justification_id uuid, employee_id uuid, employee_name text, unit_id uuid, unit_name text, reference_date date, type text, type_description text, minutes integer, text text, author_name text, created_at timestamp with time zone, can_review boolean, blocked_reason text)
+```
+
+A fila da alçada: justificativas pending sem revisão cujo fato cai na janela 21→20 da competência (util.competencia_janela), com filtros de unidade, colaborador e data (de/até, inclusivos, só estreitam). Invoker: a RLS do chamador vale. Só hr e owner recebem linha; os demais recebem vazio. can_review/blocked_reason: se o chamador pode revisar a linha agora; senão own_justification ou owner_only, na ordem de fn_revisar_justificativa — a linha bloqueada continua na fila. Chamada pelo backend como o usuário (Caminho 2).
+
+
 ### `fn_kpi_period`
 
 ```sql
@@ -3840,7 +3924,7 @@ public.fn_pending_justification(p_de date, p_ate date, p_unit_id uuid DEFAULT NU
   returns TABLE(deviation_event_id uuid, employee_id uuid, employee_name text, unit_id uuid, unit_name text, reference_date date, type text, type_description text, minutes integer, detected_at timestamp with time zone)
 ```
 
-Desvio ativo, de tipo que exige justificativa, sem nenhuma justificativa aceita. Devolve a existência da pendência, nunca o texto de justificativa nenhuma.
+Desvio ativo, de tipo que exige justificativa, que ninguém explicou: sem justificativa aceita (legada) nem pendente — esperando o RH ou aprovada. Reprovada pela alçada, volta. Devolve a existência da pendência, nunca o texto de justificativa nenhuma.
 
 
 ### `fn_publish_assistant_prompt`
@@ -3881,6 +3965,16 @@ public.fn_recurrence(p_de date, p_ate date, p_min_dias integer DEFAULT 3, p_unit
   returns TABLE(employee_id uuid, employee_name text, unit_name text, dias_com_desvio bigint, eventos bigint)
 ```
 
+### `fn_revisar_justificativa`
+
+```sql
+public.fn_revisar_justificativa(p_justification_id uuid, p_decision text, p_reason text)
+  returns uuid
+```
+
+A alçada: o RH (ou o owner) aprova ou reprova uma justificativa. Recusas P0001, nesta ordem: not_hr, justification_not_found (inexistente ou de outro tenant), own_justification (o chamador é o autor), owner_only (colaborador com approval_owner_only e chamador não owner), already_reviewed, source_is_mirror, not_pending (status não é pending), no_open_period (nenhuma competência não fechada, meses 1-12), rejection_needs_reason. A revisão vai para a competência não fechada mais antiga. Aprovar grava a revisão e move o desvio para justified na mesma transação; reprovar deixa o desvio active. Definer: checa o papel ela mesma. Devolve o id da revisão.
+
+
 ### `fn_telegram_adhesion`
 
 ```sql
@@ -3914,6 +4008,8 @@ Não são API. `security definer` com `search_path` travado, `EXECUTE` revogado 
 | `util.can_see_domain` | `p_tenant_id uuid, p_domain app.sensitive_domain` | `boolean` |
 | `util.can_see_employee` | `p_employee_id uuid` | `boolean` |
 | `util.can_see_unit` | `p_unit_id uuid` | `boolean` |
+| `util.competencia_de` | `p_date date` | `TABLE(period_year integer, period_month integer)` |
+| `util.competencia_janela` | `p_year integer, p_month integer` | `TABLE(period_start date, period_end date)` |
 | `util.enforce_benefit_cycle_immutable` | `` | `trigger` |
 | `util.enforce_benefit_entitlement_immutable` | `` | `trigger` |
 | `util.enforce_single_open_base_benefit` | `` | `trigger` |

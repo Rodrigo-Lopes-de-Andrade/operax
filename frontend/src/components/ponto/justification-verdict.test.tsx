@@ -28,59 +28,74 @@ function paint() {
 
 beforeEach(() => {
   post.mockReset();
-  post.mockResolvedValue({ justification_id: "x" });
+  post.mockResolvedValue({
+    justification_id: "x",
+    deviation_event_id: EVENT,
+    employee_name: "Ana Ribeiro",
+    reference_date: "2026-09-28",
+    status: "pending",
+  });
 });
 
-it("não deixa registrar sem motivo, nem para aceitar nem para rejeitar", async () => {
-  // Uma rejeição vazia é a decisão sem a parte que a pessoa afetada precisa ler.
+it("não deixa enviar sem motivo", async () => {
   const user = userEvent.setup();
   paint();
 
-  expect(screen.getByRole("button", { name: /Registrar/ })).toBeDisabled();
+  const send = screen.getByRole("button", { name: "Enviar justificativa" });
+  expect(send).toBeDisabled();
 
-  await user.click(screen.getByRole("radio", { name: "Rejeitar" }));
-
-  expect(screen.getByRole("button", { name: /Registrar/ })).toBeDisabled();
+  await user.type(screen.getByRole("textbox"), "ok");
+  expect(send).toBeDisabled();
   expect(post).not.toHaveBeenCalled();
 });
 
-it("o botão diz qual dos dois vereditos vai acontecer", async () => {
-  // A gravação não volta atrás: o rótulo é a última chance de ler o que se
-  // está prestes a fazer, e por isso ele não pode ser genérico.
+it("não oferece escolha de veredito — quem decide é o RH", () => {
+  // Desde a P1.2 o supervisor só explica. Um "Aceitar" aqui seria o contorno
+  // que a alçada fecha.
+  paint();
+
+  expect(screen.queryByRole("radiogroup")).toBeNull();
+  expect(screen.queryByRole("radio")).toBeNull();
+  expect(screen.queryByText(/Aceitar|Rejeitar/)).toBeNull();
+});
+
+it("manda só o texto, sem status", async () => {
+  const user = userEvent.setup();
+  paint();
+
+  await user.type(screen.getByRole("textbox"), "  Atendimento externo.  ");
+  await user.click(
+    screen.getByRole("button", { name: "Enviar justificativa" }),
+  );
+
+  expect(post).toHaveBeenCalledWith(`/ocorrencias/${EVENT}/justificativa`, {
+    method: "POST",
+    body: { text: "Atendimento externo." },
+  });
+});
+
+it("confirma que foi enviada para aprovação do RH", async () => {
   const user = userEvent.setup();
   paint();
 
   await user.type(screen.getByRole("textbox"), "Atendimento externo.");
-  expect(
-    screen.getByRole("button", { name: "Registrar aceite" }),
-  ).toBeEnabled();
+  await user.click(
+    screen.getByRole("button", { name: "Enviar justificativa" }),
+  );
 
-  await user.click(screen.getByRole("radio", { name: "Rejeitar" }));
-  expect(
-    screen.getByRole("button", { name: "Registrar rejeição" }),
-  ).toBeEnabled();
+  expect(await screen.findByRole("status")).toHaveTextContent(
+    "Justificativa enviada para aprovação do RH.",
+  );
+  expect(screen.getByRole("textbox")).toHaveValue("");
 });
 
-it("manda o veredito escolhido, não o default", async () => {
-  const user = userEvent.setup();
-  paint();
-
-  await user.click(screen.getByRole("radio", { name: "Rejeitar" }));
-  await user.type(screen.getByRole("textbox"), "Sem autorização registrada.");
-  await user.click(screen.getByRole("button", { name: "Registrar rejeição" }));
-
-  expect(post).toHaveBeenCalledWith(`/ocorrencias/${EVENT}/justificativa`, {
-    method: "POST",
-    body: { text: "Sem autorização registrada.", status: "rejected" },
-  });
-});
-
-it("nomeia quem recebe o veredito antes de ele ser dado", () => {
+it("nomeia a pessoa afetada antes do envio", () => {
   // Ação irreversível sobre uma pessoa tem de dizer o nome dela antes, não
   // depois — o drawer pode ter sido aberto de uma lista longa.
   paint();
 
   expect(screen.getByText(/na ocorrência de Ana Ribeiro/)).toBeInTheDocument();
+  expect(screen.getByText(/Não é possível editar depois/)).toBeInTheDocument();
 });
 
 it("o erro do backend chega à tela em vez de virar sucesso silencioso", async () => {
@@ -89,9 +104,12 @@ it("o erro do backend chega à tela em vez de virar sucesso silencioso", async (
   paint();
 
   await user.type(screen.getByRole("textbox"), "Atendimento externo.");
-  await user.click(screen.getByRole("button", { name: "Registrar aceite" }));
+  await user.click(
+    screen.getByRole("button", { name: "Enviar justificativa" }),
+  );
 
   expect(
-    await screen.findByText(/Não foi possível registrar/),
+    await screen.findByText(/Não foi possível enviar/),
   ).toBeInTheDocument();
+  expect(screen.queryByRole("status")).toBeNull();
 });

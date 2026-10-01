@@ -1,4 +1,4 @@
-"""O veredito sobre uma ocorrência — Caminho 2.
+"""A justificativa de uma ocorrência — Caminho 2.
 
 A LISTA DE PENDENTES **NÃO** ESTÁ AQUI, E É DE PROPÓSITO
 `public.fn_pending_justification` (migration 23) é `security invoker`, com grant
@@ -10,10 +10,14 @@ uma verificação que este arquivo teria de lembrar de fazer.
 O que precisa do backend é a escrita, e só ela.
 
 QUEM PODE NÃO É `is_admin`
-`justification_write` (migration 05) é `for insert` com check
-`util.can_see_employee(employee_id)`. É recorte diferente do da curadoria de
+Quem enxerga o evento pela RLS pode explicá-lo (a policy `justification_write`
+saiu na P1.2b, com a escrita de `authenticated`). É recorte diferente do da curadoria de
 propósito — ver `operax/motor/justificativa.py`. A autorização é ler o evento
-como o usuário: se a RLS o devolve, o veredito pode ser escrito.
+como o usuário: se a RLS o devolve, a justificativa pode ser escrita.
+
+QUEM EXPLICA NÃO DECIDE (P1.2)
+A justificativa nasce sempre `pending`. Aprovar ou reprovar é da alçada, por
+`public.fn_revisar_justificativa` — não por esta rota.
 """
 
 from __future__ import annotations
@@ -42,11 +46,11 @@ async def record_verdict(
     deviation_event_id: UUID,
     request: JustificationVerdict,
 ) -> JustificationApplied:
-    """Registra que alguém aceitou ou rejeitou a explicação de um desvio.
+    """Registra a explicação de um desvio, que nasce `pending`.
 
-    É o produtor de `rejected` que a migration 23 declarou faltar. Escreve uma
-    linha nova a cada veredito — nunca atualiza a anterior —, porque a pergunta
-    que `app.justification` responde é quem disse o quê, e quando.
+    Escreve uma linha nova a cada explicação — nunca atualiza a anterior —,
+    porque a pergunta que `app.justification` responde é quem disse o quê, e
+    quando. A decisão é da alçada (`public.fn_revisar_justificativa`).
     """
     async with user_scope(tenant) as scope:
         await scope.execute(
@@ -66,7 +70,6 @@ async def record_verdict(
                 "employee_id": str(evento["employee_id"]),
                 "reference_date": evento["reference_date"],
                 "text": request.text,
-                "status": request.status,
                 "user_id": str(tenant.user_id),
             },
         )
@@ -93,7 +96,7 @@ async def record_verdict(
                         "employee_id": str(evento["employee_id"]),
                         "reference_date": str(evento["reference_date"]),
                         "type": evento["type"],
-                        "status": request.status,
+                        "status": justificativa.STATUS_ON_WRITE,
                     }
                 ),
             },
@@ -104,5 +107,5 @@ async def record_verdict(
         deviation_event_id=deviation_event_id,
         employee_name=evento["employee_name"],
         reference_date=evento["reference_date"],
-        status=request.status,
+        status=justificativa.STATUS_ON_WRITE,
     )

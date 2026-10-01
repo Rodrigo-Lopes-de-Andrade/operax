@@ -1,6 +1,6 @@
 """`python -m operax.motor` — o que o `make motor` chama.
 
-O pacote tem quatro passos e eles rodam em ordem: `jornada` materializa o que era
+O pacote tem cinco passos e eles rodam em ordem: `jornada` materializa o que era
 esperado e `deteccao` compara as batidas contra isso. Detectar contra uma tabela
 vazia não dá zero desvio, dá zero informação — então o entrypoint faz os dois, e
 `--so-deteccao` existe para quem já rodou a jornada e está iterando na regra.
@@ -12,7 +12,7 @@ import argparse
 import sys
 
 from operax.core.db import run_cli
-from operax.motor import cadastro, deteccao, jornada, revogacao
+from operax.motor import cadastro, deteccao, feriados, jornada, revogacao
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -59,6 +59,23 @@ def main(argv: list[str] | None = None) -> int:
     if not args.sem_revogacao:
         print()
         print(revogacao.relatorio(run_cli(revogacao.run(days=args.dias, mode=mode))))
+
+    # O feriado cadastrado com atraso: a jornada acima já o materializou (ela
+    # olha 90 dias no retro), mas a detecção e a revogação olham só a semana.
+    # Sem este passo o `no_punches` que o feriado explica ficaria ativo para
+    # sempre — foi o 07/09/2026. Só o feriado escrito nos últimos dois dias
+    # (`feriados.RECENT_WRITE`), e só onde a jornada rodou.
+    if not args.so_deteccao and not args.sem_revogacao:
+        print()
+        print(
+            feriados.relatorio(
+                run_cli(
+                    feriados.run_late(
+                        jornada_days=args.dias_jornada, detection_days=args.dias, mode=mode
+                    )
+                )
+            )
+        )
     return 0
 
 

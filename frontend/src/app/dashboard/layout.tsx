@@ -8,6 +8,7 @@ import {
   loadIdentity,
   reachesComplianceReports,
   reachesHr,
+  reviewsJustifications,
 } from "@/lib/identity";
 import { LOGIN_PATH, PATHNAME_HEADER, safeNextPath } from "@/lib/navigation";
 import { getCurrentUser } from "@/lib/supabase-server";
@@ -44,6 +45,7 @@ export default async function DashboardLayout({
         showAdmin={reachesHr(identity?.role)}
         showAdminWrites={isAdmin(identity?.role)}
         showComplianceReports={reachesComplianceReports(identity?.role)}
+        showApprovals={reviewsJustifications(identity?.role)}
       >
         {children}
       </AppShell>

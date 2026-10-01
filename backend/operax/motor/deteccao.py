@@ -181,6 +181,7 @@ async def detect(
     *,
     mode: str = "shadow",
     now: datetime | None = None,
+    run_scope: str | None = None,
 ) -> RunResult:
     """Run the engine for one tenant over one window, idempotently.
 
@@ -204,7 +205,10 @@ async def detect(
                 # Derivado da janela, e não de uma flag ao lado dela: um `--dias 1`
                 # rotulado `backfill` faria `fn_detection_health` medir a cadência
                 # errada, e o rótulo é a única coisa que ela tem para olhar.
-                "scope": "incremental" if start == end else "backfill",
+                # A exceção é o reprocessamento de um dia VELHO (`feriados.py`):
+                # janela de um dia que é retroativa, e rotulá-la `incremental`
+                # esconderia um cron incremental morto atrás dela.
+                "scope": run_scope or ("incremental" if start == end else "backfill"),
             },
         )
         run = await scope.fetchone()

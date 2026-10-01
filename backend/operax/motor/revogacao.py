@@ -45,6 +45,38 @@ TASK = "motor.revogacao"
 
 REASON_VANISHED = "batida corrigida na origem: o indício não existe mais"
 REASON_SUPERSEDED = "batida corrigida na origem: o indício mudou de tamanho depois do relatório"
+REASON_HOLIDAY = "feriado cadastrado: o dia deixou de ter jornada na escala semanal"
+REASON_DAY_OFF_TO_HOLIDAY = (
+    "feriado cadastrado sobre a folga: a batida passou a ser batida em feriado"
+)
+REASON_HOLIDAY_REMOVED = "feriado desativado: o dia voltou a seguir a escala"
+
+
+def vanished_reason(day_type: str | None, deviation_type: str) -> str:
+    """Why a vanished event is being revoked, told honestly.
+
+    A holiday registered after the fact makes a whole fixed week's `no_punches`
+    vanish, and "batida corrigida na origem" would blame a punch nobody touched.
+    Three cases are the calendar's, and each says what happened:
+
+      * a shift-bound event on a day that is now `holiday` — the day stopped
+        owing a shift;
+      * `punch_on_day_off` on a day that is now `holiday` — the weekly day off
+        became a holiday, and the same punch is now `punch_on_holiday`;
+      * `punch_on_holiday` on a day that is NOT `holiday` any more — the
+        holiday was deactivated.
+
+    `punch_on_holiday` vanishing on a day that is still `holiday` is the punch
+    going away, which is the ordinary reason.
+    """
+    if deviation_type == "punch_on_holiday":
+        return REASON_VANISHED if day_type == "holiday" else REASON_HOLIDAY_REMOVED
+    if day_type == "holiday":
+        if deviation_type == "punch_on_day_off":
+            return REASON_DAY_OFF_TO_HOLIDAY
+        return REASON_HOLIDAY
+    return REASON_VANISHED
+
 
 _OPEN_RUN_SQL = """
 insert into app.detection_run
@@ -140,7 +172,10 @@ async def reconcile(
 
         await scope.execute(VANISHED_SQL, rules)
         for row in await scope.fetchall():
-            await scope.execute(_REVOKE_SQL, {"event_id": row["id"], "reason": REASON_VANISHED})
+            await scope.execute(
+                _REVOKE_SQL,
+                {"event_id": row["id"], "reason": vanished_reason(row["day_type"], row["type"])},
+            )
             revoked.append(
                 Change(
                     event_id=row["id"],

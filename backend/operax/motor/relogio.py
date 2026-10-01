@@ -30,9 +30,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
-from operax.core.tenant import SystemContext, tenant_scope
+from operax.core.tenant import SystemContext, UserScope, tenant_scope
 
 #: When a tenant has no unit at all there is no better answer than the
 #: container's own — which is what the engine did before this module existed.
@@ -74,5 +75,22 @@ async def tenant_clock(context: SystemContext) -> Clock:
     async with tenant_scope(context) as scope:
         await scope.execute(_TIMEZONE_SQL, {})
         row = await scope.fetchone()
+    return _clock(row)
+
+
+async def user_clock(scope: UserScope) -> Clock:
+    """The same clock, read inside a transaction that already runs as the user.
+
+    A route that is in a `user_scope` must not open a `tenant_scope` to learn the
+    time: it would hold one pooled connection while waiting for a second, and
+    enough concurrent requests exhaust the pool. The units come under RLS here,
+    so the answer is the tenant's only for a caller who sees every unit (owner,
+    executive, hr, personnel) — the caller's job to ensure, not this function's.
+    """
+    await scope.execute(_TIMEZONE_SQL, {"tenant_id": scope.context.tenant_id})
+    return _clock(await scope.fetchone())
+
+
+def _clock(row: dict[str, Any] | None) -> Clock:
     timezone = row["timezone"] if row else FALLBACK_TIMEZONE
     return Clock.at(timezone, datetime.now(UTC))

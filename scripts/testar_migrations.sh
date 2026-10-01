@@ -37,6 +37,15 @@ python3 scripts/96_teste_jornada.py || exit 1
 echo "--- motor de detecção"
 python3 scripts/94_teste_deteccao.py || exit 1
 
+echo "--- a justificativa sobrevive ao reprocessamento (as quatro linhas da DECISAO-ALCADA §3)"
+python3 scripts/teste_justificativa_sobrevive.py || exit 1
+
+echo "--- a justificativa pendente (P1.1: o espelho não pende, e nada vira pending retroativamente)"
+python3 scripts/82_teste_justificativa_pendente.py || exit 1
+
+echo "--- o feriado no motor (P0.3: escala semanal folga, revezamento segue, VT e revogação)"
+python3 scripts/83_teste_feriado.py || exit 1
+
 echo "--- ponte da marcação (ingestão -> domínio)"
 python3 scripts/89_teste_marcacao.py || exit 1
 
@@ -79,6 +88,17 @@ $PY_ENSAIO scripts/85_teste_ciclo_mudo.py || exit 1
 # mão provaria o `check` e mentiria sobre o acordo.
 echo "--- a porta da curadoria de justificativa (S6): sem aval, a competência não apura"
 $PY_ENSAIO scripts/84_teste_curadoria_justificativa.py || exit 1
+# O lock da alçada (P1.2) só existe entre DUAS sessões, e o `98` é uma só.
+echo "--- a revisão concorrente (P1.2): quem não alcança não espera, a segunda vê a primeira"
+$PY_ENSAIO scripts/81_teste_revisao_concorrente.py || exit 1
+# A janela 21→20 vive em Python (DP) e em SQL (fila da alçada, P1.3).
+echo "--- a janela da competência (P1.3): util.competencia_janela = dp/ciclo.py"
+$PY_ENSAIO scripts/80_teste_janela_competencia.py || exit 1
+# `detect()` inteiro, não o SQL dele: o `94` roda o statement por `psql` e
+# não alcança o run que a função abre em Python — foi por ali que um parâmetro
+# sombreado quebrou todo cron do motor com a suíte verde.
+echo "--- detect() contra o banco: o run abre, fecha e carrega o escopo certo"
+$PY_ENSAIO scripts/79_teste_detect_run.py || exit 1
 echo "--- painel de DP (contadores de alerta, janela e escopo)"
 psql -q -v ON_ERROR_STOP=1 -f scripts/87_teste_painel_dp.sql 2>&1 | grep -Ev "^(INSERT|UPDATE|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- teste de regras de alerta e cadência"

@@ -8,10 +8,17 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    AwareDatetime,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    model_validator,
+)
 
 from operax.core.tenant import UserRole
 
@@ -102,20 +109,18 @@ class JustificationRow(BaseModel):
 
 
 class JustificationVerdict(BaseModel):
-    """O veredito de quem explica um desvio.
+    """A explicação de quem responde por um desvio — só o texto.
 
-    `status` é fechado em dois valores porque o banco fecha nos mesmos desde a
-    migration 23 — recusar aqui devolve mensagem em vez de 500. Não existe
-    "pendente" como valor: pendente é a AUSÊNCIA de linha aceita, e é assim que
-    `fn_pending_justification` a calcula. Um terceiro estado gravado faria a
-    mesma pergunta ter duas respostas.
-
-    `text` é obrigatório nos dois vereditos, e no rejeitado também: uma rejeição
-    sem motivo é a decisão sem a parte que a pessoa afetada precisa ler.
+    Desde a P1.2 a justificativa nasce SEMPRE `pending`: quem explica não
+    decide. A decisão é do RH (ou do owner), por `public.fn_revisar_justificativa`.
+    O corpo deixou de ter `status`, e `extra="forbid"` faz o cliente antigo que
+    ainda o manda receber 422 em vez de ter o campo ignorado em silêncio — um
+    "aceito" descartado calado seria o supervisor achando que aprovou.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     text: str = Field(min_length=3, max_length=2000)
-    status: Literal["accepted", "rejected"]
 
 
 class JustificationApplied(BaseModel):
@@ -124,6 +129,66 @@ class JustificationApplied(BaseModel):
     employee_name: str
     reference_date: date
     status: str
+
+
+class ApprovalQueueRow(BaseModel):
+    """Uma justificativa esperando a alçada — uma linha de `public.fn_fila_aprovacao`.
+
+    `type`, `type_description` e `minutes` são nulos quando a justificativa não
+    tem desvio; a unidade é a do desvio, ou a do colaborador sem ele.
+
+    `can_review` diz se quem pediu pode revisar a linha agora. Bloqueada, ela
+    continua na fila, e `blocked_reason` é o código que a revisão devolveria —
+    a mesma regra, na mesma ordem, de `public.fn_revisar_justificativa`.
+    """
+
+    justification_id: UUID
+    employee_id: UUID
+    employee_name: str
+    unit_id: UUID | None
+    unit_name: str | None
+    reference_date: date
+    type: str | None
+    type_description: str | None
+    minutes: int | None
+    text: str
+    author_name: str | None
+    created_at: datetime
+    can_review: bool
+    blocked_reason: Literal["own_justification", "owner_only"] | None
+
+
+class ApprovalQueue(BaseModel):
+    """A fila de uma competência, com a janela que a recortou.
+
+    `period_start`/`period_end` vêm de `util.competencia_janela` — a tela mostra
+    a janela e limita as datas por estes dois, e não por uma cópia da regra.
+    """
+
+    ano: int
+    mes: int
+    period_start: date
+    period_end: date
+    rows: list[ApprovalQueueRow]
+
+
+class JustificationReviewRequest(BaseModel):
+    """A decisão do RH (ou do owner) sobre uma justificativa.
+
+    O motivo é opcional aqui e obrigatório na reprovação — quem diz isso é a RPC
+    (`rejection_needs_reason`, 422), para a regra morar num lugar só.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    decisao: Literal["approved", "rejected"]
+    motivo: str | None = Field(default=None, max_length=2000)
+
+
+class JustificationReviewApplied(BaseModel):
+    review_id: UUID
+    justification_id: UUID
+    decision: Literal["approved", "rejected"]
 
 
 class CompensationBand(BaseModel):
@@ -2303,3 +2368,50 @@ class RuleTestResult(BaseModel):
     contact_id: UUID
     contact_name: str
     queued: list[QueuedTestMessage]
+
+
+# ---------------------------------------------------------------------------
+# Calendário de feriados (P0.3) — escrita só do owner
+# ---------------------------------------------------------------------------
+HolidayJurisdiction = Literal["national", "state", "municipal"]
+
+
+class HolidayRow(BaseModel):
+    """Um feriado do tenant. Nacional não tem unidade; estadual e municipal têm uma."""
+
+    id: UUID
+    reference_date: date
+    jurisdiction: HolidayJurisdiction
+    unit_id: UUID | None
+    unit_name: str | None
+    name: str
+    active: bool
+
+
+class HolidayCreate(BaseModel):
+    """Um feriado novo. Estadual e municipal valem para UMA unidade: a unidade não
+    carrega cidade nem UF, então feriado local é uma linha por unidade atingida."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reference_date: date
+    jurisdiction: HolidayJurisdiction
+    unit_id: UUID | None = None
+    #: Gravado sem espaço nas pontas: "Finados " e "Finados" seriam dois nomes
+    #: na tela para o mesmo dia.
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+
+    @model_validator(mode="after")
+    def _national_has_no_unit(self) -> HolidayCreate:
+        # O mesmo `check` de `app.holiday`, dito em 422 antes de chegar ao banco.
+        if (self.jurisdiction == "national") != (self.unit_id is None):
+            raise ValueError("feriado nacional não tem unidade; estadual e municipal têm uma")
+        return self
+
+
+class HolidayUpdate(BaseModel):
+    """Feriado não se apaga: desativa-se. A linha explica os indícios que revogou."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    active: bool

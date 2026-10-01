@@ -211,6 +211,16 @@ evento as (
     where coalesce(c.active, true) and f.day_type = 'day_off' and f.punches > 0
 
     union all
+    -- Punched on a holiday. Only a fixed week ever materialises `holiday`
+    -- (`jornada.py`), so a rotation that works the holiday never lands here —
+    -- the owner's decision of 2026-09-28: that is the roster, not an indication.
+    select f.employee_id, f.reference_date, f.company_id, f.unit_id, f.punch_ids,
+           'punch_on_holiday', f.worked_minutes, null::time, f.first_punch
+    from fato f
+    left join cfg c on c.code = 'punch_on_holiday'
+    where coalesce(c.active, true) and f.day_type = 'holiday' and f.punches > 0
+
+    union all
     -- A working day with no punch at all. Requires a declared workload: see the
     -- module docstring — you cannot miss a shift nobody could describe.
     select f.employee_id, f.reference_date, f.company_id, f.unit_id, f.punch_ids,
@@ -347,6 +357,43 @@ select %(tenant_id)s::uuid, e.employee_id, e.company_id, e.unit_id, e.reference_
        e.type, e.minutes, e.expected_time, e.actual_time, e.punch_ids,
        %(mode)s, %(run_id)s::uuid
 from evento e
+-- What was judged is not re-created. The unique indexes below are partial on
+-- `status = 'active'`, so once an event leaves `active` as `justified` there is
+-- nothing left to conflict with, and the next run would insert a fresh `active`
+-- row for the same fact — the explained deviation back in the queue as if nobody
+-- had looked (DECISAO-ALCADA-APROVACAO §3). The fix belongs here, at the source
+-- of the insert, and not in the indexes: the grain stays as migration 18 wrote it.
+-- Only an accepted verdict on an event that LEFT `active` as `justified` stops
+-- the insert. An accepted justification on an event still `active` — what the
+-- justification route leaves today — must keep falling into the `do update`
+-- below: suppressing it would freeze the row at the size it was justified at,
+-- and a later punch change would vanish from the dashboard with no revocation
+-- noticing, because the row still matches `evento`. The same condition keeps
+-- a revoked event that reappears, and a superseding row, reachable.
+-- Same mode, because mode is part of the grain: a verdict on a shadow event
+-- speaks for that event, not for the production one. Only this statement: the
+-- revoker reads `evento` unfiltered and must keep seeing every fact.
+-- "Accepted" has two spellings since the approval chain (P1.2): the legacy
+-- `status = 'accepted'`, and a `pending` justification with an `approved` row
+-- in `app.justification_review` — the justification is immutable, so approval
+-- is a new fact, not an edit. Pending without review, or rejected, is not a
+-- verdict and must not freeze anything.
+where not exists (
+    select 1
+    from app.justification j
+    join app.deviation_event j_event on j_event.id = j.deviation_event_id
+    where j.tenant_id = %(tenant_id)s
+      and (j.status = 'accepted'
+           or exists (select 1
+                      from app.justification_review r
+                      where r.justification_id = j.id
+                        and r.decision = 'approved'))
+      and j_event.status = 'justified'
+      and j_event.employee_id = e.employee_id
+      and j_event.reference_date = e.reference_date
+      and j_event.type = e.type
+      and j_event.mode = %(mode)s
+)
 -- Re-running the same window rewrites the same row instead of adding one. The
 -- index behind this covers both modes since migration 18; before it, shadow had
 -- no uniqueness and a second run of the same week doubled every event.
@@ -364,14 +411,21 @@ where app.deviation_event.report_cycle_id is null
 """
 )
 
-#: The deviation stopped existing: the punch was corrected at the source. The
-#: engine cannot notice this by writing — an insert has nothing to say about a
-#: row that should no longer be there — so it is asked as a question.
+#: The deviation stopped existing: the punch was corrected at the source, or the
+#: day stopped owing a shift. The engine cannot notice this by writing — an
+#: insert has nothing to say about a row that should no longer be there — so it
+#: is asked as a question. `day_type` is today's expectation for the day, and it
+#: is what lets the revoker say "a holiday was registered" instead of blaming
+#: a punch nobody corrected.
 VANISHED_SQL = (
     EVENTS_SQL
     + """
-select d.id, d.type, d.reference_date, d.employee_id, d.minutes
+select d.id, d.type, d.reference_date, d.employee_id, d.minutes, w.day_type
 from app.deviation_event d
+left join app.expected_workday w
+       on w.tenant_id = d.tenant_id
+      and w.employee_id = d.employee_id
+      and w.reference_date = d.reference_date
 where d.tenant_id = %(tenant_id)s
   and d.mode = %(mode)s
   and d.status = 'active'

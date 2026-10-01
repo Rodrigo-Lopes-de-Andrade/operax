@@ -69,7 +69,7 @@ dado sustenta. Faltam 2.
 | 7 | Marcação incompleta | ✅ | `incomplete_punches` |
 | 8 | Com horas extras | ✅ | direção `surplus` |
 | 9 | Com horas faltantes | ✅ | direção `shortfall` |
-| 10 | Ocorrências pendentes de justificativa | ✅ | `deviation_type_config.requires_justification` + `justification.status` + `fn_pending_justification` (migration 23). O veredito ganhou produtor em 26/08 — `POST /ocorrencias/{id}/justificativa`, autorizado pela policy `justification_write` (quem enxerga a pessoa), não por `is_admin`. A **fila** ganhou tela em 27/08: `/dashboard/justificativas`, lendo a função pelo Caminho 1 |
+| 10 | Ocorrências pendentes de justificativa | ✅ | `deviation_type_config.requires_justification` + `justification.status` + `fn_pending_justification` (migration 23). O veredito ganhou produtor em 26/08 — `POST /ocorrencias/{id}/justificativa`, autorizado lendo o evento como o usuário (quem enxerga a pessoa), não por `is_admin`; a gravação é do backend, e a policy `justification_write` saiu na P1.2b. A **fila** ganhou tela em 27/08: `/dashboard/justificativas`, lendo a função pelo Caminho 1 |
 | 11 | **Saldo consolidado de horas** | ❌ | Banco de horas não é modelado. Aparece também em 4.4 e 4.8 |
 | 12 | Evolução das ocorrências por período | ✅ | `vw_deviation_daily_trend` |
 | 13 | Comparação entre unidades | ✅ | `fn_ranking_by_unit` |

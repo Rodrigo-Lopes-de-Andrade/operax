@@ -465,7 +465,9 @@ def compute_transport_cycle(
 
         inicio, fim = _vinculo_na_janela(employee, window_start, window_end)
         dias = schedule.get(employee_id, {})
-        days_base = sum(1 for dia, tipo in dias.items() if tipo == "work" and inicio <= dia <= fim)
+        days_base = sum(
+            1 for dia, tipo in dias.items() if tipo in TRANSPORT_DAY_TYPES and inicio <= dia <= fim
+        )
         absences_prior = len(absence_days.get(employee_id, set()))
         # ⛔ A subtração é literal. O piso em zero é o único acréscimo, e ele
         #    existe porque as faltas são contadas num mês DIFERENTE do dos dias
@@ -521,7 +523,14 @@ def business_days_in(schedule: Mapping[UUID, Mapping[date, str]]) -> int:
     "dia útil": duas definições divergem, e a que aparece no cabeçalho seria a
     que ninguém confere.
     """
-    return len({dia for dias in schedule.values() for dia, tipo in dias.items() if tipo == "work"})
+    return len(
+        {
+            dia
+            for dias in schedule.values()
+            for dia, tipo in dias.items()
+            if tipo in TRANSPORT_DAY_TYPES
+        }
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -544,12 +553,33 @@ _EMPLOYEES_SQL = """
     order by e.name
 """
 
+#: Feriado em que a pessoa bateu ponto conta para o VT: ela se deslocou (dono,
+#: 28/09/2026). `holiday_worked` não existe no banco — nasce aqui, e só para o
+#: VT. "Bateu" é o critério do detector: `hora` preenchida e não desconsiderada.
+#: Só a semana fixa tem `holiday`; o revezamento no feriado já chega como `work`.
 _SCHEDULE_SQL = """
-    select w.employee_id, w.reference_date, w.day_type
+    select w.employee_id, w.reference_date,
+           case when w.day_type = 'holiday' and exists (
+                  select 1
+                  from app.employee e
+                  join secullum."Funcionario" f
+                    on f.tenant_id = e.tenant_id
+                   and f."FuncionarioId" = e.secullum_employee_id
+                  join app.batida_marcacao m
+                    on m.tenant_id = f.tenant_id and m.funcionario_id = f.id
+                  where e.id = w.employee_id and e.tenant_id = w.tenant_id
+                    and m.data = w.reference_date
+                    and m.hora is not null and not m.desconsiderada)
+                then 'holiday_worked'
+                else w.day_type end as day_type
     from app.expected_workday w
     where w.tenant_id = %(tenant_id)s
       and w.reference_date between %(window_start)s::date and %(window_end)s::date
 """
+
+#: O que é "dia de deslocamento" para o VT — uma definição só, lida pelos dias
+#: base e pelo cabeçalho (o docstring de `business_days_in` exige isso).
+TRANSPORT_DAY_TYPES = frozenset({"work", "holiday_worked"})
 
 # `bt.code` chega ligado, nunca interpolado: o `kind` do ciclo É o `code` da
 # verba, e os dois literais vêm da SPEC.

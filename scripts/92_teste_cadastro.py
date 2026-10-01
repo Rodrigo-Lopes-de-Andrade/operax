@@ -239,6 +239,11 @@ delete from app.unit_secullum_map where tenant_id = '{TENANT}' and secullum_depa
 update app.employee set exception_tracking = true
  where tenant_id = '{TENANT}' and secullum_employee_id = 7302;
 
+-- E alguém declarou que o desvio do Bruno só o owner aprova (P1.2): mesma
+-- classe de decisão humana, e a mesma sincronização por cima dela.
+update app.employee set approval_owner_only = true
+ where tenant_id = '{TENANT}' and secullum_employee_id = 7302;
+
 {COMPANIES};
 {DEPARTMENTS};
 {MANAGERS};
@@ -261,6 +266,9 @@ do $$ begin
   --    trinta minutos, sem erro nenhum e sem ninguém ver.
   perform pg_temp.assert_eq('quem foi tirado do motor continua fora depois da promoção',
     (select exception_tracking::text from app.employee
+      where tenant_id = '{TENANT}' and secullum_employee_id = 7302), 'true');
+  perform pg_temp.assert_eq('quem só o owner aprova continua assim depois da promoção',
+    (select approval_owner_only::text from app.employee
       where tenant_id = '{TENANT}' and secullum_employee_id = 7302), 'true');
 end $$;
 

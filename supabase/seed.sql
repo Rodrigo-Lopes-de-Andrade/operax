@@ -559,8 +559,8 @@ on conflict (id) do nothing;
 -- Justificativa só onde o evento já foi tratado como justificado. Justificativa
 -- solta, sem evento, seria um estado que o produto não produz.
 insert into app.justification (
-  id, tenant_id, deviation_event_id, employee_id, reference_date, text, source,
-  author_user_id, author_name
+  id, tenant_id, deviation_event_id, employee_id, reference_date, text, status,
+  source, author_user_id, author_name
 )
 select md5('operax-dev-justification-' || d.id::text)::uuid,
        d.tenant_id, d.id, d.employee_id, d.reference_date,
@@ -568,6 +568,9 @@ select md5('operax-dev-justification-' || d.id::text)::uuid,
               'Atestado entregue ao departamento pessoal.',
               'Autorizado pelo gestor da unidade.',
               'Falha do relógio de ponto na entrada.'])[1 + get_byte(decode(md5(d.id::text), 'hex'), 0) % 4],
+       -- Explícito: o default é `pending` desde a alcada_justification_pending,
+       -- e o motor só respeita `justified` com justificativa `accepted`.
+       'accepted',
        'operax',
        'dede0000-0000-0000-0000-0000000000f3',
        'Dev Supervisor Norte'
@@ -590,6 +593,7 @@ declare
   v_sensivel bigint;
   v_alerta   bigint;
   v_sem_justificativa bigint;
+  v_justificado_sem_aceita bigint;
 begin
   select count(*) into v_eventos
     from app.deviation_event
@@ -655,6 +659,17 @@ begin
                      where j.deviation_event_id = d.id and j.status = 'accepted');
   if v_sem_justificativa = 0 then
     raise exception 'seed sem pendente de justificativa — a fila de /dashboard/justificativas nasce vazia e ninguém a confere';
+  end if;
+
+  -- Evento `justified` sem justificativa `accepted` é desvio julgado que o
+  -- motor reabre como `active` na próxima rodada.
+  select count(*) into v_justificado_sem_aceita
+    from app.deviation_event d
+   where d.tenant_id = v_tenant and d.status = 'justified'
+     and not exists (select 1 from app.justification j
+                     where j.deviation_event_id = d.id and j.status = 'accepted');
+  if v_justificado_sem_aceita > 0 then
+    raise exception 'seed deixou % evento(s) justified sem justificativa accepted — o motor os reabriria como active', v_justificado_sem_aceita;
   end if;
 
   raise notice 'seed fastpark-dev: % desvios em produção, % pendentes de ciclo, % em sombra, % vínculos divergentes, % faixas de remuneração, % pendentes de justificativa',

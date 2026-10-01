@@ -1964,6 +1964,1255 @@ end $$;
 
 reset role;
 
+-- ---------------------------------------------------------------------------
+\echo '--- Calendário de feriados (P0.3): lê quem vê o tenant e a unidade; escreve só o owner'
+-- ---------------------------------------------------------------------------
+-- Policy aprovada pelo dono em 28/09/2026. `app.holiday` não tem grant para
+-- `authenticated` (Caminho 2), então a policy é avaliada como está no catálogo,
+-- com `pg_temp.policy_says_on`, na sessão de cada papel. Cada negativo tem o
+-- seu positivo: sem ele, um "não lê" ficaria verde numa policy que não deixa
+-- ninguém ler.
+insert into app.holiday (tenant_id, reference_date, jurisdiction, unit_id, name) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', '2026-09-07', 'national',  null,
+   'Independência A'),
+  ('aaaaaaaa-0000-0000-0000-000000000001', '2026-11-20', 'municipal',
+   'a0000000-0000-0000-0000-0000000000a2', 'Municipal de A Norte'),
+  ('bbbbbbbb-0000-0000-0000-000000000002', '2026-09-07', 'national',  null,
+   'Independência B');
+
+do $$ begin
+  perform pg_temp.assert_eq('os 3 feriados foram semeados (o negativo não é vácuo)',
+    (select count(*) from app.holiday), 3);
+  perform pg_temp.assert_eq('authenticated não tem verbo nenhum em app.holiday',
+    (select count(*) from unnest(array['SELECT','INSERT','UPDATE','DELETE']) v
+      where has_table_privilege('authenticated', 'app.holiday', v)), 0);
+  perform pg_temp.assert_eq('anon idem em app.holiday',
+    (select count(*) from unnest(array['SELECT','INSERT','UPDATE','DELETE']) v
+      where has_table_privilege('anon', 'app.holiday', v)), 0);
+  perform pg_temp.assert_eq('service_role LÊ e GRAVA app.holiday (o motor e a API existem)',
+    (select count(*) from unnest(array['SELECT','INSERT','UPDATE']) v
+      where has_table_privilege('service_role', 'app.holiday', v)), 3);
+  perform pg_temp.assert_eq('e NÃO apaga (feriado sai com active = false)',
+    case when has_table_privilege('service_role', 'app.holiday', 'DELETE') then 1 else 0 end, 0);
+end $$;
+
+set local role authenticated;
+
+-- --- owner de A: lê e escreve A, nada de B ------------------------------------
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform pg_temp.assert_eq('owner A lê o feriado nacional de A',
+    pg_temp.policy_says_on('holiday', 'holiday_read',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null), 1);
+  perform pg_temp.assert_eq('owner A lê o municipal de A Norte',
+    pg_temp.policy_says_on('holiday', 'holiday_read',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, 'a0000000-0000-0000-0000-0000000000a2'), 1);
+  perform pg_temp.assert_eq('owner A NÃO lê o feriado de B',
+    pg_temp.policy_says_on('holiday', 'holiday_read',
+      'bbbbbbbb-0000-0000-0000-000000000002', null, null), 0);
+  perform pg_temp.assert_eq('owner A ESCREVE o calendário de A (with check)',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_insert',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null, 'with_check'), 1);
+  perform pg_temp.assert_eq('owner A NÃO escreve o calendário de B',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_insert',
+      'bbbbbbbb-0000-0000-0000-000000000002', null, null, 'with_check'), 0);
+  -- O positivo do `using` do update: sem ele, um `using (... and false)` deixaria
+  -- verdes todos os "não alcança linha para alterar" abaixo.
+  perform pg_temp.assert_eq('owner A ALCANÇA a linha de A para alterar (using do update)',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_update',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null), 1);
+  perform pg_temp.assert_eq('e grava a alteração (with check do update)',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_update',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null, 'with_check'), 1);
+  perform pg_temp.assert_eq('owner A NÃO alcança a linha de B para alterar',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_update',
+      'bbbbbbbb-0000-0000-0000-000000000002', null, null), 0);
+  perform pg_temp.assert_eq('app.holiday não tem policy de DELETE nem FOR ALL',
+    (select count(*) from pg_policies
+      where schemaname = 'app' and tablename = 'holiday' and cmd in ('DELETE', 'ALL')), 0);
+end $$;
+
+-- --- supervisor de A Centro: lê o nacional e a unidade dele, não escreve -----
+set local request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+do $$ begin
+  perform pg_temp.assert_eq('supervisor lê o nacional do tenant dele',
+    pg_temp.policy_says_on('holiday', 'holiday_read',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null), 1);
+  perform pg_temp.assert_eq('supervisor lê o feriado local da unidade DELE (A Centro)',
+    pg_temp.policy_says_on('holiday', 'holiday_read',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, 'a0000000-0000-0000-0000-0000000000a1'), 1);
+  perform pg_temp.assert_eq('supervisor NÃO lê o municipal de A Norte',
+    pg_temp.policy_says_on('holiday', 'holiday_read',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, 'a0000000-0000-0000-0000-0000000000a2'), 0);
+  perform pg_temp.assert_eq('supervisor NÃO escreve o calendário',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_insert',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null, 'with_check'), 0);
+end $$;
+
+-- --- DP (personnel) e RH (hr): são admin e NÃO são owner ---------------------
+-- O par que prova que o eixo é `owner` e não `util.is_admin`: os dois passam no
+-- `is_admin` (positivo) e mesmo assim não escrevem (negativo).
+set local request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+do $$ begin
+  perform pg_temp.assert_eq('DP é admin do tenant A',
+    case when util.is_admin('aaaaaaaa-0000-0000-0000-000000000001') then 1 else 0 end, 1);
+  perform pg_temp.assert_eq('DP lê o calendário de A',
+    pg_temp.policy_says_on('holiday', 'holiday_read',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, 'a0000000-0000-0000-0000-0000000000a2'), 1);
+  perform pg_temp.assert_eq('e DP NÃO escreve o calendário (não é owner)',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_insert',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null, 'with_check'), 0);
+  perform pg_temp.assert_eq('nem alcança linha para alterar (using do update)',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_update',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null), 0);
+  perform pg_temp.assert_eq('nem grava o que alterasse (with check do update)',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_update',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null, 'with_check'), 0);
+end $$;
+
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ begin
+  perform pg_temp.assert_eq('RH é admin do tenant A',
+    case when util.is_admin('aaaaaaaa-0000-0000-0000-000000000001') then 1 else 0 end, 1);
+  perform pg_temp.assert_eq('RH lê o calendário de A',
+    pg_temp.policy_says_on('holiday', 'holiday_read',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null), 1);
+  perform pg_temp.assert_eq('e RH NÃO escreve o calendário (não é owner)',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_insert',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null, 'with_check'), 0);
+end $$;
+
+-- --- owner de B: o espelho do owner de A -------------------------------------
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_eq('owner B lê o feriado de B',
+    pg_temp.policy_says_on('holiday', 'holiday_read',
+      'bbbbbbbb-0000-0000-0000-000000000002', null, null), 1);
+  perform pg_temp.assert_eq('owner B NÃO lê o feriado de A',
+    pg_temp.policy_says_on('holiday', 'holiday_read',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null), 0);
+  perform pg_temp.assert_eq('owner B NÃO lê o municipal de A Norte',
+    pg_temp.policy_says_on('holiday', 'holiday_read',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, 'a0000000-0000-0000-0000-0000000000a2'), 0);
+  perform pg_temp.assert_eq('owner B escreve o calendário de B',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_insert',
+      'bbbbbbbb-0000-0000-0000-000000000002', null, null, 'with_check'), 1);
+  perform pg_temp.assert_eq('owner B NÃO escreve o calendário de A',
+    pg_temp.policy_says_on('holiday', 'holiday_owner_insert',
+      'aaaaaaaa-0000-0000-0000-000000000001', null, null, 'with_check'), 0);
+end $$;
+
+reset request.jwt.claim.sub;
+reset role;
+
+-- ---------------------------------------------------------------------------
+\echo '--- Alçada (P1.2): a revisão só entra pela RPC, e a RPC checa o papel'
+-- ---------------------------------------------------------------------------
+-- `public.fn_revisar_justificativa`, aprovada pelo dono em 29/09/2026. Cada
+-- recusa tem ao lado o positivo que a separa de "a RPC recusa tudo":
+--   not_hr (supervisor)             x  hr devolve id
+--   owner_only (hr, marcado)        x  owner devolve id no marcado; hr no não marcado
+--   already_reviewed                x  a primeira revisão entrou (count = 1)
+--   source_is_mirror                x  a mesma chamada, com source operax, passa
+--   no_open_period (B sem aberta)   x  A com aberta devolve id
+--   rejection_needs_reason          x  com motivo, devolve id e o desvio fica active
+--   justification_not_found         x  o dono do tenant certo alcança a mesma linha
+insert into app.employee (id, tenant_id, company_id, unit_id, name, approval_owner_only) values
+  ('a0000000-0000-0000-0000-0000000000c3', 'aaaaaaaa-0000-0000-0000-000000000001',
+   'a0000000-0000-0000-0000-0000000000e1', 'a0000000-0000-0000-0000-0000000000a1',
+   'Analista RH A Centro', true);
+
+insert into app.deviation_event (id, tenant_id, employee_id, company_id, unit_id, reference_date, type, minutes, mode) values
+  ('a0000000-0000-0000-0000-00000000ad05','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c3','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a1','2026-08-10','late_entry',-12,'production'),
+  ('a0000000-0000-0000-0000-00000000ad06','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c1','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a1','2026-08-12','late_exit',30,'production');
+
+insert into app.justification (id, tenant_id, deviation_event_id, employee_id, reference_date, text, status, source) values
+  ('a0000000-0000-0000-0000-00000000f101','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-00000000ad01','a0000000-0000-0000-0000-0000000000c1','2026-08-10','Consulta medica','pending','operax'),
+  ('a0000000-0000-0000-0000-00000000f102','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-00000000ad02','a0000000-0000-0000-0000-0000000000c2','2026-08-10','Transito','pending','operax'),
+  ('a0000000-0000-0000-0000-00000000f103','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-00000000ad05','a0000000-0000-0000-0000-0000000000c3','2026-08-10','Reuniao externa','pending','operax'),
+  ('a0000000-0000-0000-0000-00000000f104','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2026-08-10','Abono da origem','accepted','secullum'),
+  ('b0000000-0000-0000-0000-00000000f105','bbbbbbbb-0000-0000-0000-000000000002','b0000000-0000-0000-0000-00000000ad04','b0000000-0000-0000-0000-0000000000c1','2026-08-10','Justificativa B','pending','operax'),
+  ('a0000000-0000-0000-0000-00000000f106','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-00000000ad06','a0000000-0000-0000-0000-0000000000c1','2026-08-12','Saida tardia combinada','pending','operax');
+
+-- A: uma fechada, e DUAS abertas — a revisão vai para a mais antiga aberta.
+-- B: nenhuma aberta (no_open_period).
+insert into app.payroll_period (id, tenant_id, year, month, status) values
+  ('a0000000-0000-0000-0000-00000000e208','aaaaaaaa-0000-0000-0000-000000000001',2026,8,'fechada'),
+  ('a0000000-0000-0000-0000-00000000e209','aaaaaaaa-0000-0000-0000-000000000001',2026,9,'aberta'),
+  ('a0000000-0000-0000-0000-00000000e210','aaaaaaaa-0000-0000-0000-000000000001',2026,10,'aberta'),
+  ('b0000000-0000-0000-0000-00000000e209','bbbbbbbb-0000-0000-0000-000000000002',2026,9,'fechada');
+
+update app.deviation_type_config set requires_justification = true
+ where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001' and code in ('late_entry','late_exit');
+
+-- Uma chamada, e o que ela respondeu: o código da recusa, ou 'ok'.
+create or replace function pg_temp.revisa(p_id uuid, p_decision text, p_reason text)
+returns text language plpgsql as $$
+begin
+  perform public.fn_revisar_justificativa(p_id, p_decision, p_reason);
+  return 'ok';
+exception when sqlstate 'P0001' then return sqlerrm;
+end $$;
+
+create or replace function pg_temp.assert_txt(rotulo text, obtido text, esperado text)
+returns void language plpgsql as $$
+begin
+  if obtido is distinct from esperado then
+    raise exception 'FALHA [%]: esperado %, obtido %', rotulo, esperado, obtido;
+  end if;
+  raise notice '  ok  % (%)', rotulo, obtido;
+end $$;
+
+do $$ begin
+  perform pg_temp.assert_eq('authenticated NÃO executa app.revoke_deviation (a porta sem papel fechou)',
+    case when has_function_privilege('authenticated', 'app.revoke_deviation(uuid,text,text)', 'execute')
+         then 1 else 0 end, 0);
+  perform pg_temp.assert_eq('authenticated EXECUTA public.fn_revisar_justificativa',
+    case when has_function_privilege('authenticated', 'public.fn_revisar_justificativa(uuid,text,text)', 'execute')
+         then 1 else 0 end, 1);
+  perform pg_temp.assert_eq('anon NÃO executa public.fn_revisar_justificativa',
+    case when has_function_privilege('anon', 'public.fn_revisar_justificativa(uuid,text,text)', 'execute')
+         then 1 else 0 end, 0);
+  perform pg_temp.assert_eq('o motor (postgres) continua executando app.revoke_deviation',
+    case when has_function_privilege('postgres', 'app.revoke_deviation(uuid,text,text)', 'execute')
+         then 1 else 0 end, 1);
+  perform pg_temp.assert_eq('authenticated não escreve app.justification_review (só lê)',
+    (select count(*) from unnest(array['INSERT','UPDATE','DELETE']) v
+      where has_table_privilege('authenticated', 'app.justification_review', v)), 0);
+end $$;
+
+set local role authenticated;
+
+-- --- supervisor de A Centro: enxerga a pessoa e NÃO revisa -----------------
+set local request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+do $$ begin
+  perform pg_temp.assert_eq('supervisor ENXERGA a justificativa de A Centro (a recusa não é de escopo)',
+    (select count(*) from app.justification where id = 'a0000000-0000-0000-0000-00000000f101'), 1);
+  perform pg_temp.assert_txt('supervisor revisando recebe not_hr',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f101', 'approved', null), 'not_hr');
+  -- A porta antiga: a RLS de update do desvio não é o que barra — o EXECUTE é.
+  begin
+    perform app.revoke_deviation('a0000000-0000-0000-0000-00000000ad01', 'contorno', 'justified');
+    raise exception 'FALHA: supervisor executou app.revoke_deviation';
+  exception when insufficient_privilege then
+    raise notice '  ok  supervisor não chama app.revoke_deviation (permission denied)';
+  end;
+end $$;
+
+-- --- RH de A ------------------------------------------------------------------
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ begin
+  perform pg_temp.assert_txt('RH aprova a justificativa de colaborador não marcado',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f101', 'approved', null), 'ok');
+  perform pg_temp.assert_txt('segunda revisão da mesma: already_reviewed',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f101', 'rejected', 'mudei de ideia'),
+    'already_reviewed');
+  perform pg_temp.assert_txt('RH revisando colaborador do RH (approval_owner_only): owner_only',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f103', 'approved', null), 'owner_only');
+  perform pg_temp.assert_txt('justificativa espelhada do Secullum: source_is_mirror',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f104', 'approved', null), 'source_is_mirror');
+  perform pg_temp.assert_txt('reprovar sem motivo: rejection_needs_reason',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f102', 'rejected', '   '),
+    'rejection_needs_reason');
+  perform pg_temp.assert_txt('reprovar com motivo passa',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f102', 'rejected', 'Sem comprovante'), 'ok');
+  perform pg_temp.assert_txt('RH de A com id de B: justification_not_found',
+    pg_temp.revisa('b0000000-0000-0000-0000-00000000f105', 'approved', null),
+    'justification_not_found');
+  perform pg_temp.assert_txt('id inexistente: justification_not_found (a mesma resposta)',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000ffff', 'approved', null),
+    'justification_not_found');
+end $$;
+
+-- --- owner de A: aprova o marcado ---------------------------------------------
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform pg_temp.assert_txt('owner aprova a justificativa do colaborador marcado',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f103', 'approved', null), 'ok');
+end $$;
+
+-- --- owner de B: tenant sem competência aberta --------------------------------
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_txt('owner B alcança a justificativa de B — e B não tem aberta: no_open_period',
+    pg_temp.revisa('b0000000-0000-0000-0000-00000000f105', 'approved', null), 'no_open_period');
+  perform pg_temp.assert_txt('owner B com id de A: justification_not_found',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f106', 'approved', null),
+    'justification_not_found');
+end $$;
+
+reset request.jwt.claim.sub;
+reset role;
+
+-- --- o que as chamadas deixaram -----------------------------------------------
+do $$ begin
+  perform pg_temp.assert_eq('a justificativa revisada duas vezes tem UMA revisão',
+    (select count(*) from app.justification_review
+      where justification_id = 'a0000000-0000-0000-0000-00000000f101'), 1);
+  perform pg_temp.assert_eq('aprovar gravou approved, pelo RH, na mais antiga aberta (2026/09)',
+    (select count(*) from app.justification_review
+      where justification_id = 'a0000000-0000-0000-0000-00000000f101'
+        and decision = 'approved'
+        and reviewed_by = '55555555-5555-5555-5555-555555555555'
+        and payroll_period_id = 'a0000000-0000-0000-0000-00000000e209'), 1);
+  perform pg_temp.assert_txt('aprovar moveu o desvio para justified',
+    (select status from app.deviation_event where id = 'a0000000-0000-0000-0000-00000000ad01'),
+    'justified');
+  perform pg_temp.assert_txt('a justificativa aprovada continua pending (imutável)',
+    (select status from app.justification where id = 'a0000000-0000-0000-0000-00000000f101'),
+    'pending');
+  perform pg_temp.assert_txt('reprovar deixou o desvio active',
+    (select status from app.deviation_event where id = 'a0000000-0000-0000-0000-00000000ad02'),
+    'active');
+  perform pg_temp.assert_eq('e gravou a revisão rejected com o motivo',
+    (select count(*) from app.justification_review
+      where justification_id = 'a0000000-0000-0000-0000-00000000f102'
+        and decision = 'rejected' and reason = 'Sem comprovante'), 1);
+  perform pg_temp.assert_txt('o owner moveu o desvio do marcado para justified',
+    (select status from app.deviation_event where id = 'a0000000-0000-0000-0000-00000000ad05'),
+    'justified');
+  perform pg_temp.assert_eq('as recusas não gravaram nada: espelho, B e o marcado pelo RH',
+    (select count(*) from app.justification_review
+      where justification_id in ('a0000000-0000-0000-0000-00000000f104',
+                                 'b0000000-0000-0000-0000-00000000f105')), 0);
+  perform pg_temp.assert_eq('o marcado tem só a revisão do owner',
+    (select count(*) from app.justification_review
+      where justification_id = 'a0000000-0000-0000-0000-00000000f103'
+        and reviewed_by = '11111111-1111-1111-1111-111111111111'), 1);
+end $$;
+
+-- --- atomicidade: a revisão não fica se o desvio não se move -------------------
+savepoint prova_da_atomicidade;
+
+create function app.p12_boom() returns trigger language plpgsql as $$
+begin
+  raise exception 'p12_boom: update de deviation_event barrado';
+end $$;
+create trigger p12_boom before update on app.deviation_event
+  for each row execute function app.p12_boom();
+
+set local role authenticated;
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$
+declare v_err text;
+begin
+  begin
+    perform public.fn_revisar_justificativa('a0000000-0000-0000-0000-00000000f106', 'approved', null);
+    v_err := null;
+  exception when others then v_err := sqlerrm;
+  end;
+  perform pg_temp.assert_txt('a aprovação falhou NO UPDATE do desvio (depois do insert da revisão)',
+    coalesce(v_err, 'sucesso'), 'p12_boom: update de deviation_event barrado');
+end $$;
+reset request.jwt.claim.sub;
+reset role;
+
+do $$ begin
+  perform pg_temp.assert_eq('e a revisão NÃO ficou: aprovar é uma transação só',
+    (select count(*) from app.justification_review
+      where justification_id = 'a0000000-0000-0000-0000-00000000f106'), 0);
+  perform pg_temp.assert_txt('e o desvio continua active',
+    (select status from app.deviation_event where id = 'a0000000-0000-0000-0000-00000000ad06'),
+    'active');
+end $$;
+
+rollback to savepoint prova_da_atomicidade;
+
+-- --- leitura: review_read ------------------------------------------------------
+set local role authenticated;
+
+set local request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+do $$ begin
+  perform pg_temp.assert_eq('supervisor de A Centro LÊ a revisão de A Centro',
+    (select count(*) from app.justification_review
+      where justification_id = 'a0000000-0000-0000-0000-00000000f101'), 1);
+  perform pg_temp.assert_eq('supervisor de A Centro NÃO lê a revisão de A Norte',
+    (select count(*) from app.justification_review
+      where justification_id = 'a0000000-0000-0000-0000-00000000f102'), 0);
+end $$;
+
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform pg_temp.assert_eq('owner A lê as três revisões de A',
+    (select count(*) from app.justification_review), 3);
+  -- A fila do supervisor enxerga a alçada: reprovada volta, pendente e
+  -- aprovada saem.
+  perform pg_temp.assert_eq('reprovada volta à fila (fn_pending_justification)',
+    (select count(*) from public.fn_pending_justification('2026-08-01', '2026-08-31')
+      where deviation_event_id = 'a0000000-0000-0000-0000-00000000ad02'), 1);
+  perform pg_temp.assert_eq('pendente esperando o RH sai da fila',
+    (select count(*) from public.fn_pending_justification('2026-08-01', '2026-08-31')
+      where deviation_event_id = 'a0000000-0000-0000-0000-00000000ad06'), 0);
+end $$;
+
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_eq('owner B NÃO lê revisão de A',
+    (select count(*) from app.justification_review), 0);
+end $$;
+
+reset request.jwt.claim.sub;
+reset role;
+
+-- ---------------------------------------------------------------------------
+\echo '--- Alçada (P1.2, ciclo 1): competência não fechada, not_pending e own_justification'
+-- ---------------------------------------------------------------------------
+-- Decisões do dono de 29/09/2026 sobre a reprovação da P1.2:
+--   ALTO-1   a revisão vai para a competência NÃO FECHADA mais antiga (meses
+--            1–12): o import grava `importada`, nada grava `aberta`.
+--   MÉDIO-2  o mês 13 não recebe revisão, mesmo sendo o mais antigo.
+--   MÉDIO-3  justificativa que não está `pending` é recusada: not_pending.
+--   segregação  o autor não revisa a própria: own_justification; autor nulo
+--            (todas as de cima) não bloqueia.
+-- Cada recusa tem o positivo ao lado; cada escolha de competência é conferida
+-- pelo id da competência gravada, não só por "devolveu id".
+insert into app.justification (id, tenant_id, deviation_event_id, employee_id, reference_date, text, status, source, author_user_id) values
+  ('b0000000-0000-0000-0000-00000000f107','bbbbbbbb-0000-0000-0000-000000000002',null,'b0000000-0000-0000-0000-0000000000c1','2026-08-11','Segunda de B','pending','operax',null),
+  ('a0000000-0000-0000-0000-00000000f108','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2026-08-13','Legada aceita','accepted','operax',null),
+  ('a0000000-0000-0000-0000-00000000f109','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2026-08-14','Legada rejeitada','rejected','operax',null),
+  ('a0000000-0000-0000-0000-00000000f110','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2026-08-17','Escrita pelo RH','pending','operax','55555555-5555-5555-5555-555555555555'),
+  ('a0000000-0000-0000-0000-00000000f111','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2026-08-18','Escrita pelo supervisor','pending','operax','22222222-2222-2222-2222-222222222222'),
+  ('a0000000-0000-0000-0000-00000000f112','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2026-08-19','Escrita pelo owner','pending','operax','11111111-1111-1111-1111-111111111111');
+
+-- --- a competência de destino, em B (só a fechada 2026/09 até aqui) ---------
+-- 1) O décimo terceiro NÃO FECHADO, e mais antigo que tudo, não recebe.
+insert into app.payroll_period (id, tenant_id, year, month, status) values
+  ('b0000000-0000-0000-0000-00000000e513','bbbbbbbb-0000-0000-0000-000000000002',2025,13,'importada');
+set local role authenticated;
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_txt('B com só a fechada e um mês 13 importada: no_open_period (o 13 não recebe)',
+    pg_temp.revisa('b0000000-0000-0000-0000-00000000f105', 'approved', null), 'no_open_period');
+end $$;
+reset request.jwt.claim.sub;
+reset role;
+
+-- 2) Uma `conferida` recebe — e não a fechada mais antiga, nem o 13.
+insert into app.payroll_period (id, tenant_id, year, month, status) values
+  ('b0000000-0000-0000-0000-00000000e211','bbbbbbbb-0000-0000-0000-000000000002',2026,11,'conferida');
+set local role authenticated;
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_txt('competência conferida recebe a revisão',
+    pg_temp.revisa('b0000000-0000-0000-0000-00000000f105', 'approved', null), 'ok');
+end $$;
+reset request.jwt.claim.sub;
+reset role;
+
+-- 3) Uma `importada` mais antiga que a conferida: é ela que recebe.
+insert into app.payroll_period (id, tenant_id, year, month, status) values
+  ('b0000000-0000-0000-0000-00000000e210','bbbbbbbb-0000-0000-0000-000000000002',2026,10,'importada');
+set local role authenticated;
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_txt('competência importada recebe a revisão',
+    pg_temp.revisa('b0000000-0000-0000-0000-00000000f107', 'approved', null), 'ok');
+  -- A recusa de status não vaza para o tenant vizinho: antes do not_pending
+  -- vem o justification_not_found.
+  perform pg_temp.assert_txt('owner B com a aceita legada de A: justification_not_found (não not_pending)',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f108', 'approved', null),
+    'justification_not_found');
+  perform pg_temp.assert_txt('owner B com a escrita pelo RH de A: justification_not_found',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f110', 'approved', null),
+    'justification_not_found');
+end $$;
+reset request.jwt.claim.sub;
+reset role;
+
+do $$ begin
+  perform pg_temp.assert_eq('a conferida 2026/11 recebeu — nem a fechada 2026/09 nem o 13 de 2025',
+    (select count(*) from app.justification_review
+      where justification_id = 'b0000000-0000-0000-0000-00000000f105'
+        and payroll_period_id = 'b0000000-0000-0000-0000-00000000e211'), 1);
+  perform pg_temp.assert_eq('a importada 2026/10, a não fechada mais antiga, recebeu',
+    (select count(*) from app.justification_review
+      where justification_id = 'b0000000-0000-0000-0000-00000000f107'
+        and payroll_period_id = 'b0000000-0000-0000-0000-00000000e210'), 1);
+  perform pg_temp.assert_eq('o mês 13 não recebeu revisão nenhuma',
+    (select count(*) from app.justification_review
+      where payroll_period_id = 'b0000000-0000-0000-0000-00000000e513'), 0);
+end $$;
+
+-- --- not_pending e own_justification, em A ----------------------------------
+set local role authenticated;
+
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ begin
+  perform pg_temp.assert_txt('RH com a aceita legada: not_pending',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f108', 'rejected', 'contrária'), 'not_pending');
+  perform pg_temp.assert_txt('RH com a rejeitada legada: not_pending',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f109', 'approved', null), 'not_pending');
+  perform pg_temp.assert_txt('RH revisando a que ele escreveu: own_justification',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f110', 'approved', null), 'own_justification');
+  perform pg_temp.assert_txt('RH aprova a escrita pelo supervisor (autor não nulo e alheio passa)',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f111', 'approved', null), 'ok');
+  perform pg_temp.assert_txt('RH aprova a escrita pelo owner',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f112', 'approved', null), 'ok');
+end $$;
+
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform pg_temp.assert_txt('owner aprova a escrita pelo RH (a mesma que o RH não pôde)',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f110', 'approved', null), 'ok');
+end $$;
+
+reset request.jwt.claim.sub;
+reset role;
+
+-- O owner autor, isolado: a f112 já foi revisada pelo RH acima, e o
+-- already_reviewed viria depois do own_justification de qualquer jeito — mas
+-- a prova limpa é numa pendente sem revisão.
+insert into app.justification (id, tenant_id, deviation_event_id, employee_id, reference_date, text, status, source, author_user_id) values
+  ('a0000000-0000-0000-0000-00000000f113','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2026-08-20','Escrita pelo owner, sem revisão','pending','operax','11111111-1111-1111-1111-111111111111');
+set local role authenticated;
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform pg_temp.assert_txt('owner revisando a que ele escreveu: own_justification (o owner também)',
+    pg_temp.revisa('a0000000-0000-0000-0000-00000000f113', 'approved', null), 'own_justification');
+end $$;
+reset request.jwt.claim.sub;
+reset role;
+
+do $$ begin
+  perform pg_temp.assert_eq('as recusadas por not_pending e own_justification não gravaram nada',
+    (select count(*) from app.justification_review
+      where justification_id in ('a0000000-0000-0000-0000-00000000f108',
+                                 'a0000000-0000-0000-0000-00000000f109',
+                                 'a0000000-0000-0000-0000-00000000f113')), 0);
+  perform pg_temp.assert_eq('a escrita pelo RH tem só a revisão do owner',
+    (select count(*) from app.justification_review
+      where justification_id = 'a0000000-0000-0000-0000-00000000f110'
+        and reviewed_by = '11111111-1111-1111-1111-111111111111'), 1);
+  perform pg_temp.assert_eq('e nenhuma revisão foi feita pelo próprio autor',
+    (select count(*) from app.justification_review r
+       join app.justification j on j.id = r.justification_id
+      where r.reviewed_by = j.author_user_id), 0);
+  perform pg_temp.assert_txt('as legadas continuam como estavam',
+    (select string_agg(status, ',' order by id) from app.justification
+      where id in ('a0000000-0000-0000-0000-00000000f108','a0000000-0000-0000-0000-00000000f109')),
+    'accepted,rejected');
+end $$;
+
+-- ---------------------------------------------------------------------------
+\echo '--- Alçada (P1.3): a fila de aprovação — competência 21→20, filtros e escopo'
+-- ---------------------------------------------------------------------------
+-- `public.fn_fila_aprovacao`, decisões do dono de 29/09/2026: janela 21→20 por
+-- `util.competencia_janela`, `security invoker`, e só `hr`/`owner` recebem
+-- linha (os demais recebem a fila VAZIA, e o backend responde 403 antes).
+-- O cenário mora em nov/dez/2026 e jan/2027, longe das justificativas de
+-- agosto acima, para cada borda ter uma linha só de cada lado:
+--   q1  A Centro  2026-11-20  sem desvio  -> competência 2026/11, não 2026/12
+--   q2  A Centro  2026-11-21  com desvio  -> 2026/12 (o 21 do mês anterior)
+--   q3  A Norte   2026-12-20  com desvio  -> 2026/12 (o 20 do mês)
+--   q4  A Norte   2026-12-21  com desvio  -> 2027/01 (virada de ano)
+--   q5  B Sul     2026-12-01              -> só B
+--   q6  A Centro  2026-12-05              -> aprovada pelo RH: sai
+--   q7  A Norte   2026-12-06              -> reprovada pelo RH: sai
+--   q8  A Centro  2026-12-07  accepted    -> legada decidida: nunca entra
+--   q9  colaborador de A Centro, desvio de 2027-01-10 em A NORTE -> a unidade
+--       da fila é a do dia (a do desvio), não a do cadastro de hoje
+insert into app.deviation_event (id, tenant_id, employee_id, company_id, unit_id, reference_date, type, minutes, mode) values
+  ('a0000000-0000-0000-0000-00000000ad12','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c1','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a1','2026-11-21','late_entry',-17,'production'),
+  ('a0000000-0000-0000-0000-00000000ad13','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c2','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a2','2026-12-20','late_exit',41,'production'),
+  ('a0000000-0000-0000-0000-00000000ad14','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c2','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a2','2026-12-21','late_entry',-8,'production'),
+  ('a0000000-0000-0000-0000-00000000ad15','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-0000000000c1','a0000000-0000-0000-0000-0000000000e1','a0000000-0000-0000-0000-0000000000a2','2027-01-10','late_entry',-5,'production');
+
+insert into app.justification (id, tenant_id, deviation_event_id, employee_id, reference_date, text, status, source, author_name) values
+  ('a0000000-0000-0000-0000-0000000fa001','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2026-11-20','Fila q1','pending','operax',null),
+  ('a0000000-0000-0000-0000-0000000fa002','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-00000000ad12','a0000000-0000-0000-0000-0000000000c1','2026-11-21','Fila q2','pending','operax','Supervisor A'),
+  ('a0000000-0000-0000-0000-0000000fa003','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-00000000ad13','a0000000-0000-0000-0000-0000000000c2','2026-12-20','Fila q3','pending','operax','Supervisor Norte'),
+  ('a0000000-0000-0000-0000-0000000fa004','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-00000000ad14','a0000000-0000-0000-0000-0000000000c2','2026-12-21','Fila q4','pending','operax',null),
+  ('b0000000-0000-0000-0000-0000000fa005','bbbbbbbb-0000-0000-0000-000000000002',null,'b0000000-0000-0000-0000-0000000000c1','2026-12-01','Fila q5','pending','operax',null),
+  ('a0000000-0000-0000-0000-0000000fa006','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2026-12-05','Fila q6','pending','operax',null),
+  ('a0000000-0000-0000-0000-0000000fa007','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c2','2026-12-06','Fila q7','pending','operax',null),
+  ('a0000000-0000-0000-0000-0000000fa008','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2026-12-07','Fila q8','accepted','operax',null),
+  ('a0000000-0000-0000-0000-0000000fa009','aaaaaaaa-0000-0000-0000-000000000001','a0000000-0000-0000-0000-00000000ad15','a0000000-0000-0000-0000-0000000000c1','2027-01-10','Fila q9','pending','operax',null);
+
+-- Os ids que a fila devolveu, na ordem da fila, com o prefixo cortado: 'q2,q3'.
+create or replace function pg_temp.fila(
+  p_year int, p_month int, p_unit uuid default null, p_employee uuid default null,
+  p_de date default null, p_ate date default null)
+returns text language sql as $$
+  select coalesce(string_agg('q' || right(f.justification_id::text, 1), ','
+                             order by f.reference_date, f.justification_id), '')
+    from public.fn_fila_aprovacao(p_year, p_month, p_unit, p_employee, p_de, p_ate) f
+   where f.justification_id::text like '%0000000fa00_';
+$$;
+
+do $$ begin
+  perform pg_temp.assert_eq('authenticated EXECUTA public.fn_fila_aprovacao',
+    case when has_function_privilege('authenticated',
+           'public.fn_fila_aprovacao(integer,integer,uuid,uuid,date,date)', 'execute')
+         then 1 else 0 end, 1);
+  perform pg_temp.assert_eq('anon NÃO executa public.fn_fila_aprovacao',
+    case when has_function_privilege('anon',
+           'public.fn_fila_aprovacao(integer,integer,uuid,uuid,date,date)', 'execute')
+         then 1 else 0 end, 0);
+  perform pg_temp.assert_eq('anon NÃO executa util.competencia_janela',
+    case when has_function_privilege('anon', 'util.competencia_janela(integer,integer)', 'execute')
+         then 1 else 0 end, 0);
+  perform pg_temp.assert_eq('fn_fila_aprovacao é security INVOKER (a RLS do chamador vale)',
+    (select case when p.prosecdef then 1 else 0 end from pg_proc p
+      where p.oid = 'public.fn_fila_aprovacao(integer,integer,uuid,uuid,date,date)'::regprocedure), 0);
+  perform pg_temp.assert_eq('a janela da fila vem de util.competencia_janela, não de constante',
+    (select case when pg_get_functiondef(p.oid) like '%util.competencia_janela(p_year, p_month)%'
+                 then 1 else 0 end from pg_proc p
+      where p.oid = 'public.fn_fila_aprovacao(integer,integer,uuid,uuid,date,date)'::regprocedure), 1);
+  perform pg_temp.assert_txt('competência 2027/01 = 21/12/2026 a 20/01/2027 (virada de ano)',
+    (select period_start || '..' || period_end from util.competencia_janela(2027, 1)),
+    '2026-12-21..2027-01-20');
+  perform pg_temp.assert_txt('competência 2024/03 = 21/02 a 20/03 (bissexto não muda o 21)',
+    (select period_start || '..' || period_end from util.competencia_janela(2024, 3)),
+    '2024-02-21..2024-03-20');
+end $$;
+
+set local role authenticated;
+
+-- --- RH de A: a fila do tenant, recortada pela janela e pelos filtros --------
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ begin
+  perform pg_temp.assert_txt('RH: fila 2026/12 = q2 (dia 21 de nov), q3 (dia 20), q6, q7 — sem q8 legada',
+    pg_temp.fila(2026, 12), 'q2,q6,q7,q3');
+  perform pg_temp.assert_txt('RH: o dia 20 de nov é da competência 2026/11, e o 21 não',
+    pg_temp.fila(2026, 11), 'q1');
+  perform pg_temp.assert_txt('RH: o dia 21 de dez é da competência 2027/01 (virada de ano)',
+    pg_temp.fila(2027, 1), 'q4,q9');
+  perform pg_temp.assert_txt('RH: a unidade da fila é a do desvio (q9 em A Norte, cadastro em A Centro)',
+    pg_temp.fila(2027, 1, 'a0000000-0000-0000-0000-0000000000a2'), 'q4,q9');
+  perform pg_temp.assert_txt('RH: e q9 não aparece pela unidade do cadastro (A Centro)',
+    pg_temp.fila(2027, 1, 'a0000000-0000-0000-0000-0000000000a1'), '');
+  perform pg_temp.assert_txt('RH: filtro de colaborador (Colab A Norte)',
+    pg_temp.fila(2026, 12, null, 'a0000000-0000-0000-0000-0000000000c2'), 'q7,q3');
+  perform pg_temp.assert_txt('RH: filtro de unidade (A Centro)',
+    pg_temp.fila(2026, 12, 'a0000000-0000-0000-0000-0000000000a1'), 'q2,q6');
+  perform pg_temp.assert_txt('RH: filtro de um dia (de = até = 20/12)',
+    pg_temp.fila(2026, 12, null, null, '2026-12-20', '2026-12-20'), 'q3');
+  perform pg_temp.assert_txt('RH: só o "de" (a partir de 06/12)',
+    pg_temp.fila(2026, 12, null, null, '2026-12-06', null), 'q7,q3');
+  perform pg_temp.assert_txt('RH: só o "até" (até 30/11)',
+    pg_temp.fila(2026, 12, null, null, null, '2026-11-30'), 'q2');
+  perform pg_temp.assert_txt('RH: a data fora da janela não alarga a janela (21/12 a 31/12 em 2026/12)',
+    pg_temp.fila(2026, 12, null, null, '2026-12-21', '2026-12-31'), '');
+  perform pg_temp.assert_txt('RH: a linha traz colaborador, unidade, tipo, minutos, texto e autor do desvio',
+    (select f.employee_name || '|' || f.unit_name || '|' || f.type || '|' || f.type_description
+            || '|' || f.minutes || '|' || f.text || '|' || f.author_name
+            || '|' || (f.created_at is not null)
+       from public.fn_fila_aprovacao(2026, 12, null, null, null, null) f
+      where f.justification_id = 'a0000000-0000-0000-0000-0000000fa003'),
+    'Colab A Norte|A Norte|late_exit|' ||
+      (select description from app.deviation_type where code = 'late_exit') ||
+      '|41|Fila q3|Supervisor Norte|true');
+  perform pg_temp.assert_txt('RH: justificativa sem desvio vem com a unidade do colaborador e sem tipo',
+    (select coalesce(f.type, '<nulo>') || '|' || f.unit_name
+       from public.fn_fila_aprovacao(2026, 11, null, null, null, null) f
+      where f.justification_id = 'a0000000-0000-0000-0000-0000000fa001'),
+    '<nulo>|A Centro');
+  perform pg_temp.assert_txt('RH de A: a de B não aparece por colaborador de B',
+    pg_temp.fila(2026, 12, null, 'b0000000-0000-0000-0000-0000000000c1'), '');
+  perform pg_temp.assert_txt('RH de A: a de B não aparece por unidade de B',
+    pg_temp.fila(2026, 12, 'b0000000-0000-0000-0000-0000000000a1'), '');
+
+  -- A revisão tira da fila — aprovada ou reprovada.
+  perform pg_temp.assert_txt('RH aprova q6',
+    pg_temp.revisa('a0000000-0000-0000-0000-0000000fa006', 'approved', null), 'ok');
+  perform pg_temp.assert_txt('RH reprova q7',
+    pg_temp.revisa('a0000000-0000-0000-0000-0000000fa007', 'rejected', 'Sem comprovante'), 'ok');
+  perform pg_temp.assert_txt('RH: aprovada e reprovada saíram da fila 2026/12',
+    pg_temp.fila(2026, 12), 'q2,q3');
+end $$;
+
+-- --- owner de A: a mesma fila ---------------------------------------------------
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform pg_temp.assert_txt('owner A: fila 2026/12 = a do RH', pg_temp.fila(2026, 12), 'q2,q3');
+end $$;
+
+-- --- supervisor de A Centro: nada, por nenhum filtro ----------------------------
+set local request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+do $$ begin
+  perform pg_temp.assert_eq('supervisor ENXERGA q2 na tabela (a fila vazia não é de escopo)',
+    (select count(*) from app.justification where id = 'a0000000-0000-0000-0000-0000000fa002'), 1);
+  perform pg_temp.assert_txt('supervisor: fila 2026/12 sem filtro = vazia',
+    pg_temp.fila(2026, 12), '');
+  perform pg_temp.assert_txt('supervisor: por competência 2027/01 = vazia', pg_temp.fila(2027, 1), '');
+  perform pg_temp.assert_txt('supervisor: pela unidade A Norte = vazia',
+    pg_temp.fila(2026, 12, 'a0000000-0000-0000-0000-0000000000a2'), '');
+  perform pg_temp.assert_txt('supervisor: pela própria unidade (A Centro) = vazia',
+    pg_temp.fila(2026, 12, 'a0000000-0000-0000-0000-0000000000a1'), '');
+  perform pg_temp.assert_txt('supervisor: pelo colaborador de A Norte = vazia',
+    pg_temp.fila(2026, 12, null, 'a0000000-0000-0000-0000-0000000000c2'), '');
+  perform pg_temp.assert_txt('supervisor: pela data 20/12 (a de A Norte) = vazia',
+    pg_temp.fila(2026, 12, null, null, '2026-12-20', '2026-12-20'), '');
+end $$;
+
+-- --- DP e contabilidade: também nada --------------------------------------------
+set local request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+do $$ begin
+  perform pg_temp.assert_txt('DP (personnel): fila 2026/12 = vazia', pg_temp.fila(2026, 12), '');
+end $$;
+set local request.jwt.claim.sub = '66666666-6666-6666-6666-666666666666';
+do $$ begin
+  perform pg_temp.assert_txt('contabilidade: fila 2026/12 = vazia', pg_temp.fila(2026, 12), '');
+end $$;
+
+-- --- owner de B: só a de B --------------------------------------------------------
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_txt('owner B: fila 2026/12 = só q5', pg_temp.fila(2026, 12), 'q5');
+  perform pg_temp.assert_txt('owner B: pelo colaborador de A = vazia',
+    pg_temp.fila(2026, 12, null, 'a0000000-0000-0000-0000-0000000000c1'), '');
+  perform pg_temp.assert_txt('owner B: pela unidade de A = vazia',
+    pg_temp.fila(2026, 12, 'a0000000-0000-0000-0000-0000000000a2'), '');
+  perform pg_temp.assert_txt('owner B: pela data de A (20/12) = vazia',
+    pg_temp.fila(2026, 12, null, null, '2026-12-20', '2026-12-20'), '');
+end $$;
+
+reset request.jwt.claim.sub;
+reset role;
+
+-- ---------------------------------------------------------------------------
+\echo '--- Alçada (P1.3): can_review e blocked_reason — a fila diz o que a RPC recusaria'
+-- ---------------------------------------------------------------------------
+-- Decisão do dono de 29/09/2026: a linha bloqueada continua na fila, com o
+-- motivo. A regra é a dos passos 3 e 4 de `fn_revisar_justificativa`, na ordem
+-- dela — e a prova é a RPC: para cada linha, `pg_temp.paridade` tenta aprovar
+-- (desfazendo) e confere que `can_review = false` ⇔ a RPC recusa com
+-- exatamente `blocked_reason`. O cenário é a competência 2027/02, longe do resto:
+--   qa  Colab A Centro           autor RH      -> RH: own_justification | owner: ok
+--   qb  Analista RH (marcado)    autor nulo    -> RH: owner_only        | owner: ok
+--   qc  Colab A Centro           autor owner   -> RH: ok                | owner: own_justification
+--   qd  Analista RH (marcado)    autor RH      -> RH: own_justification (as duas valem;
+--                                                 a RPC diz esta primeiro) | owner: ok
+insert into app.justification (id, tenant_id, deviation_event_id, employee_id, reference_date, text, status, source, author_user_id) values
+  ('a0000000-0000-0000-0000-0000000fa00a','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2027-02-01','Fila qa','pending','operax','55555555-5555-5555-5555-555555555555'),
+  ('a0000000-0000-0000-0000-0000000fa00b','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c3','2027-02-02','Fila qb','pending','operax',null),
+  ('a0000000-0000-0000-0000-0000000fa00c','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c1','2027-02-03','Fila qc','pending','operax','11111111-1111-1111-1111-111111111111'),
+  ('a0000000-0000-0000-0000-0000000fa00d','aaaaaaaa-0000-0000-0000-000000000001',null,'a0000000-0000-0000-0000-0000000000c3','2027-02-04','Fila qd','pending','operax','55555555-5555-5555-5555-555555555555');
+
+-- 'qa=own_justification,qb=owner_only,...' — 'ok' quando can_review.
+create or replace function pg_temp.fila_bloqueio(p_year int, p_month int)
+returns text language sql as $$
+  select coalesce(string_agg('q' || right(f.justification_id::text, 1) || '='
+                             || case when f.can_review then 'ok' else f.blocked_reason end, ','
+                             order by f.reference_date, f.justification_id), '')
+    from public.fn_fila_aprovacao(p_year, p_month) f
+   where f.justification_id::text like '%0000000fa00_';
+$$;
+
+-- As linhas em que a fila e a RPC discordam, com o que cada uma disse. A
+-- aprovação é desfeita pela exceção OXP13 — só ela é engolida.
+create or replace function pg_temp.paridade(p_year int, p_month int)
+returns text language plpgsql as $$
+declare r record; v text; falhas text := ''; n int := 0;
+begin
+  for r in select * from public.fn_fila_aprovacao(p_year, p_month) loop
+    n := n + 1;
+    begin
+      v := pg_temp.revisa(r.justification_id, 'approved', null);
+      raise exception using errcode = 'OXP13', message = v;
+    exception when sqlstate 'OXP13' then v := sqlerrm;
+    end;
+    if r.can_review is null
+       or (r.can_review and (r.blocked_reason is not null
+                             or v in ('own_justification', 'owner_only')))
+       or (not r.can_review and v is distinct from r.blocked_reason) then
+      falhas := falhas || format('%s(fila %s/%s, RPC %s) ', r.justification_id,
+                                 r.can_review, r.blocked_reason, v);
+    end if;
+  end loop;
+  return n || ' linhas; ' || coalesce(nullif(falhas, ''), 'sem divergência');
+end $$;
+
+set local role authenticated;
+
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ begin
+  perform pg_temp.assert_txt('RH: autor RH own_justification, marcado owner_only, autor owner ok, os dois -> own_justification',
+    pg_temp.fila_bloqueio(2027, 2), 'qa=own_justification,qb=owner_only,qc=ok,qd=own_justification');
+  perform pg_temp.assert_txt('RH: autor nulo pode revisar (q2, q3)',
+    pg_temp.fila_bloqueio(2026, 12), 'q2=ok,q3=ok');
+  perform pg_temp.assert_txt('RH: a RPC recusa exatamente o que a fila bloqueia (2027/02)',
+    pg_temp.paridade(2027, 2), '4 linhas; sem divergência');
+  perform pg_temp.assert_txt('RH: e não recusa por esses códigos o que a fila libera (2026/12)',
+    pg_temp.paridade(2026, 12), '2 linhas; sem divergência');
+end $$;
+
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform pg_temp.assert_txt('owner: marcado ok, autor owner own_justification, autor RH ok',
+    pg_temp.fila_bloqueio(2027, 2), 'qa=ok,qb=ok,qc=own_justification,qd=ok');
+  perform pg_temp.assert_txt('owner: a RPC recusa exatamente o que a fila bloqueia (2027/02)',
+    pg_temp.paridade(2027, 2), '4 linhas; sem divergência');
+end $$;
+
+reset request.jwt.claim.sub;
+reset role;
+
+do $$ begin
+  perform pg_temp.assert_eq('a paridade não deixou revisão nenhuma (as aprovações foram desfeitas)',
+    (select count(*) from app.justification_review
+      where justification_id in ('a0000000-0000-0000-0000-0000000fa00a','a0000000-0000-0000-0000-0000000fa00b',
+                                 'a0000000-0000-0000-0000-0000000fa00c','a0000000-0000-0000-0000-0000000fa00d',
+                                 'a0000000-0000-0000-0000-0000000fa002','a0000000-0000-0000-0000-0000000fa003')), 0);
+end $$;
+
+-- ---------------------------------------------------------------------------
+\echo '--- Alçada (P1.3, ciclo 1): o papel vale no tenant DA LINHA, não em qualquer tenant'
+-- ---------------------------------------------------------------------------
+-- Um usuário `hr` em A e `unit_supervisor` em B, com escopo em B Sul: a RLS o
+-- deixa LER a justificativa de B (a prova abaixo), então o que a tira da fila
+-- dele só pode ser o papel checado no tenant da linha. Sem este usuário, "hr em
+-- qualquer tenant" e "hr no tenant da linha" davam o mesmo resultado em todas
+-- as fixtures acima. O backend recusa esse usuário (`AmbiguousTenantMembership`);
+-- o banco não, e a garantia é do banco.
+insert into auth.users (id, email) values
+  ('77777777-7777-7777-7777-777777777777', 'rh.a.sup.b@teste');
+insert into app.tenant_member (tenant_id, user_id, role) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', '77777777-7777-7777-7777-777777777777', 'hr'),
+  ('bbbbbbbb-0000-0000-0000-000000000002', '77777777-7777-7777-7777-777777777777', 'unit_supervisor');
+insert into app.user_scope (tenant_id, user_id, unit_id) values
+  ('bbbbbbbb-0000-0000-0000-000000000002', '77777777-7777-7777-7777-777777777777', 'b0000000-0000-0000-0000-0000000000a1');
+
+set local role authenticated;
+set local request.jwt.claim.sub = '77777777-7777-7777-7777-777777777777';
+do $$ begin
+  perform pg_temp.assert_eq('hr-A/supervisor-B LÊ a justificativa q5 de B (a RLS deixa)',
+    (select count(*) from app.justification where id = 'b0000000-0000-0000-0000-0000000fa005'), 1);
+  perform pg_temp.assert_txt('hr-A/supervisor-B: fila 2026/12 = a de A, sem q5 de B',
+    pg_temp.fila(2026, 12), 'q2,q3');
+  perform pg_temp.assert_txt('hr-A/supervisor-B: pelo colaborador de B = vazia',
+    pg_temp.fila(2026, 12, null, 'b0000000-0000-0000-0000-0000000000c1'), '');
+  perform pg_temp.assert_txt('hr-A/supervisor-B: pela unidade de B = vazia',
+    pg_temp.fila(2026, 12, 'b0000000-0000-0000-0000-0000000000a1'), '');
+end $$;
+reset request.jwt.claim.sub;
+reset role;
+
+do $$ begin
+  perform pg_temp.assert_txt('competencia_de: 20/12/2026 é 2026/12, 21/12/2026 é 2027/01',
+    (select string_agg(c.period_year || '/' || c.period_month, ',' order by d)
+       from unnest(array['2026-12-20','2026-12-21']::date[]) d,
+            util.competencia_de(d) c),
+    '2026/12,2027/1');
+  perform pg_temp.assert_eq('anon NÃO executa util.competencia_de',
+    case when has_function_privilege('anon', 'util.competencia_de(date)', 'execute')
+         then 1 else 0 end, 0);
+end $$;
+
+-- ---------------------------------------------------------------------------
+\echo '--- Alçada (P1.2b): authenticated só LÊ justification, deviation_event e employee'
+-- ---------------------------------------------------------------------------
+-- Os três contornos da alçada, fechados pela migration `alcada_revoke_writes`
+-- (decisão do dono, 29/09/2026): inserir justificativa já `accepted`, mover o
+-- desvio para `justified` por UPDATE, e o `hr` zerar a própria
+-- `approval_owner_only`. Cada negativo tem o positivo que o separa de "o banco
+-- recusa tudo": a LEITURA das três tabelas continua a mesma, papel por papel.
+do $$
+declare
+  v_tabela text;
+begin
+  foreach v_tabela in array array['app.justification', 'app.deviation_event', 'app.employee'] loop
+    perform pg_temp.assert_eq('authenticated não escreve ' || v_tabela || ' (tabela)',
+      (select count(*) from unnest(array['INSERT','UPDATE','DELETE']) v
+        where has_table_privilege('authenticated', v_tabela, v)), 0);
+    perform pg_temp.assert_eq('nem por coluna em ' || v_tabela,
+      (select count(*) from unnest(array['INSERT','UPDATE']) v
+        where has_any_column_privilege('authenticated', v_tabela, v)), 0);
+    perform pg_temp.assert_eq('e LÊ ' || v_tabela || ' (o SELECT ficou)',
+      case when has_table_privilege('authenticated', v_tabela, 'SELECT') then 1 else 0 end, 1);
+  end loop;
+  perform pg_temp.assert_eq('as três policies de escrita saíram',
+    (select count(*) from pg_policies
+      where schemaname = 'app'
+        and policyname in ('justification_write', 'deviation_write', 'employee_write')), 0);
+  perform pg_temp.assert_eq('as três de leitura ficaram',
+    (select count(*) from pg_policies
+      where schemaname = 'app' and cmd = 'SELECT'
+        and (tablename, policyname) in (('justification', 'justification_read'),
+                                        ('deviation_event', 'deviation_read'),
+                                        ('employee', 'employee_read'))), 3);
+end $$;
+
+-- A leitura de ANTES, avaliada como `postgres` com o usuário na sessão: a soma
+-- (OR) das policies de SELECT do catálogo e, em `app.employee`, também o
+-- `using` da `employee_write` que saiu (`util.is_admin(tenant_id)` — ela era
+-- `for all`, então também dava SELECT). Se a leitura de agora, pela RLS, bate
+-- com esta, tirar a `employee_write` não mudou o que ninguém lê.
+create temporary table p12b_leitura (user_id uuid, tabela text, esperado bigint);
+grant select on p12b_leitura to authenticated;
+
+do $$
+declare
+  v_user   uuid;
+  v_tabela text;
+  v_expr   text;
+  v_n      bigint;
+begin
+  foreach v_user in array array[
+    '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
+    '33333333-3333-3333-3333-333333333333', '44444444-4444-4444-4444-444444444444',
+    '55555555-5555-5555-5555-555555555555', '66666666-6666-6666-6666-666666666666',
+    '77777777-7777-7777-7777-777777777777']::uuid[] loop
+    perform set_config('request.jwt.claim.sub', v_user::text, true);
+    foreach v_tabela in array array['justification', 'deviation_event', 'employee'] loop
+      select string_agg('(' || qual || ')', ' or ') into v_expr
+        from pg_policies
+       where schemaname = 'app' and tablename = v_tabela and cmd = 'SELECT';
+      if v_expr is null then
+        raise exception 'FALHA: app.% sem policy de leitura', v_tabela;
+      end if;
+      if v_tabela = 'employee' then
+        v_expr := v_expr || ' or util.is_admin(tenant_id)';
+      end if;
+      execute format('select count(*) from app.%I where %s', v_tabela, v_expr) into v_n;
+      insert into p12b_leitura values (v_user, v_tabela, v_n);
+    end loop;
+  end loop;
+end $$;
+reset request.jwt.claim.sub;
+
+-- E as contagens MEDIDAS pela RLS na árvore sem a migration (30/09/2026), por
+-- usuário. Elas amarram o "antes" a um número, e não só ao catálogo: se um dos
+-- dois lados mudar, as duas comparações abaixo discordam.
+create temporary table p12b_medido (user_id uuid, tabela text, medido bigint);
+grant select on p12b_medido to authenticated;
+insert into p12b_medido (user_id, tabela, medido)
+select u::uuid, t, n
+from (values
+  ('11111111-1111-1111-1111-111111111111', 23, 9, 3),   -- owner A
+  ('22222222-2222-2222-2222-222222222222', 19, 4, 2),   -- supervisor de A Centro
+  ('33333333-3333-3333-3333-333333333333', 23, 9, 3),   -- DP A
+  ('44444444-4444-4444-4444-444444444444',  3, 1, 1),   -- owner B
+  ('55555555-5555-5555-5555-555555555555', 23, 9, 3),   -- hr A
+  ('66666666-6666-6666-6666-666666666666', 23, 8, 3),   -- contabilidade A (não é admin)
+  ('77777777-7777-7777-7777-777777777777', 26, 10, 4)   -- hr A / supervisor de B
+) as m(u, j, d, e)
+cross join lateral (values ('justification', j), ('deviation_event', d), ('employee', e)) as x(t, n);
+
+do $$ begin
+  perform pg_temp.assert_eq('as 21 leituras de antes foram medidas (7 usuários x 3 tabelas)',
+    (select count(*) from p12b_leitura l join p12b_medido m using (user_id, tabela)), 21);
+end $$;
+
+set local role authenticated;
+do $$
+declare
+  r   record;
+  v_n bigint;
+begin
+  for r in select l.user_id, l.tabela, l.esperado, m.medido
+             from p12b_leitura l join p12b_medido m using (user_id, tabela)
+            order by l.user_id, l.tabela loop
+    perform set_config('request.jwt.claim.sub', r.user_id::text, true);
+    execute format('select count(*) from app.%I', r.tabela) into v_n;
+    perform pg_temp.assert_eq(
+      'leitura de app.' || r.tabela || ' por ' || left(r.user_id::text, 8) || ' = a medida antes',
+      v_n, r.medido);
+    perform pg_temp.assert_eq(
+      '  e = a soma das policies de antes (catálogo)', v_n, r.esperado);
+  end loop;
+end $$;
+reset request.jwt.claim.sub;
+reset role;
+
+-- --- os negativos: cada contorno, por cada papel que o alcançava ------------
+-- `insufficient_privilege` (42501) é também o código da RLS recusando uma linha
+-- nova. Aceitar o código sozinho deixaria o negativo verde com o grant de volta
+-- e só a policy faltando — então a mensagem tem de ser a do GRANT.
+create or replace function pg_temp.p12b_sem_grant(p_msg text)
+returns void language plpgsql as $$
+begin
+  if p_msg not like 'permission denied for table %' then
+    raise exception 'FALHA: recusado, mas não por falta de grant: %', p_msg;
+  end if;
+end $$;
+
+set local role authenticated;
+do $$
+declare
+  v_user uuid;
+begin
+  foreach v_user in array array[
+    '11111111-1111-1111-1111-111111111111',   -- owner A
+    '55555555-5555-5555-5555-555555555555',   -- hr A
+    '22222222-2222-2222-2222-222222222222'    -- supervisor de A Centro
+  ]::uuid[] loop
+    perform set_config('request.jwt.claim.sub', v_user::text, true);
+
+    -- 1. Justificativa nascida `accepted`, no colaborador que os três enxergam.
+    begin
+      insert into app.justification (tenant_id, deviation_event_id, employee_id, reference_date, text, status, source)
+      values ('aaaaaaaa-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-00000000ad06',
+              'a0000000-0000-0000-0000-0000000000c1', '2026-08-12', 'contorno', 'accepted', 'operax');
+      raise exception 'FALHA: % inseriu justificativa accepted direto', left(v_user::text, 8);
+    exception when insufficient_privilege then
+      perform pg_temp.p12b_sem_grant(sqlerrm);
+      raise notice '  ok  % não insere justificativa accepted (permission denied)', left(v_user::text, 8);
+    end;
+
+    -- 2. O desvio movido para `justified` sem passar pela RPC.
+    begin
+      update app.deviation_event set status = 'justified'
+       where id = 'a0000000-0000-0000-0000-00000000ad06';
+      raise exception 'FALHA: % fez UPDATE em app.deviation_event', left(v_user::text, 8);
+    exception when insufficient_privilege then
+      perform pg_temp.p12b_sem_grant(sqlerrm);
+      raise notice '  ok  % não move o desvio para justified (permission denied)', left(v_user::text, 8);
+    end;
+  end loop;
+
+  -- 3. O `hr` zerando a própria marca — e, para cobrir os três verbos, o owner
+  --    inserindo e apagando colaborador.
+  perform set_config('request.jwt.claim.sub', '55555555-5555-5555-5555-555555555555', true);
+  begin
+    update app.employee set approval_owner_only = false
+     where id = 'a0000000-0000-0000-0000-0000000000c3';
+    raise exception 'FALHA: hr fez UPDATE em app.employee';
+  exception when insufficient_privilege then
+      perform pg_temp.p12b_sem_grant(sqlerrm);
+    raise notice '  ok  hr não zera approval_owner_only (permission denied)';
+  end;
+
+  perform set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', true);
+  begin
+    insert into app.employee (tenant_id, company_id, unit_id, name)
+    values ('aaaaaaaa-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000000e1',
+            'a0000000-0000-0000-0000-0000000000a1', 'contorno');
+    raise exception 'FALHA: owner fez INSERT em app.employee';
+  exception when insufficient_privilege then
+      perform pg_temp.p12b_sem_grant(sqlerrm);
+    raise notice '  ok  owner não insere colaborador (permission denied)';
+  end;
+  begin
+    delete from app.employee where id = 'a0000000-0000-0000-0000-0000000000c3';
+    raise exception 'FALHA: owner fez DELETE em app.employee';
+  exception when insufficient_privilege then
+      perform pg_temp.p12b_sem_grant(sqlerrm);
+    raise notice '  ok  owner não apaga colaborador (permission denied)';
+  end;
+end $$;
+reset request.jwt.claim.sub;
+reset role;
+
+do $$ begin
+  perform pg_temp.assert_eq('nada entrou: nenhuma justificativa "contorno"',
+    (select count(*) from app.justification where text = 'contorno'), 0);
+  perform pg_temp.assert_eq('o desvio ad06 não foi movido por UPDATE direto',
+    (select count(*) from app.deviation_event
+      where id = 'a0000000-0000-0000-0000-00000000ad06' and status = 'justified'), 0);
+  perform pg_temp.assert_eq('a marca do colaborador do RH continua de pé',
+    (select count(*) from app.employee
+      where id = 'a0000000-0000-0000-0000-0000000000c3' and approval_owner_only), 1);
+end $$;
+
+-- ---------------------------------------------------------------------------
+\echo '--- Alçada (P1.2b, ciclo 1): authenticated só LÊ tenant_member e user_scope'
+-- ---------------------------------------------------------------------------
+-- O quarto e o quinto contornos (decisão do dono, 30/09/2026): com
+-- `tenant_member_admin`, o `hr` se promovia a `owner` e o `personnel` a `hr` —
+-- e o papel é exatamente o que `fn_revisar_justificativa` confere. Com
+-- `escopo_admin`, todo admin redesenhava o recorte de qualquer usuário. Mesma
+-- forma do bloco acima: estrutura, a leitura igual papel por papel, e o
+-- negativo pela mensagem do GRANT (`pg_temp.p12b_sem_grant`).
+do $$
+declare
+  v_tabela text;
+begin
+  foreach v_tabela in array array['app.tenant_member', 'app.user_scope'] loop
+    perform pg_temp.assert_eq('authenticated não escreve ' || v_tabela || ' (tabela)',
+      (select count(*) from unnest(array['INSERT','UPDATE','DELETE']) v
+        where has_table_privilege('authenticated', v_tabela, v)), 0);
+    perform pg_temp.assert_eq('nem por coluna em ' || v_tabela,
+      (select count(*) from unnest(array['INSERT','UPDATE']) v
+        where has_any_column_privilege('authenticated', v_tabela, v)), 0);
+    perform pg_temp.assert_eq('e LÊ ' || v_tabela || ' (o SELECT ficou)',
+      case when has_table_privilege('authenticated', v_tabela, 'SELECT') then 1 else 0 end, 1);
+  end loop;
+  perform pg_temp.assert_eq('tenant_member_admin e escopo_admin saíram',
+    (select count(*) from pg_policies
+      where schemaname = 'app'
+        and (tablename, policyname) in (('tenant_member', 'tenant_member_admin'),
+                                        ('user_scope', 'escopo_admin'))), 0);
+  perform pg_temp.assert_eq('tenant_member_read e escopo_read ficaram',
+    (select count(*) from pg_policies
+      where schemaname = 'app' and cmd = 'SELECT'
+        and (tablename, policyname) in (('tenant_member', 'tenant_member_read'),
+                                        ('user_scope', 'escopo_read'))), 2);
+end $$;
+
+-- A leitura de ANTES pelo catálogo: as policies de SELECT somadas e o `using`
+-- das duas `for all` que saíram (`util.is_admin(tenant_id)`, as duas).
+create temporary table p12b2_leitura (user_id uuid, tabela text, esperado bigint);
+grant select on p12b2_leitura to authenticated;
+
+do $$
+declare
+  v_user   uuid;
+  v_tabela text;
+  v_expr   text;
+  v_n      bigint;
+begin
+  foreach v_user in array array[
+    '11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222',
+    '33333333-3333-3333-3333-333333333333', '44444444-4444-4444-4444-444444444444',
+    '55555555-5555-5555-5555-555555555555', '66666666-6666-6666-6666-666666666666',
+    '77777777-7777-7777-7777-777777777777']::uuid[] loop
+    perform set_config('request.jwt.claim.sub', v_user::text, true);
+    foreach v_tabela in array array['tenant_member', 'user_scope'] loop
+      select string_agg('(' || qual || ')', ' or ') into v_expr
+        from pg_policies
+       where schemaname = 'app' and tablename = v_tabela and cmd = 'SELECT';
+      if v_expr is null then
+        raise exception 'FALHA: app.% sem policy de leitura', v_tabela;
+      end if;
+      v_expr := v_expr || ' or util.is_admin(tenant_id)';
+      execute format('select count(*) from app.%I where %s', v_tabela, v_expr) into v_n;
+      insert into p12b2_leitura values (v_user, v_tabela, v_n);
+    end loop;
+  end loop;
+end $$;
+reset request.jwt.claim.sub;
+
+-- As contagens MEDIDAS pela RLS sem a extensão da migration (30/09/2026):
+-- tenant_member / user_scope.
+create temporary table p12b2_medido (user_id uuid, tabela text, medido bigint);
+grant select on p12b2_medido to authenticated;
+insert into p12b2_medido (user_id, tabela, medido)
+select u::uuid, t, n
+from (values
+  ('11111111-1111-1111-1111-111111111111', 6, 2),   -- owner A
+  ('22222222-2222-2222-2222-222222222222', 6, 1),   -- supervisor de A Centro (só o próprio escopo)
+  ('33333333-3333-3333-3333-333333333333', 6, 2),   -- DP A
+  ('44444444-4444-4444-4444-444444444444', 2, 1),   -- owner B
+  ('55555555-5555-5555-5555-555555555555', 6, 2),   -- hr A
+  ('66666666-6666-6666-6666-666666666666', 6, 1),   -- contabilidade A (só o próprio escopo)
+  ('77777777-7777-7777-7777-777777777777', 8, 3)    -- hr A / supervisor de B
+) as m(u, tm, us)
+cross join lateral (values ('tenant_member', tm), ('user_scope', us)) as x(t, n);
+
+do $$ begin
+  perform pg_temp.assert_eq('as 14 leituras de antes foram medidas (7 usuários x 2 tabelas)',
+    (select count(*) from p12b2_leitura l join p12b2_medido m using (user_id, tabela)), 14);
+end $$;
+
+set local role authenticated;
+do $$
+declare
+  r   record;
+  v_n bigint;
+begin
+  for r in select l.user_id, l.tabela, l.esperado, m.medido
+             from p12b2_leitura l join p12b2_medido m using (user_id, tabela)
+            order by l.user_id, l.tabela loop
+    perform set_config('request.jwt.claim.sub', r.user_id::text, true);
+    execute format('select count(*) from app.%I', r.tabela) into v_n;
+    perform pg_temp.assert_eq(
+      'leitura de app.' || r.tabela || ' por ' || left(r.user_id::text, 8) || ' = a medida antes',
+      v_n, r.medido);
+    perform pg_temp.assert_eq(
+      '  e = a soma das policies de antes (catálogo)', v_n, r.esperado);
+  end loop;
+end $$;
+reset request.jwt.claim.sub;
+reset role;
+
+-- --- os negativos ------------------------------------------------------------
+set local role authenticated;
+do $$ begin
+  -- 4a. O `hr` se promovendo a `owner`.
+  perform set_config('request.jwt.claim.sub', '55555555-5555-5555-5555-555555555555', true);
+  begin
+    update app.tenant_member set role = 'owner'
+     where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001'
+       and user_id = '55555555-5555-5555-5555-555555555555';
+    raise exception 'FALHA: hr se promoveu a owner';
+  exception when insufficient_privilege then
+    perform pg_temp.p12b_sem_grant(sqlerrm);
+    raise notice '  ok  hr não se promove a owner (permission denied)';
+  end;
+
+  -- 4b. O `hr` inserindo membro (o owner de B como hr de A).
+  begin
+    insert into app.tenant_member (tenant_id, user_id, role)
+    values ('aaaaaaaa-0000-0000-0000-000000000001', '44444444-4444-4444-4444-444444444444', 'hr');
+    raise exception 'FALHA: hr inseriu membro';
+  exception when insufficient_privilege then
+    perform pg_temp.p12b_sem_grant(sqlerrm);
+    raise notice '  ok  hr não insere membro (permission denied)';
+  end;
+
+  -- 5. O `hr` alterando o recorte do supervisor.
+  begin
+    update app.user_scope set unit_id = null
+     where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001'
+       and user_id = '22222222-2222-2222-2222-222222222222';
+    raise exception 'FALHA: hr alterou user_scope';
+  exception when insufficient_privilege then
+    perform pg_temp.p12b_sem_grant(sqlerrm);
+    raise notice '  ok  hr não altera user_scope (permission denied)';
+  end;
+
+  -- 4c. O `personnel` se promovendo a `hr` — e aí aprovaria pela RPC.
+  perform set_config('request.jwt.claim.sub', '33333333-3333-3333-3333-333333333333', true);
+  begin
+    update app.tenant_member set role = 'hr'
+     where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001'
+       and user_id = '33333333-3333-3333-3333-333333333333';
+    raise exception 'FALHA: personnel se promoveu a hr';
+  exception when insufficient_privilege then
+    perform pg_temp.p12b_sem_grant(sqlerrm);
+    raise notice '  ok  personnel não se promove a hr (permission denied)';
+  end;
+
+  -- Os verbos que faltam, pelo owner: DELETE de membro, INSERT e DELETE de escopo.
+  perform set_config('request.jwt.claim.sub', '11111111-1111-1111-1111-111111111111', true);
+  begin
+    delete from app.tenant_member
+     where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001'
+       and user_id = '55555555-5555-5555-5555-555555555555';
+    raise exception 'FALHA: owner apagou membro';
+  exception when insufficient_privilege then
+    perform pg_temp.p12b_sem_grant(sqlerrm);
+    raise notice '  ok  owner não apaga membro (permission denied)';
+  end;
+  begin
+    insert into app.user_scope (tenant_id, user_id, unit_id)
+    values ('aaaaaaaa-0000-0000-0000-000000000001', '55555555-5555-5555-5555-555555555555',
+            'a0000000-0000-0000-0000-0000000000a2');
+    raise exception 'FALHA: owner inseriu user_scope';
+  exception when insufficient_privilege then
+    perform pg_temp.p12b_sem_grant(sqlerrm);
+    raise notice '  ok  owner não insere user_scope (permission denied)';
+  end;
+  begin
+    delete from app.user_scope
+     where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001'
+       and user_id = '22222222-2222-2222-2222-222222222222';
+    raise exception 'FALHA: owner apagou user_scope';
+  exception when insufficient_privilege then
+    perform pg_temp.p12b_sem_grant(sqlerrm);
+    raise notice '  ok  owner não apaga user_scope (permission denied)';
+  end;
+end $$;
+reset request.jwt.claim.sub;
+reset role;
+
+do $$ begin
+  perform pg_temp.assert_eq('os papéis de A ficaram como estavam (hr segue hr, personnel segue personnel)',
+    (select count(*) from app.tenant_member
+      where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001'
+        and (user_id, role) in (('55555555-5555-5555-5555-555555555555'::uuid, 'hr'::app.user_role),
+                                ('33333333-3333-3333-3333-333333333333'::uuid, 'personnel'::app.user_role))), 2);
+  perform pg_temp.assert_eq('o owner de B não virou membro de A',
+    (select count(*) from app.tenant_member
+      where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001'
+        and user_id = '44444444-4444-4444-4444-444444444444'), 0);
+  perform pg_temp.assert_eq('o recorte do supervisor continua A Centro',
+    (select count(*) from app.user_scope
+      where user_id = '22222222-2222-2222-2222-222222222222'
+        and unit_id = 'a0000000-0000-0000-0000-0000000000a1'), 1);
+end $$;
+
 \echo ''
 \echo '================================================'
 \echo ' ISOLAMENTO MULTI-TENANT: TODOS OS TESTES OK'

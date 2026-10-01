@@ -1,21 +1,23 @@
-"""O veredito sobre uma ocorrência — quem produz `rejected`.
+"""A justificativa de uma ocorrência — sempre `pending` desde a P1.2.
 
-A migration 23 fechou `app.justification.status` em `accepted` e `rejected` e
-registrou, no cabeçalho dela, que `rejected` não tinha produtor. Estes testes
-cobrem o produtor, e o que vale testar aqui não é o SQL.
+A migration 23 abriu `app.justification.status`; a P1.1 acrescentou `pending`;
+a P1.2 tirou `status` do corpo da rota: quem explica não decide, e a decisão é
+da alçada (`public.fn_revisar_justificativa`, provada no `98`). Estes testes
+cobrem a porta, e o que vale testar aqui não é o SQL.
 
 A primeira coisa é a ORDEM: a autorização é a RLS lendo o evento como o usuário,
 e ela acontece ANTES de a transação de `service_role` abrir. Um evento que a
 policy não devolve não pode gravar linha nenhuma — `justification.employee_id`
 tem FK para `app.employee(id)` sem conferir tenant, então essa recusa é a única
-coisa entre um id colado à mão e um veredito escrito sobre a pessoa de outro
-cliente.
+coisa entre um id colado à mão e uma justificativa escrita sobre a pessoa de
+outro cliente.
 
-A segunda é que o veredito é escrito com o `employee_id` e a data que vieram do
-EVENTO, nunca do corpo do pedido. O cliente manda texto e status; quem a
-ocorrência é, quem responde é o banco.
+A segunda é que a justificativa é escrita com o `employee_id` e a data que vieram
+do EVENTO, nunca do corpo do pedido. O cliente manda texto; quem a ocorrência é,
+quem responde é o banco.
 
-A terceira é que rejeitar exige motivo, e que "pendente" não é um valor gravável.
+A terceira é que o estado não é do cliente: nasce `pending`, e um corpo que ainda
+traga `status` é recusado (422), nunca ignorado em silêncio.
 """
 
 from __future__ import annotations
@@ -110,7 +112,7 @@ def answer(monkeypatch: pytest.MonkeyPatch):
 def _post(client: TestClient, token: str, event: UUID = EVENT, **body: Any):
     return client.post(
         f"/ocorrencias/{event}/justificativa",
-        json={"text": "Atendimento externo autorizado pelo gestor.", "status": "accepted"} | body,
+        json={"text": "Atendimento externo autorizado pelo gestor."} | body,
         headers={"Authorization": f"Bearer {token}"},
     )
 
@@ -145,9 +147,22 @@ def test_a_recusa_nao_distingue_inexistente_de_alheio(client: TestClient, issue_
 # ---------------------------------------------------------------------------
 # Quem a ocorrência é, quem responde é o banco
 # ---------------------------------------------------------------------------
-def test_a_pessoa_e_a_data_saem_do_evento_e_nao_do_pedido(client: TestClient, issue_token, answer):
-    """O corpo manda texto e veredito. Aceitar `employee_id` do cliente seria
-    aceitar que ele escolha sobre quem o veredito recai."""
+def test_a_pessoa_e_a_data_saem_do_evento(client: TestClient, issue_token, answer):
+    """O corpo manda só texto. Quem é a pessoa e qual é o dia, o evento diz."""
+    _, bound = answer()
+
+    resposta = _post(client, issue_token())
+
+    assert resposta.status_code == 201
+    gravado = bound.params[0]
+    assert gravado["employee_id"] == str(EMPLOYEE)
+    assert gravado["reference_date"] == date(2026, 8, 20)
+    assert resposta.json()["employee_name"] == "Ana Ribeiro"
+
+
+def test_o_pedido_nao_escolhe_a_pessoa(client: TestClient, issue_token, answer):
+    """Aceitar `employee_id` do cliente seria aceitar que ele escolha sobre quem a
+    justificativa recai. Desde a P1.2 o campo nem é ignorado: é recusado."""
     _, bound = answer()
 
     resposta = _post(
@@ -157,41 +172,52 @@ def test_a_pessoa_e_a_data_saem_do_evento_e_nao_do_pedido(client: TestClient, is
         reference_date="1999-01-01",
     )
 
-    assert resposta.status_code == 201
-    gravado = bound.params[0]
-    assert gravado["employee_id"] == str(EMPLOYEE)
-    assert gravado["reference_date"] == date(2026, 8, 20)
-    assert resposta.json()["employee_name"] == "Ana Ribeiro"
+    assert resposta.status_code == 422
+    assert bound.statements == []
 
 
-def test_o_veredito_vira_linha_de_auditoria(client: TestClient, issue_token, answer):
-    """Sem a trilha, "quem rejeitou o atraso da Ana" não tem resposta."""
+def test_a_justificativa_vira_linha_de_auditoria(client: TestClient, issue_token, answer):
+    """Sem a trilha, "quem explicou o atraso da Ana" não tem resposta."""
     _, bound = answer()
 
-    _post(client, issue_token(), status="rejected", text="Sem autorização registrada.")
+    _post(client, issue_token(), text="Sem autorização registrada.")
 
     assert "insert into app.audit_log" in bound.statements[1]
     depois = bound.params[1]["depois"].obj
-    assert depois["status"] == "rejected"
+    assert depois["status"] == "pending"
     assert depois["deviation_event_id"] == str(EVENT)
 
 
 # ---------------------------------------------------------------------------
-# O que o domínio recusa
+# O estado não é do cliente
 # ---------------------------------------------------------------------------
-def test_pendente_nao_e_um_valor_gravavel(client: TestClient, issue_token, answer):
-    """Pendente é a AUSÊNCIA de linha aceita — é assim que `fn_pending_justification`
-    a calcula. Um terceiro estado gravado faria a mesma pergunta ter duas respostas."""
+def test_a_justificativa_nasce_pending(client: TestClient, issue_token, answer):
+    """Quem explica não decide: o SQL grava `pending`, e a resposta diz isso."""
+    _, bound = answer()
+
+    resposta = _post(client, issue_token())
+
+    assert resposta.status_code == 201
+    assert resposta.json()["status"] == "pending"
+    assert "'pending'" in bound.statements[0]
+    assert "status" not in bound.params[0]
+
+
+@pytest.mark.parametrize("valor", ["accepted", "rejected", "pending"])
+def test_corpo_com_status_e_recusado(client: TestClient, issue_token, answer, valor: str):
+    """Cliente antigo mandando `status` recebe 422 — ignorar calado deixaria o
+    supervisor achando que aprovou. E nada é gravado."""
+    _, bound = answer()
+
+    assert _post(client, issue_token(), status=valor).status_code == 422
+    assert bound.statements == []
+
+
+def test_texto_vazio_e_recusado(client: TestClient, issue_token, answer):
+    """Justificativa sem texto é a explicação sem a explicação."""
     answer()
 
-    assert _post(client, issue_token(), status="pending").status_code == 422
-
-
-def test_rejeitar_sem_motivo_e_recusado(client: TestClient, issue_token, answer):
-    """A pessoa afetada precisa ler por quê. Uma rejeição vazia é a decisão sem ela."""
-    answer()
-
-    assert _post(client, issue_token(), status="rejected", text="").status_code == 422
+    assert _post(client, issue_token(), text="").status_code == 422
 
 
 def test_token_de_usuario_apagado_nao_grava_veredito_sem_autor(

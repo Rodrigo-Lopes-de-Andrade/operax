@@ -82,8 +82,20 @@ either right or absent.
        not when. Below the gate, so it cannot raise an alert.
     0  the schedule says nothing about this weekday.
 
-PRECEDENCE: leave > day off > shift. A person on holiday does not owe a shift,
-even on a weekday the schedule fills in.
+PRECEDENCE: leave > holiday > day off > shift. A person on leave does not owe a
+shift, even on a weekday the schedule fills in.
+
+HOLIDAYS FOLLOW THE KIND OF SCHEDULE, NOT THE UNIT (owner's decision, 2026-09-28)
+`app.holiday` is the calendar the mirror does not carry. Measured in production
+on 07/09/2026: 1 of 63 people on a fixed Secullum week punched, and 5 of 8 on a
+rotation did — in every unit. So a holiday turns the day into `holiday` only
+for a FIXED WEEK read from `HorarioDia` (`work_days > 0` with the weekday
+declared: exactly the rows whose `source` is `secullum_schedule` and that are
+not a leave). A curated rotation (`manual_roster`, which only applies where
+`work_days = 0`) and an inferred schedule keep their roster: missing it is
+still an absence, and working it is not an indication. The holiday wins over
+the weekly day off too, so a punch on it reads as `punch_on_holiday` and not as
+`punch_on_day_off`.
 """
 
 from __future__ import annotations
@@ -126,6 +138,7 @@ escala as (
 ),
 pessoa as (
     select e.id                as employee_id,
+           e.unit_id,
            e.hired_on,
            e.terminated_on,
            f.id                as mirror_id,
@@ -191,6 +204,16 @@ bruto as (
             and (d.reference_date - p.anchor_date) %% p.cycle_length_days = 0) as rot_work,
            d.reference_date,
            af.day_type       as leave_type,
+           -- National (`unit_id` null) or the person's own unit. The tenant is
+           -- filtered here and not trusted to the join: a neighbour's row that
+           -- names one of this tenant's units must match nobody.
+           exists (
+             select 1 from app.holiday hol
+             where hol.tenant_id = %(tenant_id)s
+               and hol.active
+               and hol.reference_date = d.reference_date
+               and (hol.unit_id is null or hol.unit_id = p.unit_id)
+           ) as on_holiday,
            hd."DiaSemana"    as dow,
            hd.sem_expediente as no_shift,
            hd."Entrada1"     as entry_at,
@@ -232,10 +255,17 @@ bruto as (
 ),
 classificado as (
     select b.*,
+           -- The fixed week, and only it, rests on a holiday — see the module
+           -- docstring. Same prefix as `scheduled_work`, so the two never meet.
            (b.leave_type is null
             and b.work_days > 0
             and b.dow is not null
-            and not b.no_shift) as scheduled_work,
+            and b.on_holiday) as holiday_off,
+           (b.leave_type is null
+            and b.work_days > 0
+            and b.dow is not null
+            and not b.no_shift
+            and not b.on_holiday) as scheduled_work,
            (b.leave_type is null and b.rot_work) as rot_scheduled
     from bruto b
 )
@@ -251,6 +281,7 @@ select
     c.reference_date,
     case
       when c.leave_type is not null then c.leave_type
+      when c.holiday_off            then 'holiday'
       -- A rotação decide os dois lados: o dia que ela trabalha e o que ela
       -- folga. É a diferença entre 12x36 e o `work` sem hora que o motor
       -- escrevia quando não sabia — aquele nunca virava folga porque não havia
@@ -284,6 +315,9 @@ select
     end,
     case
       when c.leave_type is not null then 100
+      -- O calendário é declarado pelo owner e a semana pelo Secullum: é fato
+      -- lido, não palpite.
+      when c.holiday_off            then 100
       -- Declarada por um humano que carimbou o dia: é fato lido, do mesmo jeito
       -- que a semana do espelho é. O que não pode pontuar 100 é palpite, e
       -- palpite não chega aqui — o join exige `validated_at`.

@@ -122,10 +122,10 @@ export function OccurrenceDrawer({
           </p>
         </section>
 
-        {/* O veredito mora aqui, e continua morando aqui depois que a fila de
-            pendentes passou a existir: a fila lista e traz para cá, porque quem
-            decide precisa dos dois horários lado a lado, e eles estão logo
-            acima. As justificativas já escritas ficam na tela do colaborador,
+        {/* A justificativa mora aqui, e continua morando aqui depois que a
+            fila de pendentes passou a existir: a fila lista e traz para cá,
+            porque quem explica precisa dos dois horários lado a lado, e eles
+            estão logo acima. Quem aceita ou reprova é o RH, em outra tela. As justificativas já escritas ficam na tela do colaborador,
             que o rodapé deste drawer linka — repeti-las aqui duplicaria a
             leitura sem mudar a decisão. */}
         <JustificationVerdict

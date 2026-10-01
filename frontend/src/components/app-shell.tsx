@@ -17,6 +17,7 @@ import {
   REGRAS_PATH,
   TEMPLATES_PATH,
 } from "@/lib/canais/url";
+import { APROVACAO_PATH } from "@/lib/alcada/url";
 import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
@@ -54,6 +55,7 @@ export function AppShell({
   showAdmin = false,
   showAdminWrites = false,
   showComplianceReports = false,
+  showApprovals = false,
 }: {
   children: ReactNode;
   showAdmin?: boolean;
@@ -85,6 +87,12 @@ export function AppShell({
    * com este item sozinho.
    */
   showComplianceReports?: boolean;
+  /**
+   * Aprovação de justificativas — `hr` e `owner`, e mais ninguém
+   * (`reviewsJustifications`). O eixo é a alçada, não `util.is_admin`:
+   * `personnel` escreve na Administração e não revisa justificativa.
+   */
+  showApprovals?: boolean;
 }) {
   return (
     <div className="bg-canvas flex min-h-dvh">
@@ -102,6 +110,12 @@ export function AppShell({
           <NavLink href={PONTO_PATH} label="Gestão de ponto" />
           <NavLink href={MONITOR_PATH} label="Monitor diário" />
           <NavLink href={JUSTIFICATIVAS_PATH} label="Justificativas" />
+          {showApprovals ? (
+            <NavLink
+              href={APROVACAO_PATH}
+              label="Aprovação de justificativas"
+            />
+          ) : null}
           <NavLink href={TV_PATH} label="Painel de TV" />
           <NavLink href={ASSISTENTE_PATH} label="Assistente" />
         </nav>

@@ -42,6 +42,7 @@ vi.mock("@/components/app-shell", () => ({
     showAdmin: boolean;
     showAdminWrites: boolean;
     showComplianceReports: boolean;
+    showApprovals: boolean;
   }) => {
     shellProps(props);
     return null;
@@ -53,9 +54,9 @@ async function montar(role: string | null) {
 
   render(await DashboardLayout({ children: <p>conteúdo</p> }));
 
-  const { showAdmin, showAdminWrites, showComplianceReports } =
+  const { showAdmin, showAdminWrites, showComplianceReports, showApprovals } =
     shellProps.mock.calls[0][0];
-  return { showAdmin, showAdminWrites, showComplianceReports };
+  return { showAdmin, showAdminWrites, showComplianceReports, showApprovals };
 }
 
 beforeEach(() => {
@@ -83,6 +84,7 @@ describe("o layout escolhe qual eixo alimenta a sidebar", () => {
       showAdmin: true,
       showAdminWrites: false,
       showComplianceReports: true,
+      showApprovals: false,
     });
   });
 
@@ -91,6 +93,7 @@ describe("o layout escolhe qual eixo alimenta a sidebar", () => {
       showAdmin: true,
       showAdminWrites: true,
       showComplianceReports: true,
+      showApprovals: true,
     });
   });
 
@@ -102,6 +105,7 @@ describe("o layout escolhe qual eixo alimenta a sidebar", () => {
       showAdmin: true,
       showAdminWrites: true,
       showComplianceReports: true,
+      showApprovals: false,
     });
   });
 
@@ -113,6 +117,7 @@ describe("o layout escolhe qual eixo alimenta a sidebar", () => {
       showAdmin: false,
       showAdminWrites: false,
       showComplianceReports: true,
+      showApprovals: false,
     });
   });
 
@@ -121,7 +126,14 @@ describe("o layout escolhe qual eixo alimenta a sidebar", () => {
       showAdmin: false,
       showAdminWrites: false,
       showComplianceReports: false,
+      showApprovals: false,
     });
+  });
+
+  it("✅ `hr` revisa justificativa — com `personnel` acima, separa a alçada de `isAdmin`", async () => {
+    // `personnel` é admin e não revisa; `hr` é admin e revisa. Sem os dois,
+    // trocar `reviewsJustifications` por `isAdmin` na fiação passaria em `owner`.
+    expect((await montar("hr")).showApprovals).toBe(true);
   });
 
   it("sem vínculo com tenant nenhum, a sidebar não oferece área alguma", async () => {
@@ -132,6 +144,7 @@ describe("o layout escolhe qual eixo alimenta a sidebar", () => {
       showAdmin: false,
       showAdminWrites: false,
       showComplianceReports: false,
+      showApprovals: false,
     });
   });
 });

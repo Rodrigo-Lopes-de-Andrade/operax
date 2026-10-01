@@ -18,11 +18,12 @@ grant. Ela autoriza no `user_scope` e lê no `tenant_scope`, que é a ordem que
 `operax/motor/marcacao.py` já documenta.
 
 POR QUE A ESCRITA SAI DO `user_scope`
-`app.unit_secullum_map` e `app.employee` têm policy de escrita para admin, então
-a gravação **poderia** rodar como o usuário. `app.audit_log` não tem: ele é
-escrito por `service_role`, e o motivo é o mesmo que `operax/rh/repository.py`
-documenta — a linha e a linha de auditoria que a descreve precisam commitar
-juntas, senão existe um estado em que o mapa mudou e ninguém sabe quem mudou.
+`app.unit_secullum_map` tem policy de escrita para admin, então a gravação do
+mapa **poderia** rodar como o usuário (`app.employee` não pode desde a P1.2b).
+`app.audit_log` não tem: ele é escrito por `service_role`, e o motivo é o mesmo
+que `operax/rh/repository.py` documenta — a linha e a linha de auditoria que a
+descreve precisam commitar juntas, senão existe um estado em que o mapa mudou e
+ninguém sabe quem mudou.
 
 Então a autorização acontece antes, no `user_scope`, e a transação de escrita é
 `service_role`. É a ordem de sempre neste backend: quem pode, pergunta-se à

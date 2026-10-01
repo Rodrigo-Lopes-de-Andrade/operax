@@ -604,6 +604,39 @@ def test_dias_com_expediente_saem_da_mesma_fonte_dos_dias_base() -> None:
     assert ciclo.business_days_in(por_pessoa) == 21
 
 
+def _com_07_09(day_type: str) -> list[dict[str, Any]]:
+    """A escala de 21/08–20/09 com a segunda 07/09/2026 trocada por `day_type`."""
+    return [
+        linha | {"day_type": day_type} if linha["reference_date"] == date(2026, 9, 7) else linha
+        for linha in escala(VT_INICIO, VT_FIM)
+    ]
+
+
+def test_feriado_folgado_nao_conta_no_vt() -> None:
+    """Decisão do dono (28/09/2026): quem folgou no feriado não recebe o VT do dia."""
+    escala_do_mes = _com_07_09("holiday")
+    linha = uma(vt([pessoa(hired_on=date(2020, 1, 1))], escala_do_mes))
+    assert linha.days_base == 20
+    por_pessoa = {ANA: {x["reference_date"]: x["day_type"] for x in escala_do_mes}}
+    assert ciclo.business_days_in(por_pessoa) == 20
+
+
+def test_feriado_trabalhado_conta_no_vt() -> None:
+    """Quem bateu no feriado se deslocou: `holiday_worked` (derivado em
+    `_SCHEDULE_SQL`, provado no banco por `scripts/83_teste_feriado.py`)."""
+    escala_do_mes = _com_07_09("holiday_worked")
+    linha = uma(vt([pessoa(hired_on=date(2020, 1, 1))], escala_do_mes))
+    assert linha.days_base == 21
+    por_pessoa = {ANA: {x["reference_date"]: x["day_type"] for x in escala_do_mes}}
+    assert ciclo.business_days_in(por_pessoa) == 21
+
+
+def test_revezamento_no_feriado_e_dia_de_escala() -> None:
+    """O feriado não muda a escala do revezamento: o dia chega como `work` e conta."""
+    linha = uma(vt([pessoa(hired_on=date(2020, 1, 1))], _com_07_09("work")))
+    assert linha.days_base == 21
+
+
 # ---------------------------------------------------------------------------
 # 5. Cobertura da jornada — dia sem linha não é dia sem expediente
 # ---------------------------------------------------------------------------
@@ -2058,8 +2091,10 @@ def test_todo_join_do_apurador_propaga_o_tenant() -> None:
     # propósito: acrescentou um, acrescente o `tenant_id` nele e ajuste este
     # número. `>=` deixaria a remoção por vírgula passar, que foi como esta linha
     # nasceu verde na primeira versão.
-    assert len(joins) == 7, (
-        f"o apurador tem {len(joins)} joins e esta guarda conhece 7; "
+    # 9 desde a P0.3: os dois joins do `holiday_worked` em `_SCHEDULE_SQL`
+    # (Funcionario e batida_marcacao), cada um com o tenant no `on`.
+    assert len(joins) == 9, (
+        f"o apurador tem {len(joins)} joins e esta guarda conhece 9; "
         f"se você acrescentou um, propague o tenant nele e ajuste o número — "
         f"se removeu, confira se não virou vírgula no `from`, que foge desta varredura"
     )

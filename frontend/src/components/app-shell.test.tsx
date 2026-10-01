@@ -2,7 +2,12 @@ import { render, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { AppShell } from "@/components/app-shell";
-import { isAdmin, reachesComplianceReports, reachesHr } from "@/lib/identity";
+import {
+  isAdmin,
+  reachesComplianceReports,
+  reachesHr,
+  reviewsJustifications,
+} from "@/lib/identity";
 
 // `@/lib/identity` explode num bundle de cliente de propósito; aqui os dois
 // predicados são exercitados fora do Next, e é deles que a sidebar depende.
@@ -37,6 +42,7 @@ function comPapel(role: string) {
       showAdmin={reachesHr(role)}
       showAdminWrites={isAdmin(role)}
       showComplianceReports={reachesComplianceReports(role)}
+      showApprovals={reviewsJustifications(role)}
     >
       <p>conteúdo</p>
     </AppShell>,
@@ -253,6 +259,40 @@ describe("a sidebar não oferece porta que não abre", () => {
 
     expect(screen.queryByRole("link", { name: "Ciclo mensal" })).toBeNull();
     expect(screen.queryByText(/ciclo/i)).toBeNull();
+  });
+
+  it.each(["owner", "hr"])(
+    "✅ `%s` tem 'Aprovação de justificativas' na Operação",
+    (papel) => {
+      comPapel(papel);
+
+      expect(
+        within(screen.getByRole("navigation", { name: "Seções" })).getByRole(
+          "link",
+          { name: "Aprovação de justificativas" },
+        ),
+      ).toHaveAttribute("href", "/dashboard/justificativas/aprovacao");
+    },
+  );
+
+  it.each([
+    "personnel",
+    "executive",
+    "accounting",
+    "unit_supervisor",
+    "regional_manager",
+    "operations_manager",
+    "viewer",
+  ])("⛔ `%s` não recebe a porta da aprovação", (papel) => {
+    // `personnel` é admin e NÃO revisa: a alçada é do RH (decisão do dono), e
+    // a API responde 403 `not_hr` a ele. Um link que leva a 404 é pior do que
+    // link nenhum.
+    comPapel(papel);
+
+    expect(
+      screen.queryByRole("link", { name: "Aprovação de justificativas" }),
+    ).toBeNull();
+    expect(screen.getByRole("link", { name: "Justificativas" })).toBeVisible();
   });
 
   it("o conteúdo da página fica dentro do `main`", () => {
