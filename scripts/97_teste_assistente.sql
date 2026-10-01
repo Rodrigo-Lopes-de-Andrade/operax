@@ -1729,9 +1729,12 @@ begin
   perform pg_temp.assert_eq('A4-f7. os 5000 tokens de 20 semanas atrás só entram na janela larga',
     (select coalesce(sum(t.input_tokens), 0)::bigint from public.fn_assistant_test_cost(52) t)
     - (select coalesce(sum(t.input_tokens), 0)::bigint from public.fn_assistant_test_cost() t), 5000);
+  -- Contra a semana, não contra o mês: quando a semana corrente cruza a virada
+  -- do mês, um teste legítimo dela cai na competência anterior.
   perform pg_temp.assert_eq('A4-f8. p_weeks zero ou negativo é a semana corrente, nunca "tudo"',
-    (select count(*) from public.fn_assistant_test_cost(0) t
-      where t.month_start < date_trunc('month', now())::date), 0);
+    (select coalesce(sum(t.input_tokens), 0)::bigint from public.fn_assistant_test_cost(0) t),
+    (select coalesce(sum(q.input_tokens), 0)::bigint from app.ai_query q
+      where q.is_dry_run and q.created_at >= date_trunc('week', now())));
 
   -- ⛔ E o tenant: o teste de B não entra na conta de A.
   perform pg_temp.assert_eq('A4-f9. os 777 tokens de teste do tenant B ficam fora da conta de A',
