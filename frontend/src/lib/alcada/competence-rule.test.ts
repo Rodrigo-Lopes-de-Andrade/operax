@@ -17,6 +17,7 @@ const DIRS = [
   "lib/alcada",
   "components/alcada",
   "app/dashboard/justificativas/aprovacao",
+  "app/dashboard/justificativas/lancamento",
 ];
 
 function sources(): string[] {
@@ -29,7 +30,7 @@ function sources(): string[] {
 
 describe("a regra 21→20 não mora no front", () => {
   it("há arquivo para vigiar", () => {
-    expect(sources().length).toBeGreaterThanOrEqual(6);
+    expect(sources().length).toBeGreaterThanOrEqual(9);
   });
 
   it.each(sources().map((file) => [file.slice(SRC.length + 1), file]))(

@@ -12,6 +12,13 @@ import type { RawSearchParams } from "@/lib/ponto/filters";
  */
 export const APROVACAO_PATH = "/dashboard/justificativas/aprovacao";
 
+/**
+ * A lista do lançamento no Secullum — a terceira ponta do fluxo, com o mesmo
+ * recorte da fila: a competência é a do fato nas duas (decisão do dono,
+ * 04/10/2026), então as chaves da URL são as mesmas.
+ */
+export const LANCAMENTO_PATH = "/dashboard/justificativas/lancamento";
+
 export type ApprovalFilters = {
   /**
    * A competência, sempre em par: os dois ou nenhum. Nula, a API usa a
@@ -120,6 +127,22 @@ export function approvalHref(
   filters: ApprovalFilters,
   overrides: Partial<ApprovalFilters> = {},
 ): string {
+  return alcadaHref(APROVACAO_PATH, filters, overrides);
+}
+
+/** Os links da lista do lançamento — o mesmo recorte, outra rota. */
+export function postingHref(
+  filters: ApprovalFilters,
+  overrides: Partial<ApprovalFilters> = {},
+): string {
+  return alcadaHref(LANCAMENTO_PATH, filters, overrides);
+}
+
+export function alcadaHref(
+  path: string,
+  filters: ApprovalFilters,
+  overrides: Partial<ApprovalFilters> = {},
+): string {
   const competenceChanged =
     (overrides.year !== undefined && overrides.year !== filters.year) ||
     (overrides.month !== undefined && overrides.month !== filters.month);
@@ -143,10 +166,13 @@ export function approvalHref(
 
   const query = params.toString();
 
-  return query ? `${APROVACAO_PATH}?${query}` : APROVACAO_PATH;
+  return query ? `${path}?${query}` : path;
 }
 
-/** A query de `GET /alcada/fila`, com os nomes que a rota usa. */
+/**
+ * A query de `GET /alcada/fila` e de `GET /alcada/lancamento`, com os nomes
+ * que as duas rotas usam.
+ */
 export function approvalQuery(filters: ApprovalFilters): string {
   const params = new URLSearchParams();
 

@@ -275,6 +275,22 @@ describe("a sidebar não oferece porta que não abre", () => {
     },
   );
 
+  it.each(["owner", "hr"])(
+    "✅ `%s` tem 'Lançamento no Secullum' na Operação, logo depois da aprovação",
+    (papel) => {
+      comPapel(papel);
+
+      const secoes = within(screen.getByRole("navigation", { name: "Seções" }));
+      expect(
+        secoes.getByRole("link", { name: "Lançamento no Secullum" }),
+      ).toHaveAttribute("href", "/dashboard/justificativas/lancamento");
+      const nomes = secoes.getAllByRole("link").map((link) => link.textContent);
+      expect(nomes.indexOf("Lançamento no Secullum")).toBe(
+        nomes.indexOf("Aprovação de justificativas") + 1,
+      );
+    },
+  );
+
   it.each([
     "personnel",
     "executive",
@@ -291,6 +307,9 @@ describe("a sidebar não oferece porta que não abre", () => {
 
     expect(
       screen.queryByRole("link", { name: "Aprovação de justificativas" }),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("link", { name: "Lançamento no Secullum" }),
     ).toBeNull();
     expect(screen.getByRole("link", { name: "Justificativas" })).toBeVisible();
   });

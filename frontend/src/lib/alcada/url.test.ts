@@ -5,6 +5,7 @@ import {
   approvalQuery,
   isCalendarDay,
   parseApprovalFilters,
+  postingHref,
   shiftMonth,
   type ApprovalFilters,
 } from "@/lib/alcada/url";
@@ -137,6 +138,27 @@ describe("approvalHref", () => {
     expect(approvalHref(filtered, { month: 11 })).toBe(
       `/dashboard/justificativas/aprovacao?ano=2026&mes=11&un=${UNIT}`,
     );
+  });
+});
+
+describe("postingHref", () => {
+  it("o mesmo recorte, na rota do lançamento", () => {
+    expect(postingHref(NONE)).toBe("/dashboard/justificativas/lancamento");
+    expect(
+      postingHref(BASE, {
+        unitId: UNIT,
+        employeeId: EMPLOYEE,
+        to: "2026-09-25",
+      }),
+    ).toBe(
+      `/dashboard/justificativas/lancamento?ano=2026&mes=10&un=${UNIT}&col=${EMPLOYEE}&ate=2026-09-25`,
+    );
+  });
+
+  it("trocar de competência também limpa as datas", () => {
+    expect(
+      postingHref({ ...BASE, from: "2026-09-22" }, { year: 2025, month: 12 }),
+    ).toBe("/dashboard/justificativas/lancamento?ano=2025&mes=12");
   });
 });
 

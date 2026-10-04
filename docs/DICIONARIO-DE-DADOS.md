@@ -3917,6 +3917,16 @@ public.fn_kpi_period(p_de date, p_ate date, p_company_id uuid DEFAULT NULL::uuid
   returns TABLE(eventos bigint, colaboradores_afetados bigint, minutes_excedente bigint, minutes_faltante bigint, minutes_abs bigint, unidades_afetadas bigint, eventos_pendentes_ciclo bigint)
 ```
 
+### `fn_marcar_lancado`
+
+```sql
+public.fn_marcar_lancado(p_review_id uuid)
+  returns timestamp with time zone
+```
+
+O RH (ou o owner) declara que digitou no Secullum a decisão de uma revisão aprovada. Recusas P0001, nesta ordem: not_hr, review_not_found (inexistente ou de outro tenant), not_approved (revisão rejected), already_posted. Grava posted_to_source_at e posted_by uma vez só; não existe desfazer. Definer: checa o papel ela mesma. Devolve a marca.
+
+
 ### `fn_pending_justification`
 
 ```sql

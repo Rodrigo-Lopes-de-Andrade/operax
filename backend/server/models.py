@@ -191,6 +191,66 @@ class JustificationReviewApplied(BaseModel):
     decision: Literal["approved", "rejected"]
 
 
+class PostingListRow(BaseModel):
+    """Uma revisão aprovada na lista do lançamento no Secullum.
+
+    `posted_to_source_at`/`posted_by` nulos = aprovada e ainda não lançada.
+    `type`, `type_description` e `minutes` são nulos sem desvio; a unidade é a
+    do desvio, ou a do colaborador sem ele (a regra da fila). Quem aprovou e
+    quem lançou vão como uuid: o nome mora em `auth.users`, que a sessão do
+    usuário não lê.
+    """
+
+    review_id: UUID
+    justification_id: UUID
+    employee_id: UUID
+    employee_name: str
+    unit_id: UUID | None
+    unit_name: str | None
+    reference_date: date
+    type: str | None
+    type_description: str | None
+    minutes: int | None
+    text: str
+    author_name: str | None
+    reviewed_by: UUID
+    reviewed_at: datetime
+    posted_to_source_at: datetime | None
+    posted_by: UUID | None
+
+
+class PostingList(BaseModel):
+    """A lista do lançamento de uma competência — a do FATO, pela janela 21→20
+    de `util.competencia_janela`, a mesma da fila (decisão do dono, 04/10/2026).
+    Pendentes primeiro, lançadas depois; a tela separa por `posted_to_source_at`.
+    """
+
+    ano: int
+    mes: int
+    period_start: date
+    period_end: date
+    rows: list[PostingListRow]
+
+
+class ReviewPostingRequest(BaseModel):
+    """O corpo, `{}`, de "marquei como lançado no Secullum".
+
+    Fechado de propósito: quando e quem lançou são do banco (`now()` e o `sub`
+    do token) — um `posted_by` ou `posted_to_source_at` aqui é recusado, não
+    ignorado.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class ReviewPostingApplied(BaseModel):
+    """A marca gravada por `public.fn_marcar_lancado` — uma vez só, sem desfazer."""
+
+    review_id: UUID
+    posted_to_source_at: datetime
+    posted_by: UUID
+
+
 class CompensationBand(BaseModel):
     """Sensitive: `compensation` domain."""
 

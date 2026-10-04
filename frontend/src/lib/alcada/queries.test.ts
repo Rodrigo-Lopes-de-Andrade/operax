@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { loadApprovalScreen } from "@/lib/alcada/queries";
+import { loadApprovalScreen, loadPostingScreen } from "@/lib/alcada/queries";
 import type { ApprovalFilters } from "@/lib/alcada/url";
 
 vi.mock("server-only", () => ({}));
@@ -110,5 +110,48 @@ describe("loadApprovalScreen — Caminho 2", () => {
       status: "unavailable",
     });
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("loadPostingScreen — Caminho 2", () => {
+  it("pede a lista do lançamento ao FastAPI, com o Bearer e o mesmo recorte", async () => {
+    fetchMock.mockResolvedValue(answer(200, RESPOSTA));
+
+    const screen = await loadPostingScreen(FILTERS);
+
+    expect(screen.list).toEqual({ status: "ok", queue: RESPOSTA });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe(
+      "http://api.stub.test/alcada/lancamento?ano=2026&mes=10&unidade=3f2504e0-4f89-41d3-9a0c-0305e82c3301&de=2026-09-22",
+    );
+    expect(init.headers.Authorization).toBe("Bearer token-de-teste");
+  });
+
+  it("sem competência na URL, a rota vai sem query", async () => {
+    fetchMock.mockResolvedValue(answer(200, RESPOSTA));
+
+    await loadPostingScreen({
+      ...FILTERS,
+      year: null,
+      month: null,
+      unitId: null,
+      from: null,
+    });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      "http://api.stub.test/alcada/lancamento",
+    );
+  });
+
+  it.each([
+    [403, { detail: "not_hr" }, "forbidden"],
+    [422, { detail: [] }, "invalid"],
+    [500, { detail: "boom" }, "unavailable"],
+  ])("%i vira %s, e nunca lista vazia", async (status, body, expected) => {
+    fetchMock.mockResolvedValue(answer(status, body));
+
+    expect((await loadPostingScreen(FILTERS)).list).toEqual({
+      status: expected,
+    });
   });
 });

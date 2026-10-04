@@ -91,6 +91,13 @@ $PY_ENSAIO scripts/84_teste_curadoria_justificativa.py || exit 1
 # O lock da alçada (P1.2) só existe entre DUAS sessões, e o `98` é uma só.
 echo "--- a revisão concorrente (P1.2): quem não alcança não espera, a segunda vê a primeira"
 $PY_ENSAIO scripts/81_teste_revisao_concorrente.py || exit 1
+# O mesmo lock, na marca de lançamento (P1.4): sem ele a segunda sobrescreve.
+echo "--- o lançamento concorrente (P1.4): quem não alcança não espera, a segunda não sobrescreve"
+$PY_ENSAIO scripts/78_teste_lancamento_concorrente.py || exit 1
+# A lista do lançamento (P1.4) é SQL no router, não objeto do banco: o que a
+# prova é a rota de verdade, como o usuário, contra a RLS.
+echo "--- a lista do lançamento (P1.4): competência do fato, papel na consulta, supervisor sem nada"
+$PY_ENSAIO scripts/77_teste_lista_lancamento.py || exit 1
 # A janela 21→20 vive em Python (DP) e em SQL (fila da alçada, P1.3).
 echo "--- a janela da competência (P1.3): util.competencia_janela = dp/ciclo.py"
 $PY_ENSAIO scripts/80_teste_janela_competencia.py || exit 1

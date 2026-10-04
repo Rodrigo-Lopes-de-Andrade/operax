@@ -3213,6 +3213,214 @@ do $$ begin
         and unit_id = 'a0000000-0000-0000-0000-0000000000a1'), 1);
 end $$;
 
+-- ---------------------------------------------------------------------------
+\echo '--- Alçada (P1.4): o lançamento no Secullum — a marca entra só pela RPC, uma vez'
+-- ---------------------------------------------------------------------------
+-- `public.fn_marcar_lancado`, decisão do dono de 01/10/2026. Cada recusa tem ao
+-- lado o positivo que a separa de "a RPC recusa tudo":
+--   not_hr (supervisor, DP, contabilidade) x  hr e owner marcam
+--   review_not_found (B, inexistente)     x  o owner de B marca a mesma de B
+--   not_approved (reprovada)              x  a aprovada ao lado é marcada
+--   already_posted                        x  a primeira marca entrou, e é UMA
+-- As revisões de A vêm da P1.2: f101 aprovada (RH), f102 reprovada, f103 e
+-- f110 aprovadas (owner), f111 e f112 aprovadas (RH). De B: f105 e f107.
+-- O id de cada revisão vai para um GUC de sessão: o RH de A não a lê em B, e a
+-- chamada precisa do id mesmo assim.
+do $$ begin
+  perform set_config('p14.' || right(justification_id::text, 4), id::text, false)
+     from app.justification_review
+    where justification_id in ('a0000000-0000-0000-0000-00000000f101','a0000000-0000-0000-0000-00000000f102',
+                               'a0000000-0000-0000-0000-00000000f103','a0000000-0000-0000-0000-00000000f110',
+                               'a0000000-0000-0000-0000-00000000f111','a0000000-0000-0000-0000-00000000f112',
+                               'b0000000-0000-0000-0000-00000000f105','b0000000-0000-0000-0000-00000000f107');
+end $$;
+
+create or replace function pg_temp.rv(p_sufixo text) returns uuid
+language sql as $$ select current_setting('p14.' || p_sufixo)::uuid $$;
+
+-- Uma chamada, e o que ela respondeu: o código da recusa, ou 'ok'.
+create or replace function pg_temp.lanca(p_review uuid)
+returns text language plpgsql as $$
+begin
+  perform public.fn_marcar_lancado(p_review);
+  return 'ok';
+exception when sqlstate 'P0001' then return sqlerrm;
+end $$;
+
+-- As de A que o chamador LÊ, separadas: 'pendente:<ids>|lancada:<ids>'.
+create or replace function pg_temp.lancamento_a() returns text
+language sql as $$
+  select coalesce(string_agg(right(r.justification_id::text, 4), ',' order by r.justification_id)
+                    filter (where r.posted_to_source_at is null), '')
+         || '|' ||
+         coalesce(string_agg(right(r.justification_id::text, 4), ',' order by r.justification_id)
+                    filter (where r.posted_to_source_at is not null), '')
+    from app.justification_review r
+   where r.decision = 'approved'
+     and r.justification_id in ('a0000000-0000-0000-0000-00000000f101','a0000000-0000-0000-0000-00000000f103',
+                                'a0000000-0000-0000-0000-00000000f110','a0000000-0000-0000-0000-00000000f111',
+                                'a0000000-0000-0000-0000-00000000f112')
+$$;
+
+do $$ begin
+  perform pg_temp.assert_eq('as oito revisões do cenário existem (P1.2)',
+    (select count(*) from app.justification_review
+      where id in (pg_temp.rv('f101'), pg_temp.rv('f102'), pg_temp.rv('f103'), pg_temp.rv('f110'),
+                   pg_temp.rv('f111'), pg_temp.rv('f112'), pg_temp.rv('f105'), pg_temp.rv('f107'))), 8);
+  perform pg_temp.assert_eq('nenhuma revisão nasce lançada',
+    (select count(*) from app.justification_review where posted_to_source_at is not null
+                                                       or posted_by is not null), 0);
+  perform pg_temp.assert_eq('authenticated EXECUTA public.fn_marcar_lancado',
+    case when has_function_privilege('authenticated', 'public.fn_marcar_lancado(uuid)', 'execute')
+         then 1 else 0 end, 1);
+  perform pg_temp.assert_eq('anon NÃO executa public.fn_marcar_lancado',
+    case when has_function_privilege('anon', 'public.fn_marcar_lancado(uuid)', 'execute')
+         then 1 else 0 end, 0);
+  perform pg_temp.assert_eq('PUBLIC NÃO executa public.fn_marcar_lancado',
+    (select count(*) from pg_proc p, aclexplode(p.proacl) a
+      where p.oid = 'public.fn_marcar_lancado(uuid)'::regprocedure
+        and a.grantee = 0 and a.privilege_type = 'EXECUTE'), 0);
+  perform pg_temp.assert_eq('fn_marcar_lancado é security DEFINER (checa o papel ela mesma)',
+    (select count(*) from pg_proc p
+      where p.oid = 'public.fn_marcar_lancado(uuid)'::regprocedure and p.prosecdef), 1);
+  perform pg_temp.assert_eq('authenticated continua sem UPDATE em app.justification_review (tabela e coluna)',
+    case when has_table_privilege('authenticated', 'app.justification_review', 'UPDATE')
+           or has_any_column_privilege('authenticated', 'app.justification_review', 'UPDATE')
+         then 1 else 0 end, 0);
+  perform pg_temp.assert_eq('app.justification_review segue só com review_read (nenhuma policy nova)',
+    (select count(*) from pg_policies
+      where schemaname = 'app' and tablename = 'justification_review'
+        and policyname <> 'review_read'), 0);
+end $$;
+
+set local role authenticated;
+
+-- --- quem não é do RH: nem marca, nem muda nada ------------------------------
+set local request.jwt.claim.sub = '22222222-2222-2222-2222-222222222222';
+do $$ begin
+  perform pg_temp.assert_eq('supervisor ENXERGA a revisão de A Centro (a recusa não é de escopo)',
+    (select count(*) from app.justification_review where id = pg_temp.rv('f101')), 1);
+  perform pg_temp.assert_txt('supervisor marcando lançado: not_hr',
+    pg_temp.lanca(pg_temp.rv('f101')), 'not_hr');
+  perform pg_temp.assert_txt('supervisor com id inexistente: not_hr (o papel vem antes da linha)',
+    pg_temp.lanca('a0000000-0000-0000-0000-00000000ffff'), 'not_hr');
+end $$;
+set local request.jwt.claim.sub = '33333333-3333-3333-3333-333333333333';
+do $$ begin
+  perform pg_temp.assert_txt('DP marcando lançado: not_hr',
+    pg_temp.lanca(pg_temp.rv('f101')), 'not_hr');
+end $$;
+set local request.jwt.claim.sub = '66666666-6666-6666-6666-666666666666';
+do $$ begin
+  perform pg_temp.assert_txt('contabilidade marcando lançado: not_hr',
+    pg_temp.lanca(pg_temp.rv('f101')), 'not_hr');
+end $$;
+
+-- --- RH de A ------------------------------------------------------------------
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ begin
+  perform pg_temp.assert_txt('RH de A antes de marcar: tudo pendente, nada lançado',
+    pg_temp.lancamento_a(), 'f101,f103,f110,f111,f112|');
+  perform pg_temp.assert_txt('RH de A com a revisão de B: review_not_found',
+    pg_temp.lanca(pg_temp.rv('f105')), 'review_not_found');
+  perform pg_temp.assert_txt('id inexistente: review_not_found (a mesma resposta)',
+    pg_temp.lanca('a0000000-0000-0000-0000-00000000ffff'), 'review_not_found');
+  perform pg_temp.assert_txt('revisão reprovada: not_approved',
+    pg_temp.lanca(pg_temp.rv('f102')), 'not_approved');
+  perform pg_temp.assert_txt('RH marca a aprovada f101',
+    pg_temp.lanca(pg_temp.rv('f101')), 'ok');
+  perform pg_temp.assert_txt('segunda marcação da f101: already_posted',
+    pg_temp.lanca(pg_temp.rv('f101')), 'already_posted');
+  perform pg_temp.assert_txt('a reprovada continua not_approved depois (não vira already_posted)',
+    pg_temp.lanca(pg_temp.rv('f102')), 'not_approved');
+  -- A porta direta continua fechada: só a RPC escreve a marca.
+  begin
+    update app.justification_review set posted_to_source_at = now(), posted_by = (select auth.uid())
+     where id = pg_temp.rv('f103');
+    raise exception 'FALHA: RH gravou posted_to_source_at por UPDATE direto';
+  exception when insufficient_privilege then
+    raise notice '  ok  RH não grava a marca por UPDATE direto (permission denied)';
+  end;
+end $$;
+
+-- --- owner de A ---------------------------------------------------------------
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform pg_temp.assert_txt('owner tentando remarcar a f101 (lançada pelo RH): already_posted',
+    pg_temp.lanca(pg_temp.rv('f101')), 'already_posted');
+  perform pg_temp.assert_txt('owner marca a aprovada f111',
+    pg_temp.lanca(pg_temp.rv('f111')), 'ok');
+  perform pg_temp.assert_txt('owner com a revisão de B: review_not_found',
+    pg_temp.lanca(pg_temp.rv('f107')), 'review_not_found');
+end $$;
+
+-- --- hr em A e supervisor em B: o papel vale no tenant DA REVISÃO ------------
+set local request.jwt.claim.sub = '77777777-7777-7777-7777-777777777777';
+do $$ begin
+  perform pg_temp.assert_txt('hr-A/supervisor-B com a revisão de B: review_not_found',
+    pg_temp.lanca(pg_temp.rv('f105')), 'review_not_found');
+end $$;
+
+-- --- owner de B ---------------------------------------------------------------
+set local request.jwt.claim.sub = '44444444-4444-4444-4444-444444444444';
+do $$ begin
+  perform pg_temp.assert_txt('owner B com a f101 de A, JÁ LANÇADA: review_not_found (não already_posted)',
+    pg_temp.lanca(pg_temp.rv('f101')), 'review_not_found');
+  perform pg_temp.assert_txt('owner B com a reprovada de A: review_not_found (não not_approved)',
+    pg_temp.lanca(pg_temp.rv('f102')), 'review_not_found');
+  perform pg_temp.assert_txt('owner B marca a f105 de B — a mesma que o RH de A não alcançou',
+    pg_temp.lanca(pg_temp.rv('f105')), 'ok');
+  perform pg_temp.assert_eq('owner B não lê revisão de A (nem a lançada)',
+    (select count(*) from app.justification_review where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001'), 0);
+end $$;
+
+-- --- a lista separa pendente de lançado, para quem a lê -----------------------
+set local request.jwt.claim.sub = '55555555-5555-5555-5555-555555555555';
+do $$ begin
+  perform pg_temp.assert_txt('RH de A: pendentes f103,f110,f112 | lançadas f101,f111',
+    pg_temp.lancamento_a(), 'f103,f110,f112|f101,f111');
+end $$;
+set local request.jwt.claim.sub = '11111111-1111-1111-1111-111111111111';
+do $$ begin
+  perform pg_temp.assert_txt('owner de A vê a mesma separação',
+    pg_temp.lancamento_a(), 'f103,f110,f112|f101,f111');
+end $$;
+
+reset request.jwt.claim.sub;
+reset role;
+
+-- --- o que as chamadas deixaram -----------------------------------------------
+do $$ begin
+  perform pg_temp.assert_eq('a f101 tem UMA marca, do RH — a segunda e a do owner não sobrescreveram',
+    (select count(*) from app.justification_review
+      where id = pg_temp.rv('f101')
+        and posted_to_source_at is not null
+        and posted_by = '55555555-5555-5555-5555-555555555555'), 1);
+  perform pg_temp.assert_eq('a f111 foi marcada pelo owner',
+    (select count(*) from app.justification_review
+      where id = pg_temp.rv('f111') and posted_to_source_at is not null
+        and posted_by = '11111111-1111-1111-1111-111111111111'), 1);
+  perform pg_temp.assert_eq('a f105 de B foi marcada pelo owner de B, e só por ele',
+    (select count(*) from app.justification_review
+      where id = pg_temp.rv('f105') and posted_to_source_at is not null
+        and posted_by = '44444444-4444-4444-4444-444444444444'), 1);
+  perform pg_temp.assert_eq('a reprovada não foi marcada',
+    (select count(*) from app.justification_review
+      where id = pg_temp.rv('f102') and (posted_to_source_at is not null or posted_by is not null)), 0);
+  perform pg_temp.assert_eq('a f107 de B (só o owner de A tentou) continua sem marca',
+    (select count(*) from app.justification_review
+      where id = pg_temp.rv('f107') and (posted_to_source_at is not null or posted_by is not null)), 0);
+  perform pg_temp.assert_eq('marca e autor andam juntos: nenhuma linha com um sem o outro',
+    (select count(*) from app.justification_review
+      where (posted_to_source_at is null) <> (posted_by is null)), 0);
+  perform pg_temp.assert_eq('no total, exatamente três marcas (f101, f111, f105)',
+    (select count(*) from app.justification_review where posted_to_source_at is not null), 3);
+  perform pg_temp.assert_eq('marcar não mexeu na decisão de ninguém',
+    (select count(*) from app.justification_review
+      where id in (pg_temp.rv('f101'), pg_temp.rv('f111'), pg_temp.rv('f105'))
+        and decision = 'approved'), 3);
+end $$;
+
 \echo ''
 \echo '================================================'
 \echo ' ISOLAMENTO MULTI-TENANT: TODOS OS TESTES OK'

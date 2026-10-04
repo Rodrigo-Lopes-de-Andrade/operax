@@ -7,7 +7,8 @@ import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/kpi-card";
 import { SelectNav, type SelectGroup } from "@/components/ui/select-nav";
 import {
-  approvalHref,
+  alcadaHref,
+  APROVACAO_PATH,
   isCalendarDay,
   shiftMonth,
   YEAR_MAX,
@@ -54,13 +55,22 @@ export function ApprovalFiltersBar({
   period,
   units,
   rows,
+  path = APROVACAO_PATH,
+  employeeGroupLabel = "Com justificativa na fila",
 }: {
   filters: ResolvedApprovalFilters;
   period: { start: string; end: string };
   units: UnitOption[];
-  rows: ApprovalQueueRow[];
+  rows: Pick<ApprovalQueueRow, "employee_id" | "employee_name">[];
+  /** A rota cujos links o recorte monta — a fila ou a lista do lançamento. */
+  path?: string;
+  employeeGroupLabel?: string;
 }) {
   const router = useRouter();
+  const approvalHref = (
+    base: ApprovalFilters,
+    overrides: Partial<ApprovalFilters> = {},
+  ) => alcadaHref(path, base, overrides);
   const previous = shiftMonth(filters.year, filters.month, -1);
   const next = shiftMonth(filters.year, filters.month, 1);
 
@@ -89,7 +99,7 @@ export function ApprovalFiltersBar({
 
   const employeeGroups: SelectGroup[] = [
     {
-      label: "Com justificativa na fila",
+      label: employeeGroupLabel,
       options: [...employees]
         .sort(([, a], [, b]) => a.localeCompare(b, "pt-BR"))
         .map(([id, name]) => ({

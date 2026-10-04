@@ -1,4 +1,4 @@
-"""A alçada no FastAPI — a fila e a revisão (P1.3).
+"""A alçada no FastAPI — a fila e a revisão (P1.3), e o lançamento (P1.4).
 
 O SQL é provado no `98` (a fila: janela 21→20, filtros, escopo e tenant; a RPC:
 as nove recusas) e no `80` (a janela contra `dp/ciclo.py`). Aqui fica o que a
@@ -31,6 +31,9 @@ JUSTIFICATION = UUID("a1ca0000-0000-4000-8000-000000000001")
 EMPLOYEE = UUID("a1ca0000-0000-4000-8000-000000000002")
 UNIT = UUID("a1ca0000-0000-4000-8000-000000000003")
 REVIEW = UUID("a1ca0000-0000-4000-8000-000000000004")
+POSTED_AT = datetime(2026, 10, 1, 14, 30, tzinfo=UTC)
+REVIEWER = UUID("a1ca0000-0000-4000-8000-0000000000aa")
+POSTER = UUID("a1ca0000-0000-4000-8000-0000000000bb")
 
 QUEUE_ROW = {
     "justification_id": JUSTIFICATION,
@@ -50,6 +53,35 @@ QUEUE_ROW = {
 }
 
 HR_OR_OWNER = {UserRole.HR, UserRole.OWNER}
+
+#: O trecho que só a lista do lançamento tem.
+LISTA_MARCADOR = "join app.justification_review r"
+
+PENDENTE = {
+    "review_id": REVIEW,
+    "justification_id": JUSTIFICATION,
+    "employee_id": EMPLOYEE,
+    "employee_name": "Ana Ribeiro",
+    "unit_id": UNIT,
+    "unit_name": "Centro",
+    "reference_date": date(2026, 12, 22),
+    "type": "late_entry",
+    "type_description": "Entrada após o previsto",
+    "minutes": -17,
+    "text": "Consulta médica",
+    "author_name": "Supervisor Centro",
+    "reviewed_by": REVIEWER,
+    "reviewed_at": datetime(2026, 12, 23, 9, 0, tzinfo=UTC),
+    "posted_to_source_at": None,
+    "posted_by": None,
+}
+LANCADA = PENDENTE | {
+    "review_id": uuid4(),
+    "justification_id": uuid4(),
+    "reference_date": date(2027, 1, 5),
+    "posted_to_source_at": POSTED_AT,
+    "posted_by": POSTER,
+}
 
 WINDOW = {"period_start": date(2026, 12, 21), "period_end": date(2027, 1, 20)}
 
@@ -83,10 +115,18 @@ class _Relogio(datetime):
 def db(monkeypatch: pytest.MonkeyPatch):
 
     def install(
-        *, allowed: bool = True, queue: list[dict[str, Any]] | None = None, review: Any = None
+        *,
+        allowed: bool = True,
+        queue: list[dict[str, Any]] | None = None,
+        review: Any = None,
+        posting: Any = None,
+        posting_rows: list[dict[str, Any]] | None = None,
     ) -> tuple[StubScope, StubScopeContext]:
         user = StubScope(
             {
+                # Primeiro: a lista do lançamento também cita `util.roles_in_tenant`
+                # e `util.competencia_janela`, e o stub responde ao primeiro marcador.
+                LISTA_MARCADOR: (posting_rows if posting_rows is not None else [PENDENTE, LANCADA]),
                 "util.roles_in_tenant": {"allowed": allowed},
                 "from app.unit u": {"timezone": "America/Sao_Paulo"},
                 "util.competencia_de": {"period_year": 2027, "period_month": 1},
@@ -94,6 +134,9 @@ def db(monkeypatch: pytest.MonkeyPatch):
                 "fn_fila_aprovacao": queue if queue is not None else [QUEUE_ROW],
                 "fn_revisar_justificativa": (
                     review if review is not None else {"review_id": REVIEW}
+                ),
+                "fn_marcar_lancado": (
+                    posting if posting is not None else {"posted_to_source_at": POSTED_AT}
                 ),
             }
         )
@@ -458,3 +501,304 @@ def test_corpo_fora_do_contrato_e_422_e_a_rpc_nao_roda(
 
     assert resposta.status_code == 422
     assert ctx.opened == 0
+
+
+# ---------------------------------------------------------------------------
+# POST /alcada/revisoes/{id}/lancamento
+# ---------------------------------------------------------------------------
+def _lancar(client: TestClient, cabecalho: dict[str, str], body: Any = None):
+    return client.post(
+        f"/alcada/revisoes/{REVIEW}/lancamento",
+        headers=cabecalho,
+        json={} if body is None else body,
+    )
+
+
+def test_marcar_lancado_chama_a_rpc_como_o_usuario(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """Uma conexão, a RPC só com o id — quando e quem são do banco."""
+    user, ctx = db()
+
+    resposta = _lancar(client, cabecalho)
+
+    assert resposta.status_code == 200
+    corpo = resposta.json()
+    assert corpo["review_id"] == str(REVIEW)
+    assert datetime.fromisoformat(corpo["posted_to_source_at"]) == POSTED_AT
+    assert ctx.opened == 1
+    assert len(user.statements) == 1
+    assert "public.fn_marcar_lancado" in user.statements[0]
+    assert user.params[0] == {"review_id": REVIEW}
+
+
+def test_quem_lancou_e_o_sub_do_token(client: TestClient, cabecalho: dict[str, str], db):
+    """`posted_by` é o `auth.uid()` que a RPC gravou — o usuário do token, que é
+    o mesmo que o `user_scope` apresenta ao banco."""
+    vistos: list[UUID] = []
+
+    async def membership(user_id: UUID) -> TenantContext:
+        vistos.append(user_id)
+        return TenantContext(tenant_id=TENANT_ID, user_id=user_id, role=UserRole.HR)
+
+    app.dependency_overrides[get_membership_resolver] = lambda: membership
+    db()
+
+    corpo = _lancar(client, cabecalho).json()
+
+    assert vistos and corpo["posted_by"] == str(vistos[0])
+
+
+def test_o_mapeamento_cobre_exatamente_as_quatro_recusas_do_lancamento():
+    """Recusa nova na RPC sem status aqui é 500 — e esta lista é a da migration."""
+    assert alcada.POSTING_STATUS == {
+        "not_hr": 403,
+        "review_not_found": 404,
+        "not_approved": 409,
+        "already_posted": 409,
+    }
+
+
+@pytest.mark.parametrize(
+    ("code", "status_code"),
+    [
+        ("not_hr", 403),
+        ("review_not_found", 404),
+        ("not_approved", 409),
+        ("already_posted", 409),
+    ],
+)
+def test_as_quatro_recusas_do_lancamento_viram_http_com_o_codigo_no_detail(
+    client: TestClient, cabecalho: dict[str, str], db, code: str, status_code: int
+):
+    db(posting=_TriggerRefusal(code))
+
+    resposta = _lancar(client, cabecalho)
+
+    assert resposta.status_code == status_code
+    assert resposta.json() == {"detail": code}
+
+
+@pytest.mark.parametrize("role", sorted(set(UserRole) - HR_OR_OWNER))
+def test_quem_nao_e_rh_nem_owner_lancando_recebe_403(
+    client: TestClient, cabecalho: dict[str, str], db, as_role, role: UserRole
+):
+    """O papel é decidido pela RPC (definer, `not_hr`); a rota não tem uma
+    segunda opinião, e o 403 é o dela."""
+    as_role(role)
+    db(posting=_TriggerRefusal("not_hr"))
+
+    resposta = _lancar(client, cabecalho)
+
+    assert resposta.status_code == 403
+    assert resposta.json() == {"detail": "not_hr"}
+
+
+def test_a_recusa_da_revisao_nao_vale_no_lancamento(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """Cada porta traduz as suas: um código da revisão saindo do lançamento é
+    defeito, e sobe em vez de virar um status emprestado."""
+    db(posting=_TriggerRefusal("already_reviewed"))
+
+    with pytest.raises(_TriggerRefusal):
+        _lancar(client, cabecalho)
+
+
+def test_lancamento_sem_marca_devolvida_nao_responde_200(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    db(posting={"posted_to_source_at": None})
+
+    with pytest.raises(RuntimeError):
+        _lancar(client, cabecalho)
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"posted_by": str(uuid4())},
+        {"posted_to_source_at": "2026-09-01T12:00:00Z"},
+        {"tenant_id": str(uuid4())},
+        {"review_id": str(uuid4())},
+        [],
+    ],
+)
+def test_corpo_do_lancamento_fora_do_contrato_e_422_e_a_rpc_nao_roda(
+    client: TestClient, cabecalho: dict[str, str], db, body: dict[str, Any]
+):
+    """`extra="forbid"`: quem e quando lançou não vêm do cliente — um
+    `posted_by` no corpo é recusado, não ignorado."""
+    _, ctx = db()
+
+    resposta = _lancar(client, cabecalho, body)
+
+    assert resposta.status_code == 422
+    assert ctx.opened == 0
+
+
+def test_sem_corpo_e_422_e_a_rpc_nao_roda(client: TestClient, cabecalho: dict[str, str], db):
+    _, ctx = db()
+
+    resposta = client.post(f"/alcada/revisoes/{REVIEW}/lancamento", headers=cabecalho)
+
+    assert resposta.status_code == 422
+    assert ctx.opened == 0
+
+
+def test_review_id_malformado_e_422_antes_do_banco(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    _, ctx = db()
+
+    resposta = client.post("/alcada/revisoes/nao-e-uuid/lancamento", headers=cabecalho, json={})
+
+    assert resposta.status_code == 422
+    assert ctx.opened == 0
+
+
+# ---------------------------------------------------------------------------
+# GET /alcada/lancamento
+# ---------------------------------------------------------------------------
+def _lista_statements(user: StubScope) -> list[str]:
+    return [st for st in user.statements if LISTA_MARCADOR in st]
+
+
+@pytest.mark.parametrize("role", sorted(set(UserRole) - HR_OR_OWNER))
+def test_lista_quem_nao_e_rh_nem_owner_recebe_403_e_a_consulta_nao_roda(
+    client: TestClient, cabecalho: dict[str, str], db, as_role, role: UserRole
+):
+    as_role(role)
+    user, _ = db(allowed=False)
+
+    resposta = client.get("/alcada/lancamento?ano=2027&mes=1", headers=cabecalho)
+
+    assert resposta.status_code == 403
+    assert resposta.json() == {"detail": "not_hr"}
+    assert _lista_statements(user) == []
+
+
+def test_lista_o_403_vem_antes_do_relogio(client: TestClient, cabecalho: dict[str, str], db):
+    user, _ = db(allowed=False)
+
+    resposta = client.get("/alcada/lancamento", headers=cabecalho)
+
+    assert resposta.status_code == 403
+    assert not _relogio_lido(user)
+    assert len(user.statements) == 1
+
+
+@pytest.mark.parametrize("role", sorted(HR_OR_OWNER))
+def test_lista_rh_e_owner_recebem_pendente_e_lancada(
+    client: TestClient, cabecalho: dict[str, str], db, as_role, role: UserRole
+):
+    """Pendente e lançada vêm juntas, e o que as separa é a marca: nula é
+    pendente. Quem aprovou e quem lançou vão como uuid."""
+    as_role(role)
+    user, ctx = db()
+
+    resposta = client.get("/alcada/lancamento?ano=2027&mes=1", headers=cabecalho)
+
+    assert resposta.status_code == 200
+    linhas = resposta.json()["rows"]
+    assert [(r["posted_to_source_at"], r["posted_by"]) for r in linhas] == [
+        (None, None),
+        (POSTED_AT.isoformat().replace("+00:00", "Z"), str(POSTER)),
+    ]
+    assert {r["reviewed_by"] for r in linhas} == {str(REVIEWER)}
+    assert ctx.opened == 1
+    assert "util.roles_in_tenant" in user.statements[0]
+    assert LISTA_MARCADOR in user.statements[-1]
+
+
+def test_lista_com_ano_e_mes_traz_a_janela_do_banco_e_nao_le_o_relogio(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    user, _ = db()
+
+    corpo = client.get("/alcada/lancamento?ano=2027&mes=1", headers=cabecalho).json()
+
+    assert (corpo["ano"], corpo["mes"]) == (2027, 1)
+    assert (corpo["period_start"], corpo["period_end"]) == ("2026-12-21", "2027-01-20")
+    assert _params(user, "select period_start, period_end from util.competencia_janela") == {
+        "year": 2027,
+        "month": 1,
+    }
+    assert not _relogio_lido(user)
+
+
+def test_lista_sem_ano_e_mes_usa_o_relogio_do_tenant_numa_conexao_so(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """23:30 de 20/12 em São Paulo: o dia vai ao banco, a competência é a que
+    `util.competencia_de` disser, e o `tenant_scope` sabotado não é tocado."""
+    user, ctx = db()
+
+    corpo = client.get("/alcada/lancamento", headers=cabecalho).json()
+
+    assert ctx.opened == 1
+    assert _params(user, "util.competencia_de") == {"today": date(2026, 12, 20)}
+    assert (corpo["ano"], corpo["mes"]) == (2027, 1)
+    lista = _params(user, LISTA_MARCADOR)
+    assert (lista["year"], lista["month"]) == (2027, 1)
+
+
+@pytest.mark.parametrize("query", ["ano=2027", "mes=1", "ano=2027&mes=13", "ano=2027&mes=1&de=x"])
+def test_lista_competencia_malformada_e_422_antes_do_banco(
+    client: TestClient, cabecalho: dict[str, str], db, query: str
+):
+    _, ctx = db()
+
+    resposta = client.get(f"/alcada/lancamento?{query}", headers=cabecalho)
+
+    assert resposta.status_code == 422
+    assert ctx.opened == 0
+
+
+def test_lista_os_filtros_e_o_tenant_do_token_chegam_a_consulta(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    user, _ = db()
+
+    client.get(
+        f"/alcada/lancamento?ano=2027&mes=1&unidade={UNIT}&colaborador={EMPLOYEE}"
+        "&de=2026-12-28&ate=2027-01-05",
+        headers=cabecalho,
+    )
+
+    assert _params(user, LISTA_MARCADOR) == {
+        "year": 2027,
+        "month": 1,
+        "tenant_id": TENANT_ID,
+        "unit_id": UNIT,
+        "employee_id": EMPLOYEE,
+        "de": date(2026, 12, 28),
+        "ate": date(2027, 1, 5),
+    }
+
+
+def test_a_consulta_da_lista_repete_o_papel_e_so_aprovadas(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    """Se o pré-teste sumir, a consulta continua sem devolver linha a quem não
+    é `hr`/`owner` no tenant DA LINHA — e reprovada não se lança. O
+    comportamento é provado contra o banco no `77`; aqui, que o texto rodado é
+    o que carrega as duas cláusulas."""
+    user, _ = db()
+
+    client.get("/alcada/lancamento?ano=2027&mes=1", headers=cabecalho)
+
+    (consulta,) = _lista_statements(user)
+    assert "util.roles_in_tenant(r.tenant_id) && array['hr','owner']" in consulta
+    assert "r.decision = 'approved'" in consulta
+    assert "r.tenant_id = %(tenant_id)s" in consulta
+    assert "util.competencia_janela(%(year)s, %(month)s)" in consulta
+
+
+def test_lista_linha_sem_quem_aprovou_nao_passa_calada(
+    client: TestClient, cabecalho: dict[str, str], db
+):
+    db(posting_rows=[PENDENTE | {"reviewed_by": None}])
+
+    with pytest.raises(ValidationError):
+        client.get("/alcada/lancamento?ano=2027&mes=1", headers=cabecalho)

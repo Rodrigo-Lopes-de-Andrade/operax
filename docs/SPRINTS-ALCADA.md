@@ -794,4 +794,120 @@ em São Paulo (= 21/12 UTC) → `today` 20/12. B4: o teste de filtros usa
 `de = 28/12` e afirma a janela do banco. 5 mutações mortas (a do pool morre pela
 asserção de conexão, não por `NameError`). pytest 1636, ruff limpo.
 
-## P1.4 — Lançamento no Secullum · ⏸ pronta para despacho
+## P1.4 — Lançamento no Secullum · ✅ aprovada 04/10 · `fastapi-developer` + `nextjs-developer`
+
+Ciclos: 0/2. Base: commits `790715e` e `dab283a` (P0–P1.3 e P1.2b), sem push —
+as cinco migrations precisam entrar em produção antes, e esta sessão não
+alcança produção.
+
+**Decisões do dono, 01/10/2026 (paradas cumpridas: RPC nova em `public` e
+contrato de API):**
+- **Marcar:** `public.fn_marcar_lancado(review_id)`, `security definer`, no
+  padrão da `fn_revisar_justificativa`: só `hr`/`owner`, só revisão
+  `approved`, grava `posted_to_source_at` e `posted_by` uma única vez; a tela
+  chama pelo FastAPI.
+- **Desfazer:** não existe — é definitivo; engano vira correção por SQL de
+  operador.
+
+**Backend entregue em parte, 01/10 (`fastapi-developer`):** migration
+`20261001112917_alcada_mark_posted.sql` — `public.fn_marcar_lancado` definer,
+recusas `not_hr` → `review_not_found` → (lock) → `not_approved` →
+`already_posted`, marca uma vez só, sem policy nem grant de tabela;
+`POST /alcada/revisoes/{id}/lancamento` com corpo `{}` obrigatório
+(`extra="forbid"`; o corpo opcional quebrava `test_contrato_corpo.py`), 403/404/
+409/409. 98 +39 (só acréscimos), `scripts/78_teste_lancamento_concorrente.py`
+novo; 8 mutações de SQL e 7 de Python mortas. Suíte verde, pytest 1659, ruff
+limpo, segundo o desenvolvedor. Não aplicou `own_justification` nem
+`owner_only` à marca (lançar não decide).
+
+**Parada — a leitura "o que falta lançar" não foi feita:** pela competência da
+revisão (§4.2), o RH não lê `app.payroll_period` (`payroll_period_read` exige o
+domínio `compensation`, que `hr` não tem) — a lista viria vazia em silêncio; e a
+fila recorta pelo fato enquanto a revisão cai na competência não fechada mais
+antiga, então a mesma aprovação apareceria em competências diferentes. Levado
+ao dono, com a regra do autor na marca.
+
+**Decisões do dono, 04/10/2026:**
+- **A lista se organiza pela competência do FATO** (janela 21→20 de
+  `reference_date`, a mesma da fila) — diverge do §4.2 de propósito: alinha as
+  duas telas e o Secullum, e não exige objeto novo nem policy.
+- **O autor pode marcar como lançada** a própria justificativa já aprovada por
+  outro: lançar não decide.
+Devolvido ao desenvolvedor para a GET.
+
+**GET entregue, 04/10:** `GET /alcada/lancamento` (mesmos filtros e o mesmo par
+`ano`/`mes` da fila; 403 `not_hr` antes do relógio; `{ano, mes, period_start,
+period_end, rows}`, todas as `approved`, pendentes primeiro, `posted_*` nulos =
+pendente). Consulta no FastAPI sob `user_scope`, com o papel repetido na
+consulta; nada novo em `public`; `_competencia` compartilhado com a fila. Os
+nomes de quem aprovou e de quem lançou NÃO vêm (`auth.users` não é legível por
+`authenticated`) — só os uuids. `scripts/77_teste_lista_lancamento.py` novo
+(importa o SQL do router): separação, competência do fato (revisão gravada em
+09, fato em 10 → aparece em 10), filtros, supervisor zero linha mesmo sem o
+pré-teste, tenants. 8 mutações mortas (3 só pelo 77). Cabeçalho da migration
+registra as decisões de 04/10; SQL inalterado.
+
+**Conferido pelo orquestrador na árvore real, 04/10:** `=== SUÍTE COMPLETA OK`,
+pytest 1678, ruff limpo. Tela despachada ao `nextjs-developer`.
+
+**Tela entregue, 04/10 (`nextjs-developer`):** `/dashboard/justificativas/lancamento`
+(`notFound()` fora de `hr`/`owner`; link no menu sob o mesmo `showApprovals`);
+"A lançar no Secullum" e "Já lançadas" separadas só pela marca, contagem de
+pendentes em destaque; dois cliques com "a marca é definitiva"; POST com `{}`;
+o item muda de seção após o 200; `already_posted`/`review_not_found` recarregam;
+nenhum uuid na tela ("por você" via `/me`); filtros na query string, janela da
+resposta, `competence-rule` estendido aos arquivos novos; 403/422/indisponível
+nunca viram "nada a lançar". `alcadaHref` e o leitor de API compartilhados com
+a aprovação, sem mudar o comportamento dela. 14 mutações em cópia, todas mortas.
+
+**Conferido pelo orquestrador na árvore real, 04/10:** pytest 1678, Vitest
+1342/1342, prettier e tsc limpos (a suíte de banco já tinha fechado OK depois da
+GET; a tela não toca banco). Revisão despachada.
+
+**`guardiao-da-alcada`, 04/10 — APROVADO.** Suíte verde em banco próprio.
+Catálogo sem × com a migration: a única diferença é `public.fn_marcar_lancado`
+(definer, `execute` a `authenticated`/`service_role`, sem `anon`/PUBLIC);
+`review_read` segue a única policy; nenhum UPDATE de `authenticated` na tabela.
+Marca como usuário: `not_hr` (supervisor, DP), `review_not_found` (outro
+tenant), `not_approved`, `already_posted` com uma marca só; UPDATE direto →
+`permission denied`. Lista: consulta crua como supervisor devolve 0; 4 mutações
+mortas no 77; borda 20/21 conferida chamando `posting_list`. 1, 2(a), 3–7
+PASSA; 98 só acréscimos, 99 intacto. 2(b)/(c) barrado, dado por medido.
+
+**`code-reviewer`, 04/10 — APROVADO.** Suíte em banco próprio, pytest 1678,
+Vitest 1342, lint limpos. Mutações refeitas e mortas: sem `for update` (pelo 78),
+sem `already_posted`, lock antes do tenant, papel em qualquer tenant; na GET,
+sem o papel, janela pela revisão, sem `r.tenant_id`, sem `approved`; 7 no front
+(inclusive o refator compartilhado não muda a aprovação). Outro tenant não vaza
+estado. MÉDIOS (só dado no 77): bordas 20/21 da janela do fato não testadas
+(borda exclusiva sobrevive); nenhum caso com desvio, então `coalesce(d.unit_id,
+e.unit_id)` invertido sobrevive. BAIXOS: guardas de casos impossíveis no
+router; `posted_by` da resposta vem do token, não do banco; a RPC recorta pelo
+tenant da linha (como a de revisão); a mensagem de `already_posted` dizia "por
+outra pessoa", o que é falso na mesma pessoa em outra aba — **corrigida pelo
+orquestrador** ("já estava marcada"; os testes da alçada no front passam
+118/118); sem `loading.tsx` (padrão anterior).
+
+**Fechamento da P1.4, 04/10:** ✅ aprovada (sem ciclo de correção). Os dois
+MÉDIOS entram como reforço de dado no 77 antes do commit.
+
+**Reforço do 77, 04/10:** bordas da janela (20/09 → 2026/09, 21/09 → 2026/10,
+21/08 → 2026/09, 20/08 → 2026/08) e um desvio na unidade Dois de colaborador hoje
+na unidade Um; a borda exclusiva (6 falhas) e o `coalesce` invertido agora morrem.
+Só o 77 mudou; 18 verificações.
+
+**Conferido pelo orquestrador na árvore real, 04/10:** `=== SUÍTE COMPLETA OK`,
+pytest 1678, ruff limpo, Vitest 1342/1342, prettier e tsc limpos. Commitada.
+
+---
+
+## Etapa da alçada — ✅ fechada no código em 04/10. Nada em produção.
+
+Commits `790715e`, `dab283a` e o da P1.4, sem push. Seis migrations precisam
+entrar em produção ANTES do push, nesta ordem:
+`20260928235913_holiday_calendar`, `20260929010543_alcada_justification_pending`,
+`20260929114738_alcada_justification_review`, `20260929233425_alcada_approval_queue`,
+`20260930225115_alcada_revoke_writes`, `20261001112917_alcada_mark_posted`.
+Depois o push do backend (os dois crons e a API reconstroem), depois
+`vercel promote`. Com a de feriado, o `operax-motor-retro` reprocessa o 07/09.
+

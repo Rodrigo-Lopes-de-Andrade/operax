@@ -17,7 +17,7 @@ import {
   REGRAS_PATH,
   TEMPLATES_PATH,
 } from "@/lib/canais/url";
-import { APROVACAO_PATH } from "@/lib/alcada/url";
+import { APROVACAO_PATH, LANCAMENTO_PATH } from "@/lib/alcada/url";
 import { JUSTIFICATIVAS_PATH } from "@/lib/justificativas/url";
 import { MONITOR_PATH } from "@/lib/monitor/url";
 import { PONTO_PATH } from "@/lib/ponto/url";
@@ -88,7 +88,8 @@ export function AppShell({
    */
   showComplianceReports?: boolean;
   /**
-   * Aprovação de justificativas — `hr` e `owner`, e mais ninguém
+   * Aprovação de justificativas e Lançamento no Secullum — `hr` e `owner`, e
+   * mais ninguém
    * (`reviewsJustifications`). O eixo é a alçada, não `util.is_admin`:
    * `personnel` escreve na Administração e não revisa justificativa.
    */
@@ -111,10 +112,13 @@ export function AppShell({
           <NavLink href={MONITOR_PATH} label="Monitor diário" />
           <NavLink href={JUSTIFICATIVAS_PATH} label="Justificativas" />
           {showApprovals ? (
-            <NavLink
-              href={APROVACAO_PATH}
-              label="Aprovação de justificativas"
-            />
+            <>
+              <NavLink
+                href={APROVACAO_PATH}
+                label="Aprovação de justificativas"
+              />
+              <NavLink href={LANCAMENTO_PATH} label="Lançamento no Secullum" />
+            </>
           ) : null}
           <NavLink href={TV_PATH} label="Painel de TV" />
           <NavLink href={ASSISTENTE_PATH} label="Assistente" />
