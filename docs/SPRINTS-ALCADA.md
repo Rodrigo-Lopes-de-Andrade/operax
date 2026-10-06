@@ -911,3 +911,50 @@ entrar em produção ANTES do push, nesta ordem:
 Depois o push do backend (os dois crons e a API reconstroem), depois
 `vercel promote`. Com a de feriado, o `operax-motor-retro` reprocessa o 07/09.
 
+**Migrations aplicadas em produção, 04/10, com autorização do dono:** antes, o
+ledger de `nklobmlxyidqxarzisph` foi comparado com o repositório — faltavam
+exatamente as seis, nada mais. Uma por chamada da Management API, cada uma
+transacional e com o registro em `supabase_migrations.schema_migrations`
+(`version`, `name`) na mesma transação; todas voltaram sem erro e com o `do $$`
+de cada uma satisfeito. Conferido no catálogo de produção: ledger 78 → 84;
+`app.holiday`, `app.justification_review`, `fn_revisar_justificativa`,
+`fn_fila_aprovacao`, `fn_marcar_lancado` e `util.competencia_de` existem;
+`authenticated` sem INSERT em `justification` e sem UPDATE em `tenant_member`;
+`anon` sem EXECUTE na fila; 104 policies em `app`; zero tabelas em `public`.
+
+**Push barrado pelo classificador** (publicação). O código em produção segue o
+anterior sobre o schema novo, o que é compatível: a rota antiga grava pelo
+`tenant_scope` como `postgres` (o default `pending` e a trava do espelho não a
+afetam, porque ela passa `status` explícito com `source='operax'`), e o motor
+antigo não lê nada que mudou. Falta o dono fazer o push e o `vercel promote`.
+
+**Push feito em 04/10 (autorizado pelo dono):** `f0912e0..aecc0e7`, levando junto
+`62aa8e7`, `f8a865f` e `9dfb579`, que estavam sem push. Os seis serviços do
+Railway (`operax-api`, `operax-motor`, `operax-motor-retro`, `operax-vigia` e
+dois ids que a memória não registrava: `d6c5320e…`, `f7a91382…`) terminaram em
+SUCCESS. `GET /health` = ok. O `operax-motor` das 19:30 UTC rodou no código novo
+sem erro (detecção aberta e fechada, "nenhum feriado a reprocessar").
+
+**Carga dos feriados nacionais, 04/10 (autorizada pelo dono):** `app.holiday`
+estava com zero linhas — a migration cria a tabela, a carga é passo à parte.
+Rodada pelo `sb_sql.sh` com o SQL gerado das funções do repositório
+(`national_holidays`, `_LOAD_SQL`, `_LOAD_AUDIT_SQL`), tenant FastPark, 2026 e
+2027: 20 inseridos, 1 linha de auditoria. O `operax-motor-retro` das 05:20 deve
+reprocessar o 07/09 (escrito há menos de 48 h); conferir no dia seguinte.
+Falta o `vercel promote` do frontend.
+
+
+**Acesso do Thiago, 04/10 (autorizado pelo dono; fora da etapa, registrado por
+ter sido escrita em produção):** usuário `thiago@kastropark.com.br` criado pela
+API de admin do Supabase Auth (chave de serviço de `backend/.env.production`,
+lida no script sem ser impressa), já confirmado; vínculo `owner` ativo no tenant
+FastPark (`app.tenant_member`), num tenant só. Login com senha testado contra o
+Auth de produção: 200 com token.
+
+**`vercel promote`, 04/10 (autorizado pelo dono):** preview do push (criado 19:27
+UTC, mesmo minuto) promovido; a build de produção `operaxfonted-bcnyd0kos` ficou
+Ready. Em `app.fastparks.com.br`, `/`, `/dashboard/justificativas/aprovacao` e
+`/dashboard/justificativas/lancamento` respondem 307 para `/login?next=…` sem
+sessão — as rotas existem e passam pelo login. **A etapa da alçada está em
+produção ponta a ponta.** Conferir em 05/10: o `operax-motor-retro` das 05:20
+corrigindo o 07/09.
