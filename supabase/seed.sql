@@ -129,9 +129,10 @@ insert into app.unit (id, tenant_id, company_id, code, name, address) values
 on conflict (id) do nothing;
 
 -- O supervisor enxerga uma unidade só. É o escopo que a tela precisa provar.
-insert into app.user_scope (id, tenant_id, user_id, unit_id) values
+insert into app.user_scope (id, tenant_id, user_id, company_id, unit_id) values
   ('dede0000-0000-0000-0000-0000000000b1', 'dede0000-0000-0000-0000-000000000001',
-   'dede0000-0000-0000-0000-0000000000f3', 'dede0000-0000-0000-0000-0000000000a1')
+   'dede0000-0000-0000-0000-0000000000f3', 'dede0000-0000-0000-0000-0000000000e1',
+   'dede0000-0000-0000-0000-0000000000a1')
 on conflict (id) do nothing;
 
 insert into app.department (id, tenant_id, company_id, name, secullum_department_id)

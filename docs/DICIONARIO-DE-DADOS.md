@@ -2518,6 +2518,8 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `role` | app.user_role | não |  |  |  |
 | `active` | boolean | não | `true` |  |  |
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
+| `invited_by` | uuid | sim |  | `auth.users` | Quem convidou (public.fn_convidar_usuario grava auth.uid()). Nulo = vínculo anterior ao convite pela tela. |
+| `deactivated_at` | timestamp with time zone | sim |  |  | Quando o acesso foi encerrado (public.fn_desativar_membro, junto de active = false). Membro nunca é apagado. |
 
 **Policies**
 
@@ -2720,6 +2722,11 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 | `unit_id` | uuid | sim |  | `app.unit` |  |
 | `created_at` | timestamp with time zone | não | `now()` |  |  |
 
+**Restrições**
+
+- `CHECK (((unit_id IS NOT NULL) OR (company_id IS NOT NULL)))`
+- `CHECK (((unit_id IS NULL) OR (company_id IS NOT NULL)))`
+
 **Policies**
 
 | Policy | Comando | USING | WITH CHECK |
@@ -2733,6 +2740,7 @@ Domínio OperaX. Não exposto ao PostgREST. RLS obrigatória em toda tabela.
 - `user_scope_lookup_idx` — `app.user_scope USING btree (user_id, tenant_id)`
 - `user_scope_tenant_id_fkidx` — `app.user_scope USING btree (tenant_id)`
 - `user_scope_unidade_idx` — `app.user_scope USING btree (unit_id) WHERE (unit_id IS NOT NULL)`
+- `UNIQUE user_scope_sem_duplicata` — `app.user_scope USING btree (user_id, tenant_id, COALESCE(company_id, '00000000-0000-0000-0000-000000000000'::uuid), COALESCE(unit_id, '00000000-0000-0000-0000-000000000000'::uuid))`
 
 </details>
 
@@ -3860,6 +3868,16 @@ public.fn_channel_readiness()
 Uma linha por integração ativa de canal (meta_cloud, z_api, uazapi, telegram) dos tenants do chamador, com o canal (whatsapp|telegram) e a saúde medida pelo vigia. ready: WhatsApp = a conta de fn_whatsapp_readiness (oficial exige template aprovado e nenhuma regra apontando para template não aprovado); Telegram = existe bot ativo E channel_health.status = connected — sem medição não está pronto. Para telegram templates_* e rules_blocked valem 0: não há template a aprovar, o body local é o que sai. Substitui fn_whatsapp_readiness.
 
 
+### `fn_convidar_usuario`
+
+```sql
+public.fn_convidar_usuario(p_tenant_id uuid, p_user_id uuid, p_scope jsonb)
+  returns void
+```
+
+Convite: cria o vínculo como viewer (invited_by = auth.uid()) e o escopo, na mesma transação. Quem: owner, hr, personnel. Recusas P0001, nesta ordem: not_admin, ja_e_membro (ativo ou não), conta_em_outro_cliente (vínculo ativo em qualquer outro tenant, ativo ou não — um cliente por usuário; conferido sob pg_advisory_xact_lock por usuário), escopo_vazio, escopo_invalido, escopo_sem_empresa, empresa_fora_do_tenant, unidade_fora_da_empresa. p_scope = lista não vazia de {company_id, unit_id?}. Roda DEPOIS do Admin API: ja_e_membro e conta_em_outro_cliente precisam ser lidos antes de convidar. Grava audit_log (insert).
+
+
 ### `fn_data_freshness`
 
 ```sql
@@ -3870,6 +3888,26 @@ public.fn_data_freshness(p_stale_after_minutes integer DEFAULT NULL::integer)
 Idade do dado por entidade sincronizada, e o deadman da ingestão. Sem argumento, o limiar é 1,5x a cadência da entidade — 25 min para Batida (cadência 15), 2160 para Foto (cadência diária) e 45 para as demais (cadência 30) — de modo que uma execução perdida não alarma e duas seguidas alarmam. Com argumento, ele vale para todas. Ver docs/DECISAO-CADENCIA-SYNC.md.
 
 
+### `fn_definir_escopo`
+
+```sql
+public.fn_definir_escopo(p_tenant_id uuid, p_user_id uuid, p_scope jsonb)
+  returns void
+```
+
+Troca o escopo de um membro inteiro, numa transação: valida a lista nova antes de apagar a anterior. Quem: owner, hr, personnel. Recusas P0001, nesta ordem: not_admin, member_not_found, escopo_vazio, escopo_invalido, escopo_sem_empresa, empresa_fora_do_tenant, unidade_fora_da_empresa. p_scope = lista não vazia de {company_id, unit_id?}. Escopo igual não grava nada. Grava audit_log (update) com as listas antes e depois.
+
+
+### `fn_definir_papel`
+
+```sql
+public.fn_definir_papel(p_tenant_id uuid, p_user_id uuid, p_role app.user_role)
+  returns void
+```
+
+Define o papel de um membro. Quem: só owner. Recusas P0001, nesta ordem: not_owner, member_not_found, ultimo_owner (rebaixar o último owner ativo). Papel igual não grava nada. Trava a linha do tenant antes de decidir: dois owners rebaixando um ao outro não zeram os owners. Grava audit_log (update) com o papel antes e depois.
+
+
 ### `fn_delivery_by_channel`
 
 ```sql
@@ -3878,6 +3916,16 @@ public.fn_delivery_by_channel(p_weeks integer DEFAULT 8)
 ```
 
 Entregas por semana, canal e provedor, nas últimas p_weeks semanas (a atual inclusa): sent conta sent/delivered/read, failed conta failed. É o relatório da SPEC-CANAIS §8 (consequência 3) — a coluna de WhatsApp cai conforme a adesão ao Telegram sobe. Security INVOKER: lê app.alert_sent pela policy alert_sent_read (util.is_admin), então quem não é owner/hr/personnel recebe zero linhas. Nem nome, nem destino, nem hash: só contagens.
+
+
+### `fn_desativar_membro`
+
+```sql
+public.fn_desativar_membro(p_tenant_id uuid, p_user_id uuid)
+  returns void
+```
+
+Encerra o acesso: active = false e deactivated_at = now(). Nunca apaga o vínculo. Quem: owner, hr, personnel; owner só por owner (decisão de 05/10/2026). Recusas P0001, nesta ordem: not_admin, e_voce_mesmo, member_not_found, owner_so_por_owner, ultimo_owner (o último owner ativo). Membro já inativo não grava nada. Grava audit_log (update).
 
 
 ### `fn_detection_health`
@@ -4026,6 +4074,7 @@ Não são API. `security definer` com `search_path` travado, `EXECUTE` revogado 
 | `util.has_tenant` | `p_tenant_id uuid` | `boolean` |
 | `util.is_admin` | `p_tenant_id uuid` | `boolean` |
 | `util.lock_down_new_function` | `` | `event_trigger` |
+| `util.parse_user_scope` | `p_tenant_id uuid, p_scope jsonb` | `TABLE(company_id uuid, unit_id uuid)` |
 | `util.roles_in_tenant` | `p_tenant_id uuid` | `app.user_role[]` |
 | `util.touch_atualizado_em` | `` | `trigger` |
 | `util.touch_updated_at` | `` | `trigger` |

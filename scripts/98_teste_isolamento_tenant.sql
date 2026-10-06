@@ -100,16 +100,30 @@ insert into app.unit (id, tenant_id, company_id, code, name) values
   ('b0000000-0000-0000-0000-0000000000a1', 'bbbbbbbb-0000-0000-0000-000000000002', 'b0000000-0000-0000-0000-0000000000e1', 'B-SUL',    'B Sul');
 
 -- Supervisor A só tem escopo na unit A Centro.
-insert into app.user_scope (tenant_id, user_id, unit_id) values
-  ('aaaaaaaa-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222', 'a0000000-0000-0000-0000-0000000000a1');
+insert into app.user_scope (tenant_id, user_id, company_id, unit_id) values
+  ('aaaaaaaa-0000-0000-0000-000000000001', '22222222-2222-2222-2222-222222222222', 'a0000000-0000-0000-0000-0000000000e1', 'a0000000-0000-0000-0000-0000000000a1');
 
--- A contabilidade enxerga o tenant inteiro (empresa e unit nulas), e isso é a
--- realidade da conciliação: a remessa é do tenant, não de uma unidade. Sem esta
+-- A contabilidade enxerga o tenant inteiro, e isso é a realidade da
+-- conciliação: a remessa é do tenant, não de uma unidade. Desde a migration
+-- `usuarios_escopo_constraint` (`escopo_nao_vazio`), "o tenant inteiro" não é
+-- mais uma linha com empresa e unit nulas: é uma linha por empresa — e o tenant
+-- A tem uma empresa só, A1. Empresa nova não entra sozinha neste escopo. Sem esta
 -- linha ela não é `owner/executive/hr/personnel` em `util.can_see_unit` nem é
 -- admin, então `can_see_employee` diria não — e o "accounting não escreve" ficaria
 -- verde pelo eixo errado, que é exatamente o falso verde que este arquivo caça.
 insert into app.user_scope (tenant_id, user_id, company_id, unit_id) values
-  ('aaaaaaaa-0000-0000-0000-000000000001', '66666666-6666-6666-6666-666666666666', null, null);
+  ('aaaaaaaa-0000-0000-0000-000000000001', '66666666-6666-6666-6666-666666666666', 'a0000000-0000-0000-0000-0000000000e1', null);
+
+-- Asserção de fixture: "o tenant inteiro" da contabilidade acima só é o tenant
+-- inteiro enquanto A tiver UMA empresa. Uma segunda empresa em A tornaria
+-- falsos, em silêncio, os rótulos "tenant inteiro" das asserções do accounting.
+do $$ begin
+  if (select count(*) from app.company
+       where tenant_id = 'aaaaaaaa-0000-0000-0000-000000000001') <> 1 then
+    raise exception 'FALHA [fixture]: o tenant A deveria ter exatamente uma empresa (A1) — o escopo "tenant inteiro" do accounting é uma linha por empresa';
+  end if;
+  raise notice '  ok  fixture: tenant A tem exatamente uma empresa';
+end $$;
 
 insert into app.employee (id, tenant_id, company_id, unit_id, name) values
   ('a0000000-0000-0000-0000-0000000000c1', 'aaaaaaaa-0000-0000-0000-000000000001', 'a0000000-0000-0000-0000-0000000000e1', 'a0000000-0000-0000-0000-0000000000a1', 'Colab A Centro'),
@@ -2770,8 +2784,8 @@ insert into auth.users (id, email) values
 insert into app.tenant_member (tenant_id, user_id, role) values
   ('aaaaaaaa-0000-0000-0000-000000000001', '77777777-7777-7777-7777-777777777777', 'hr'),
   ('bbbbbbbb-0000-0000-0000-000000000002', '77777777-7777-7777-7777-777777777777', 'unit_supervisor');
-insert into app.user_scope (tenant_id, user_id, unit_id) values
-  ('bbbbbbbb-0000-0000-0000-000000000002', '77777777-7777-7777-7777-777777777777', 'b0000000-0000-0000-0000-0000000000a1');
+insert into app.user_scope (tenant_id, user_id, company_id, unit_id) values
+  ('bbbbbbbb-0000-0000-0000-000000000002', '77777777-7777-7777-7777-777777777777', 'b0000000-0000-0000-0000-0000000000e1', 'b0000000-0000-0000-0000-0000000000a1');
 
 set local role authenticated;
 set local request.jwt.claim.sub = '77777777-7777-7777-7777-777777777777';

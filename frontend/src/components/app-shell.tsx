@@ -33,6 +33,7 @@ import {
 import { FOLHA_PATH } from "@/lib/folha/url";
 import { COLABORADORES_PATH, IMPORTACAO_PATH } from "@/lib/rh/url";
 import { TV_PATH } from "@/lib/tv/url";
+import { USUARIOS_PATH } from "@/lib/usuarios/url";
 
 /**
  * Authenticated chrome: a 264px navy sidebar and an 84px header carrying the
@@ -208,6 +209,9 @@ export function AppShell({
                   href={ASSISTENTE_CONFIG_PATH}
                   label={ASSISTENTE_CONFIG_LABEL}
                 />
+                {/* Convite e escopo são de `util.is_admin` (SPEC-USUARIOS §2): a
+                    página fecha por `isAdmin`, o mesmo eixo deste bloco. */}
+                <NavLink href={USUARIOS_PATH} label="Usuários" />
               </>
             ) : null}
           </nav>

@@ -23,3 +23,25 @@ export function createBrowserSupabaseClient(): SupabaseClient<Database> {
     env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
   );
 }
+
+/**
+ * The client of the invitation landing (`/convite`), and of nothing else.
+ *
+ * `@supabase/ssr` forces `flowType: "pkce"`, and with it the automatic URL
+ * detection of supabase-js rejects the implicit-grant fragment
+ * (`#access_token=…`) that an admin-issued invite link lands with — there is no
+ * code verifier in this browser, because the flow was not started here. So the
+ * landing reads the URL itself: `detectSessionInUrl` is off, and the client is
+ * not the shared singleton, so a client created earlier in the tab cannot
+ * consume the same link first. The session still lands in the same cookie
+ * storage, which is what the dashboard reads next.
+ */
+export function createInviteSupabaseClient(): SupabaseClient<Database> {
+  const env = publicEnv();
+
+  return createBrowserClient<Database>(
+    env.NEXT_PUBLIC_SUPABASE_URL,
+    env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+    { isSingleton: false, auth: { detectSessionInUrl: false } },
+  );
+}

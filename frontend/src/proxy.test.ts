@@ -112,6 +112,34 @@ describe("proxy", () => {
     expect(response.headers.get("location")).toBe(`${APP_ORIGIN}/dashboard`);
   });
 
+  it("lets the anonymous visitor reach the invitation landing", async () => {
+    // The link in the e-mail opens the session in the browser, from a URL
+    // fragment this server never sees: there is no session yet to require.
+    signedIn(null);
+
+    const response = await proxy(request("/convite"));
+
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("does not bounce a signed-in user away from the invitation landing", async () => {
+    // The link may belong to another account than the one already signed in
+    // on this browser; the page decides, not the proxy.
+    signedIn({ id: "user-1" });
+
+    const response = await proxy(request("/convite?code=abc"));
+
+    expect(response.headers.get("location")).toBeNull();
+  });
+
+  it("does not open anything below the invitation landing", async () => {
+    signedIn(null);
+
+    const response = await proxy(request("/convite/outra"));
+
+    expect(response.status).toBe(307);
+  });
+
   it("leaves the signed-in user alone on a protected route", async () => {
     signedIn({ id: "user-1" });
 

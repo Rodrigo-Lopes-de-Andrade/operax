@@ -94,6 +94,13 @@ $PY_ENSAIO scripts/81_teste_revisao_concorrente.py || exit 1
 # O mesmo lock, na marca de lançamento (P1.4): sem ele a segunda sobrescreve.
 echo "--- o lançamento concorrente (P1.4): quem não alcança não espera, a segunda não sobrescreve"
 $PY_ENSAIO scripts/78_teste_lancamento_concorrente.py || exit 1
+# O lock das RPCs de usuário (U2): dois owners rebaixando um ao outro.
+echo "--- a corrida de owners (U2): a segunda espera e não zera os owners"
+$PY_ENSAIO scripts/teste_usuarios_concorrencia.py || exit 1
+# As rotas de usuário (U3): Admin API + RPC como o usuário, e a lista lendo
+# `auth.users` no tenant do token. É o router de verdade, contra o banco.
+echo "--- as rotas de usuário (U3): convite, reenvio e lista, como o usuário e no tenant do token"
+$PY_ENSAIO scripts/teste_usuarios_rota.py || exit 1
 # A lista do lançamento (P1.4) é SQL no router, não objeto do banco: o que a
 # prova é a rota de verdade, como o usuário, contra a RLS.
 echo "--- a lista do lançamento (P1.4): competência do fato, papel na consulta, supervisor sem nada"
@@ -116,6 +123,10 @@ echo "--- tela de Conexões (a lista é a decomposição da contagem)"
 python3 scripts/97_teste_canais.py || exit 1
 echo "--- camadas do assistente (as sete linhas da SPEC-AGENTE §3a, a RPC e a RLS como os papéis)"
 psql -q -v ON_ERROR_STOP=1 -f scripts/97_teste_assistente.sql 2>&1 | grep -Ev "^(INSERT|UPDATE|DELETE|DO|SET|BEGIN|ROLLBACK|CREATE|SAVEPOINT|RESET)" | sed "s/^psql:[^ ]* //" || exit 1
+echo "--- escopo sem curinga (as seis linhas da SPEC-USUARIOS §3)"
+psql -q -v ON_ERROR_STOP=1 -f scripts/teste_escopo_curinga.sql 2>&1 | grep -Ev "^(INSERT|DO|SET|BEGIN|ROLLBACK|CREATE|SAVEPOINT|RESET)" | sed "s/^psql:[^ ]* //" || exit 1
+echo "--- RPCs de usuário (SPEC-USUARIOS §5.4): recusas, positivos e auditoria"
+psql -q -v ON_ERROR_STOP=1 -f scripts/teste_usuarios_rpc.sql 2>&1 | grep -Ev "^(INSERT|DO|SET|BEGIN|ROLLBACK|CREATE|SAVEPOINT|RESET)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- teste funcional multi-tenant"
 psql -q -v ON_ERROR_STOP=1 -f scripts/98_teste_isolamento_tenant.sql 2>&1 | grep -Ev "^(INSERT|DO|SET|BEGIN|ROLLBACK|CREATE)" | sed "s/^psql:[^ ]* //" || exit 1
 echo "--- verificação de isolamento"

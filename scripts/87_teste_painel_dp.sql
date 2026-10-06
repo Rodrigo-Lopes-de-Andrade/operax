@@ -85,9 +85,9 @@ insert into app.unit (id, tenant_id, company_id, code, name) values
 
 -- O supervisor enxerga a unidade 1 e nada mais. É a linha que `util.can_see_unit`
 -- procura; sem ela ele não veria nem a dele, e o item B ficaria verde por vácuo.
-insert into app.user_scope (tenant_id, user_id, unit_id) values
+insert into app.user_scope (tenant_id, user_id, company_id, unit_id) values
   ('87a70000-0000-0000-0000-0000000000a1', '87000000-0000-0000-0000-000000000002',
-   '87a70000-0000-0000-0000-0000000000c1');
+   '87a70000-0000-0000-0000-0000000000e1', '87a70000-0000-0000-0000-0000000000c1');
 
 -- ⛔ NENHUMA LINHA EM `app.domain_permission` PARA ESTE TENANT, e isso é o teste.
 -- Sem linha = negado (migration 02). O supervisor não alcança `pii` nem `health`,

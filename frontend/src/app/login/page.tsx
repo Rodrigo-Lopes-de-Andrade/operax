@@ -1,10 +1,17 @@
 import type { Metadata } from "next";
 import { headers } from "next/headers";
+import Link from "next/link";
 
 import { brandForHost, pageTitle } from "@/lib/brand";
-import { DEFAULT_AUTHENTICATED_PATH, safeNextPath } from "@/lib/navigation";
+import { FORGOT_PASSWORD_PARAM } from "@/lib/usuarios/url";
+import {
+  DEFAULT_AUTHENTICATED_PATH,
+  LOGIN_PATH,
+  safeNextPath,
+} from "@/lib/navigation";
 
 import { EntryCanvas } from "./entry-canvas";
+import { ForgotPasswordForm } from "./forgot-password-form";
 import { SignInForm } from "./sign-in-form";
 
 export const metadata: Metadata = {
@@ -16,8 +23,12 @@ type LoginPageProps = {
 };
 
 export default async function LoginPage({ searchParams }: LoginPageProps) {
-  const next = safeNextPath((await searchParams).next);
+  const params = await searchParams;
+  const next = safeNextPath(params.next);
   const cameFromLink = next !== DEFAULT_AUTHENTICATED_PATH;
+  // "Esqueci minha senha" é um estado desta rota, não uma rota nova: o
+  // `/login` já abre sem sessão, e `proxy.ts` não precisa de regra a mais.
+  const forgot = params[FORGOT_PASSWORD_PARAM] !== undefined;
 
   /**
    * A marca vem do HOST, e é a única resolução possível aqui: o login é a tela
@@ -91,28 +102,45 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
           <h1
             className={
-              cameFromLink
+              cameFromLink && !forgot
                 ? "mt-2 text-xl font-bold"
                 : "mt-2 text-[1.75rem] leading-tight font-bold"
             }
             style={{ color: "var(--entry-ink)" }}
           >
-            {cameFromLink
-              ? "Você abriu um link de ocorrência."
-              : "Entrar na sua conta"}
+            {forgot
+              ? "Esqueci minha senha"
+              : cameFromLink
+                ? "Você abriu um link de ocorrência."
+                : "Entrar na sua conta"}
           </h1>
 
           <p
             className="mt-2 text-sm"
             style={{ color: "var(--entry-ink-muted)" }}
           >
-            {cameFromLink
-              ? "Entre para vê-la. Você volta direto para esta ocorrência, não para a página inicial."
-              : "Use o e-mail corporativo cadastrado pelo RH."}
+            {forgot
+              ? "Informe o seu e-mail. O link que chegar nele leva à tela de nova senha."
+              : cameFromLink
+                ? "Entre para vê-la. Você volta direto para esta ocorrência, não para a página inicial."
+                : "Use o e-mail corporativo cadastrado pelo RH."}
           </p>
 
           <div className="mt-7">
-            <SignInForm next={next} />
+            {forgot ? (
+              <ForgotPasswordForm />
+            ) : (
+              <>
+                <SignInForm next={next} />
+                <Link
+                  href={`${LOGIN_PATH}?${FORGOT_PASSWORD_PARAM}`}
+                  className="mt-4 inline-block text-sm font-bold underline"
+                  style={{ color: "var(--entry-ink)" }}
+                >
+                  Esqueci minha senha
+                </Link>
+              </>
+            )}
           </div>
 
           <p

@@ -2418,8 +2418,8 @@ insert into app.unit (id, tenant_id, company_id, code, name) values
   ('{D_UNIT2}',      '{D_TENANT}', '{D_COMPANY}',       'RG-2', 'Unidade Beta'),
   ('{D_OUTRO_UNIT}', '{D_OUTRO}',  '{D_OUTRO_COMPANY}', 'OU-1', 'Unidade do Outro');
 -- O supervisor tem escopo numa unidade só: é o que recorta a matriz dele.
-insert into app.user_scope (tenant_id, user_id, unit_id) values
-  ('{D_TENANT}', '{D_SUPERVISOR}', '{D_UNIT}');
+insert into app.user_scope (tenant_id, user_id, company_id, unit_id) values
+  ('{D_TENANT}', '{D_SUPERVISOR}', '{D_COMPANY}', '{D_UNIT}');
 insert into app.employee (id, tenant_id, company_id, unit_id, name) values
   ('{D_EMPLOYEE}', '{D_TENANT}', '{D_COMPANY}', '{D_UNIT}', 'Colaborador Regras');
 -- Os desvios do cenário: dois de produção, ativos, na janela; um em sombra.

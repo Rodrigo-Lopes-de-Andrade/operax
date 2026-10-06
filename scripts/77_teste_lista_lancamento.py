@@ -142,8 +142,8 @@ insert into app.unit (id, tenant_id, company_id, code, name) values
   ('{UNIT_1}', '{TENANT_A}', '{COMPANY_A}', 'L1', 'Lista Um'),
   ('{UNIT_2}', '{TENANT_A}', '{COMPANY_A}', 'L2', 'Lista Dois'),
   ('{UNIT_B}', '{TENANT_B}', '{COMPANY_B}', 'LB', 'Lista B');
-insert into app.user_scope (tenant_id, user_id, unit_id) values
-  ('{TENANT_A}', '{SUP_A}', '{UNIT_1}');
+insert into app.user_scope (tenant_id, user_id, company_id, unit_id) values
+  ('{TENANT_A}', '{SUP_A}', '{COMPANY_A}', '{UNIT_1}');
 insert into app.employee (id, tenant_id, company_id, unit_id, name) values
   ('{EMP_1}', '{TENANT_A}', '{COMPANY_A}', '{UNIT_1}', 'Pessoa Um'),
   ('{EMP_2}', '{TENANT_A}', '{COMPANY_A}', '{UNIT_2}', 'Pessoa Dois'),

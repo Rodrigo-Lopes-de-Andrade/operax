@@ -54,7 +54,7 @@ function administracao() {
 }
 
 describe("a sidebar não oferece porta que não abre", () => {
-  it("`owner` recebe as quinze: cinco de leitura e dez de escrita", () => {
+  it("`owner` recebe as dezesseis: cinco de leitura e onze de escrita", () => {
     comPapel("owner");
 
     const admin = administracao();
@@ -79,6 +79,7 @@ describe("a sidebar não oferece porta que não abre", () => {
       // O rótulo carrega o parêntese: o "Assistente" da Operação é a
       // conversa, e este é a configuração dela.
       "Assistente (configuração)",
+      "Usuários",
     ]) {
       expect(within(admin).getByRole("link", { name: item })).toBeVisible();
     }
@@ -131,6 +132,32 @@ describe("a sidebar não oferece porta que não abre", () => {
     expect(
       within(admin).queryByRole("link", { name: "Assistente (configuração)" }),
     ).toBeNull();
+  });
+
+  it.each(["owner", "hr", "personnel"])(
+    "✅ `%s` administra usuários: o item segue `util.is_admin`",
+    (papel) => {
+      comPapel(papel);
+
+      expect(
+        within(administracao()).getByRole("link", { name: "Usuários" }),
+      ).toHaveAttribute("href", "/dashboard/usuarios");
+    },
+  );
+
+  it.each([
+    "executive",
+    "regional_manager",
+    "unit_supervisor",
+    "operations_manager",
+    "accounting",
+    "viewer",
+  ])("⛔ `%s` não recebe o item Usuários", (papel) => {
+    // `executive` é o caso que separa: lê a área de RH e não é admin — com
+    // o item em `showAdmin`, ele o veria e a página responderia 404.
+    comPapel(papel);
+
+    expect(screen.queryByRole("link", { name: "Usuários" })).toBeNull();
   });
 
   it("⛔ `hr` é admin e escreve — o eixo de escrita não é o domínio sensível", () => {
@@ -197,6 +224,7 @@ describe("a sidebar não oferece porta que não abre", () => {
       "Destinatários",
       "Regras",
       "Assistente (configuração)",
+      "Usuários",
     ]) {
       expect(within(admin).queryByRole("link", { name: item })).toBeNull();
     }

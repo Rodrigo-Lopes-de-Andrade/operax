@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, time
 from decimal import Decimal
+from enum import StrEnum
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -2475,3 +2476,185 @@ class HolidayUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     active: bool
+
+
+# ---------------------------------------------------------------------------
+# Usuários do painel (SPEC-USUARIOS §5.4, §5.6, §6) — convite e lista.
+# Nenhum modelo daqui tem campo de senha, link ou token: a pessoa define a
+# própria senha pelo e-mail do Supabase, e a API nunca transporta nada disso.
+# ---------------------------------------------------------------------------
+#: Como o escopo da linha deve ser lido. `by_role`: `owner`, `executive`, `hr` e
+#: `personnel` enxergam o tenant inteiro pelo atalho de papel de
+#: `util.can_see_unit`/`util.can_see_company`, e o conteúdo de `app.user_scope`
+#: não diz nada sobre eles (§3.2) — `scope` vem vazio e a tela escreve "todas as
+#: unidades (pelo papel)". `by_scope`: o que está em `scope` é o que a pessoa vê.
+ScopeMode = Literal["by_role", "by_scope"]
+
+
+class InvitationScopeEntry(BaseModel):
+    """Uma entrada do escopo do convite: a empresa inteira, ou uma unidade dela.
+
+    `unit_id` ausente é a empresa inteira; `unit_id: null` explícito é recusado
+    (422), e não lido como ausente — a RPC recusa o mesmo (`escopo_invalido`),
+    porque ler null como "sem unidade" alargaria o escopo de uma unidade para a
+    empresa toda, em silêncio.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    company_id: UUID
+    unit_id: UUID | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _null_unit_is_not_absent(cls, data: object) -> object:
+        if isinstance(data, dict) and "unit_id" in data and data["unit_id"] is None:
+            raise ValueError("unit_id nulo não é 'a empresa inteira': omita o campo")
+        return data
+
+
+class UserInvitationRequest(BaseModel):
+    """`POST /usuarios/convites`. Sem papel (nasce `viewer`, §2.1) e sem senha.
+
+    `name` vai ao Auth (`data.name`, os metadados do usuário) só quando a conta
+    é criada por este convite. Conta que já existe no Auth não é tocada — nem
+    quando o convite é reenviado a ela por não ter senha: o `name` daqui é
+    descartado.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+    email: Annotated[
+        str,
+        StringConstraints(
+            strip_whitespace=True,
+            to_lower=True,
+            min_length=3,
+            max_length=254,
+            pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$",
+        ),
+    ]
+    scope: list[InvitationScopeEntry] = Field(min_length=1)
+
+
+class UserInvitation(BaseModel):
+    """O convite feito. Nada da resposta do Admin API chega aqui além do id.
+
+    `invitation_sent = false` só quando o e-mail já tinha conta CONFIRMADA no
+    Auth (com senha) e sem vínculo ativo em cliente nenhum: a pessoa entra com a
+    senha que já tem, e nenhum e-mail saiu. Conta sem senha recebe o e-mail de
+    novo (`true`); conta ativa em outro cliente é recusada antes (409
+    `conta_em_outro_cliente`).
+    """
+
+    user_id: UUID
+    email: str
+    role: Literal["viewer"] = "viewer"
+    invitation_sent: bool
+
+
+class InvitationResendRequest(BaseModel):
+    """`POST /usuarios/{user_id}/reenviar-convite`: o corpo é `{}`, fechado."""
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class InvitationResent(BaseModel):
+    user_id: UUID
+    email: str
+
+
+class TenantUserScope(BaseModel):
+    """Uma linha de `app.user_scope`: a empresa, e a unidade quando há."""
+
+    company_id: UUID
+    company_name: str
+    unit_id: UUID | None
+    unit_name: str | None
+
+
+class TenantUserInviter(BaseModel):
+    user_id: UUID
+    email: str | None
+    name: str | None
+
+
+class TenantUser(BaseModel):
+    """Uma linha da lista de usuários do tenant.
+
+    `name` é o `name` dos metadados do Auth, e nulo quando ninguém o definiu — o
+    caso do recém-convidado. `invitation_accepted` diz se a pessoa já confirmou
+    o e-mail (aceitou o convite); é o que habilita "reenviar convite".
+    `invited_by` é nulo nos vínculos anteriores ao convite pela tela.
+    """
+
+    user_id: UUID
+    email: str | None
+    name: str | None
+    role: UserRole
+    active: bool
+    deactivated_at: datetime | None
+    invitation_accepted: bool
+    invited_by: TenantUserInviter | None
+    scope_mode: ScopeMode
+    scope: list[TenantUserScope]
+
+
+class TenantUserList(BaseModel):
+    users: list[TenantUser]
+
+
+# ---------------------------------------------------------------------------
+# Detalhe e matriz (SPEC-USUARIOS §6, U4). As escritas devolvem o `TenantUser`
+# relido depois da RPC — a mesma montagem da lista.
+# ---------------------------------------------------------------------------
+class SensitiveDomain(StrEnum):
+    """Mirrors `app.sensitive_domain` (migration 02 + `dp_banking_domain`)."""
+
+    PII = "pii"
+    COMPENSATION = "compensation"
+    HEALTH = "health"
+    DISCIPLINARY = "disciplinary"
+    BANKING = "banking"
+
+
+class RoleDomains(BaseModel):
+    """Os domínios que `app.domain_permission` libera ao papel, neste tenant.
+
+    Lista vazia é resposta: quatro papéis têm zero domínio, e a tela diz
+    "nenhum domínio sensível" em vez de não mostrar nada (§6).
+    """
+
+    role: UserRole
+    domains: list[SensitiveDomain]
+
+
+class RoleDomainMatrix(BaseModel):
+    """`GET /usuarios/matriz`: um item por valor de `app.user_role`, lido do
+    banco a cada requisição — nunca constante no código."""
+
+    roles: list[RoleDomains]
+
+
+class MemberRoleRequest(BaseModel):
+    """`PUT /usuarios/{user_id}/papel`. Só o `owner` (§5.4)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    role: UserRole
+
+
+class MemberScopeRequest(BaseModel):
+    """`PUT /usuarios/{user_id}/escopo`: troca o escopo inteiro, com a mesma
+    validação do convite. Não existe escopo vazio válido (§6)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    scope: list[InvitationScopeEntry] = Field(min_length=1)
+
+
+class MemberDeactivationRequest(BaseModel):
+    """`POST /usuarios/{user_id}/desativar`: o corpo é `{}`, fechado."""
+
+    model_config = ConfigDict(extra="forbid")

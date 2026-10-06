@@ -2,8 +2,18 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { LOGIN_PATH, PATHNAME_HEADER, safeNextPath } from "@/lib/navigation";
 import { createServerSupabaseClient } from "@/lib/supabase-server";
+import { CONVITE_PATH } from "@/lib/usuarios/url";
 
 const PUBLIC_PATHS = new Set<string>([LOGIN_PATH]);
+
+/**
+ * Open to both sides, and bounced by neither. The invitation landing receives a
+ * visitor with no session yet — the link in the e-mail is what opens one, in the
+ * browser, from the URL fragment the server never sees — and it must not send a
+ * signed-in visitor away either: the link may belong to another account than
+ * the one already in this browser.
+ */
+const OPEN_PATHS = new Set<string>([CONVITE_PATH]);
 
 /**
  * Runs before every rendered route. Two jobs:
@@ -59,6 +69,11 @@ export async function proxy(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const { pathname, search } = request.nextUrl;
+
+  if (OPEN_PATHS.has(pathname)) {
+    return response;
+  }
+
   const isPublic = PUBLIC_PATHS.has(pathname);
 
   if (!user && !isPublic) {
